@@ -343,34 +343,35 @@ function formatMsAsMinSec(ms: number): string {
 function buildPromptText(args: {
   transcriptPath: string | null;
   annotationsPath: string;
-  frames: Array<{ path: string; startSec: number; transcriptText: string }>;
+  annotationFrames: Array<{ number: number; path: string; drawnAtMs: number }>;
+  snapFrames: Array<{ path: string; name: string }>;
   annotations: AnnotationRecord[];
 }): string {
-  const { transcriptPath, annotationsPath, frames, annotations } = args;
+  const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations } = args;
 
   const transcriptLine = transcriptPath
     ? `1. Read the transcript: ${transcriptPath}`
     : `1. (Transcript unavailable — whisper.cpp not installed; see annotations.json for the visual context only.)`;
 
-  const frameListing =
-    frames.length === 0
-      ? '(No frames — no transcript segments were produced this session.)'
-      : frames
-          .map((f) => {
-            const mm = Math.floor(f.startSec / 60);
-            const ss = String(f.startSec % 60).padStart(2, '0');
-            return `   ${mm}:${ss} → ${f.path}`;
-          })
+  // Annotation frames: captured at the exact ms the user drew each numbered rectangle.
+  const annotationFrameListing =
+    annotationFrames.length === 0
+      ? '(No annotation frames — no numbered rectangles were drawn this session.)'
+      : annotationFrames
+          .map((f) => `   #${f.number} (${formatMsAsMinSec(f.drawnAtMs)}): ${f.path}`)
           .join('\n');
+
+  // Snap frames: captured by the user pressing the HUD 📷 button.
+  const snapFrameListing =
+    snapFrames.length === 0
+      ? '(No manual snaps this session.)'
+      : snapFrames.map((f) => `   ${f.name}: ${f.path}`).join('\n');
 
   const annotationSummary =
     annotations.length === 0
       ? 'No annotations were drawn during this recording.'
       : annotations
-          .map(
-            (a) =>
-              `#${a.number} at ${formatMsAsMinSec(a.drawnAtMs)} (region ${a.x},${a.y} ${a.w}×${a.h})`
-          )
+          .map((a) => `#${a.number} at ${formatMsAsMinSec(a.drawnAtMs)} (region ${a.x},${a.y} ${a.w}×${a.h})`)
           .join('\n');
 
   return [
@@ -378,10 +379,12 @@ function buildPromptText(args: {
     '',
     transcriptLine,
     `2. Annotations (numbered rectangles I drew while recording): ${annotationsPath}`,
-    '3. Frames extracted at each transcript segment start time (read these images directly):',
-    frameListing,
+    '3. Frames captured at the moment each annotation was drawn (read these images directly):',
+    annotationFrameListing,
+    '4. Manual snap frames captured via the 📷 button (read these images directly):',
+    snapFrameListing,
     '',
-    'Each frame filename encodes its timestamp (e.g. 20260418.1045.0023.png = frame at 0:23 of the session). Open each frame to see what was on screen at that moment in the transcript.',
+    'The transcript references my annotations by number ("#1", "the first box", etc.). For each numbered comment, open the matching frame-N.png to see what was on screen at that moment; the red numbered rectangle in the frame shows exactly what I was pointing at. annotations.json lists the region coordinates if you need pixel-level precision.',
     '',
     'Annotation summary (timestamps are M:SS since recording start):',
     annotationSummary,
@@ -486,27 +489,36 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     }
   }
 
-  // 6. Extract a PNG frame at the start of each transcript segment.
-  //    Named {sessionStamp}.{MMSS}.png so the filename is self-describing
-  //    when viewed alongside the transcript.
-  //    e.g. "20260418.1045.0023.png" = frame at 0:23 of the 10:45 session.
-  const extractedFrames: Array<{ path: string; startSec: number; transcriptText: string }> = [];
-  if (fs.existsSync(mp4Path) && transcriptSegments.length > 0) {
-    for (const seg of transcriptSegments) {
-      const mm = String(Math.floor(seg.startSec / 60)).padStart(2, '0');
-      const ss = String(seg.startSec % 60).padStart(2, '0');
-      const framePath = path.join(sessionDir, `${stamp}.${mm}${ss}.png`);
+  // 6a. Extract a PNG at the exact millisecond each annotation was drawn.
+  //     The overlay bakes the red numbered rectangle into the live canvas,
+  //     so these frames show exactly what was on screen + what was circled.
+  const annotationFrames: Array<{ number: number; path: string; drawnAtMs: number }> = [];
+  if (fs.existsSync(mp4Path) && input.annotations.length > 0) {
+    for (const a of input.annotations) {
+      const framePath = path.join(sessionDir, `frame-${a.number}.png`);
       try {
-        await extractFrameAt(mp4Path, framePath, seg.startSec * 1000);
+        await extractFrameAt(mp4Path, framePath, a.drawnAtMs);
         if (fs.existsSync(framePath)) {
-          extractedFrames.push({ path: framePath, startSec: seg.startSec, transcriptText: seg.text });
+          annotationFrames.push({ number: a.number, path: framePath, drawnAtMs: a.drawnAtMs });
         }
       } catch (err) {
-        warnings.push(`frame at ${mm}:${ss} failed: ${(err as Error).message}`);
-        log('pipeline', 'frame fail', { mmss: `${mm}:${ss}`, err: String(err) });
+        warnings.push(`frame for annotation #${a.number} failed: ${(err as Error).message}`);
+        log('pipeline', 'frame fail', { number: a.number, err: String(err) });
       }
     }
-    log('pipeline', 'transcript frames extracted', { count: extractedFrames.length });
+    log('pipeline', 'annotation frames extracted', { count: annotationFrames.length });
+  }
+
+  // 6b. Collect any snap-N-MM-SS.png files the user captured live via the
+  //     HUD snap button. They already exist in sessionDir (written during
+  //     recording); we just need to discover and sort them.
+  const snapFrames: Array<{ path: string; name: string }> = fs
+    .readdirSync(sessionDir)
+    .filter((f) => /^snap-\d+-.+\.png$/.test(f))
+    .sort()
+    .map((f) => ({ path: path.join(sessionDir, f), name: f }));
+  if (snapFrames.length > 0) {
+    log('pipeline', 'snap frames found', { count: snapFrames.length });
   }
 
   // 7. annotations.json
@@ -522,7 +534,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const promptText = buildPromptText({
     transcriptPath: finalTranscriptPath,
     annotationsPath,
-    frames: extractedFrames,
+    annotationFrames,
+    snapFrames,
     annotations: input.annotations,
   });
 
@@ -530,7 +543,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   clipboard.writeText(promptText);
   log('pipeline', 'prompt written + clipboarded', {
     length: promptText.length,
-    frames: extractedFrames.length,
+    annotationFrames: annotationFrames.length,
+    snapFrames: snapFrames.length,
   });
 
   // 8. cleanup intermediate webm
@@ -548,7 +562,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     transcriptPath: finalTranscriptPath,
     annotationsPath,
     promptPath,
-    framePaths: extractedFrames.map((f) => f.path),
+    framePaths: [...annotationFrames.map((f) => f.path), ...snapFrames.map((f) => f.path)],
     promptText,
     warnings,
   };

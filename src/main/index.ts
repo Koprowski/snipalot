@@ -98,11 +98,58 @@ let pendingProcessing: PendingProcessing | null = null;
 // ─── window constructors ──────────────────────────────────────────────
 
 function setAppState(next: AppState, why: string): void {
-  if (appState === next) return;
-  log('state', `${appState} → ${next}`, why);
+  const prev = appState;
+  if (prev === next) return;
+  log('state', `${prev} → ${next}`, why);
   appState = next;
+
+  // Ctrl+Shift+N is registered ONLY while recording so it never steals
+  // the keypress from other apps when Snipalot isn't actively capturing.
+  if (next === 'recording' && prev !== 'recording') {
+    registerAnnotationHotkey();
+  } else if (prev === 'recording' && next !== 'recording') {
+    unregisterAnnotationHotkey();
+  }
+
   broadcastStateToLauncher();
   updateLauncherVisibility();
+}
+
+function registerAnnotationHotkey(): void {
+  if (globalShortcut.isRegistered('Control+Shift+N')) return;
+  const ok = globalShortcut.register('Control+Shift+N', handleAnnotationHotkey);
+  log('hotkey', 'Ctrl+Shift+N registered (recording started)', { ok });
+}
+
+function unregisterAnnotationHotkey(): void {
+  if (!globalShortcut.isRegistered('Control+Shift+N')) return;
+  globalShortcut.unregister('Control+Shift+N');
+  log('hotkey', 'Ctrl+Shift+N unregistered (recording ended)');
+}
+
+function handleAnnotationHotkey(): void {
+  log('hotkey', 'Ctrl+Shift+N fired', { appState, activeDisplayId });
+  if (appState !== 'recording' || !activeDisplayId) return;
+
+  // If the cursor is outside the recording region, silently do nothing.
+  // The keypress is unfortunately already consumed by the OS at this point,
+  // but at least Snipalot won't activate annotation mode unexpectedly.
+  if (currentRecordingRegionLocal) {
+    const cursor = screen.getCursorScreenPoint();
+    const display = screen.getAllDisplays().find((d) => String(d.id) === activeDisplayId);
+    if (display) {
+      const rx = display.bounds.x + currentRecordingRegionLocal.x;
+      const ry = display.bounds.y + currentRecordingRegionLocal.y;
+      const rw = currentRecordingRegionLocal.w;
+      const rh = currentRecordingRegionLocal.h;
+      if (cursor.x < rx || cursor.x > rx + rw || cursor.y < ry || cursor.y > ry + rh) {
+        log('hotkey', 'Ctrl+Shift+N: cursor outside recording region, no-op');
+        return;
+      }
+    }
+  }
+
+  targetOverlay(activeDisplayId, 'overlay:enter-annotation-mode');
 }
 
 function broadcastStateToLauncher(): void {
@@ -914,14 +961,8 @@ app.whenReady().then(() => {
     }
   }
 
-  regShortcut('Control+Shift+N', () => {
-    log('hotkey', 'Ctrl+Shift+N fired', { appState, activeDisplayId });
-    if (appState !== 'recording' || !activeDisplayId) {
-      showNotification('Snipalot', 'Annotations require an active recording');
-      return;
-    }
-    targetOverlay(activeDisplayId, 'overlay:enter-annotation-mode');
-  });
+  // Ctrl+Shift+N is registered/unregistered dynamically in setAppState so it
+  // only captures keystrokes from the OS while a recording is active.
   regShortcut('Control+Shift+R', () => {
     log('hotkey', 'Ctrl+Shift+R fired', { appState, activeDisplayId });
     handleToggleHotkey();

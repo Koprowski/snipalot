@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Snipalot</title>
+    <link rel="stylesheet" href="launcher.css" />
+  </head>
+  <body>
+    <div class="drag" title="Drag to move">
+      <span class="app-title">Snipalot</span>
+      <span class="state-label" id="state-label">IDLE</span>
+      <span class="drag-grip" aria-hidden="true">⋮⋮</span>
+    </div>
+    <div class="controls">
+      <button id="btn-primary" class="btn-primary" title="Record (Ctrl+Shift+R)">
+        <span class="btn-dot"></span>
+        <span id="btn-label">Record</span>
+      </button>
+      <button id="btn-minimize" class="btn-icon" title="Minimize">—</button>
+      <button id="btn-quit" class="btn-icon" title="Quit Snipalot">✕</button>
+    </div>
+    <div class="hint" id="hint">Click Record to select a region · drag the top bar to move</div>
+    <script src="launcher.js"></script>
+  </body>
+</html>

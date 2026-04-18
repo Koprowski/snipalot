@@ -1,0 +1,37 @@
+appId: app.snipalot
+productName: Snipalot
+copyright: Copyright © 2026 Jason Koprowski
+directories:
+  output: release
+  buildResources: resources
+files:
+  - dist/**/*
+  - package.json
+  - '!**/*.ts'
+  - '!**/*.map'
+extraResources:
+  - from: resources
+    to: resources
+    filter:
+      - '**/*'
+      - '!models/**/.gitkeep'
+win:
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icons/app.ico
+  artifactName: Snipalot-${version}-${arch}-${env.BUILD_TARGET}.${ext}
+portable:
+  artifactName: Snipalot-${version}-portable.exe
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: Snipalot-${version}-setup.exe
+publish:
+  provider: github
+  releaseType: draft

@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Snipalot overlay</title>
+    <link rel="stylesheet" href="overlay.css" />
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+
+    <div id="status" class="status-hidden">
+      <span id="status-text">annotation mode · Esc to exit</span>
+    </div>
+
+    <div id="region-status" class="region-status region-hidden">
+      <span>drag to select region · <b>Enter</b> to confirm · <b>Esc</b> to cancel</span>
+    </div>
+
+    <div id="region-confirm" class="region-confirm region-hidden">
+      <button id="region-confirm-btn" class="region-btn primary">Start recording</button>
+      <button id="region-cancel-btn" class="region-btn">Cancel</button>
+      <span class="region-dims" id="region-dims"></span>
+    </div>
+
+    <script src="overlay.js"></script>
+  </body>
+</html>

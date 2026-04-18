@@ -1,0 +1,19 @@
+node_modules/
+dist/
+release/
+out/
+*.log
+.DS_Store
+Thumbs.db
+
+# local spike artifacts
+spike-output/
+test-recordings/
+
+# electron-builder
+*.exe
+*.blockmap
+
+# resources that must be downloaded (not committed)
+resources/models/*.bin
+resources/bin/whisper.cpp/

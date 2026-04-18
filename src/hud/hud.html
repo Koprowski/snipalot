@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Snipalot · recording</title>
+    <link rel="stylesheet" href="hud.css" />
+  </head>
+  <body>
+    <div class="drag">
+      <span class="rec-dot" id="rec-dot"></span>
+      <span class="rec-label" id="rec-label">REC</span>
+      <span class="rec-timer" id="rec-timer">00:00</span>
+    </div>
+    <div class="controls">
+      <button id="btn-annotate" class="btn" title="Annotate (Ctrl+Shift+N)">✎</button>
+      <button id="btn-outline" class="btn" title="Hide / show capture outline (Ctrl+Shift+H)">▢</button>
+      <button id="btn-pause" class="btn" title="Pause / resume">⏸</button>
+      <button id="btn-stop" class="btn stop" title="Stop recording">⏹</button>
+    </div>
+    <script src="hud.js"></script>
+  </body>
+</html>

@@ -253,36 +253,48 @@ function findWhisperBinary(): { exe: string; model: string } | null {
   return null;
 }
 
-function parseSrtToTranscript(srtText: string): string[] {
-  // SRT block pattern: index, HH:MM:SS,mmm --> HH:MM:SS,mmm, text, blank.
-  // We fold each subtitle into "[M:SS - M:SS] text".
-  const lines = srtText.split(/\r?\n/);
-  const out: string[] = [];
-  let currentStamp = '';
+interface TranscriptSegment {
+  /** Formatted line: "[M:SS - M:SS] text" */
+  text: string;
+  /** Segment start in whole seconds from recording start. */
+  startSec: number;
+}
 
+function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
+  // SRT block pattern: index, HH:MM:SS,mmm --> HH:MM:SS,mmm, text, blank.
+  // We fold each subtitle into "[M:SS - M:SS] text" and retain the start
+  // second so the pipeline can extract a representative frame for each segment.
+  const lines = srtText.split(/\r?\n/);
+  const out: TranscriptSegment[] = [];
+  let currentStamp = '';
+  let currentStartSec = 0;
+
+  // SRT timestamp: HH:MM:SS,mmm --> HH:MM:SS,mmm
   const tsPattern = /^(\d{2}):(\d{2}):(\d{2}),\d+\s+-->\s+(\d{2}):(\d{2}):(\d{2}),\d+/;
 
   for (const raw of lines) {
     const line = raw.trim();
     const m = line.match(tsPattern);
     if (m) {
-      const startMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-      const startSec = parseInt(m[3], 10);
-      const endMin = parseInt(m[4], 10) * 60 + parseInt(m[5], 10);
-      const endSec = parseInt(m[6], 10);
-      currentStamp = `[${startMin}:${String(startSec).padStart(2, '0')} - ${endMin}:${String(endSec).padStart(2, '0')}]`;
+      const startTotalSec = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseInt(m[3], 10);
+      const endTotalSec   = parseInt(m[4], 10) * 3600 + parseInt(m[5], 10) * 60 + parseInt(m[6], 10);
+      const startMin = Math.floor(startTotalSec / 60);
+      const startSecRem = startTotalSec % 60;
+      const endMin = Math.floor(endTotalSec / 60);
+      const endSecRem = endTotalSec % 60;
+      currentStartSec = startTotalSec;
+      currentStamp = `[${startMin}:${String(startSecRem).padStart(2, '0')} - ${endMin}:${String(endSecRem).padStart(2, '0')}]`;
       continue;
     }
     if (line !== '' && !/^\d+$/.test(line) && currentStamp) {
-      out.push(`${currentStamp} ${line}`);
+      out.push({ text: `${currentStamp} ${line}`, startSec: currentStartSec });
       currentStamp = '';
     }
   }
 
-  // Trim trailing Whisper "silence artifact" lines — they're typically empty
-  // or just "you"/"You."
+  // Trim trailing Whisper "silence artifact" lines — typically empty or "you".
   while (out.length > 0) {
-    const last = out[out.length - 1].replace(/^\[.*?\]\s*/, '').trim();
+    const last = out[out.length - 1].text.replace(/^\[.*?\]\s*/, '').trim();
     if (last === '' || /^you\.?$/i.test(last)) {
       out.pop();
     } else {
@@ -331,7 +343,7 @@ function formatMsAsMinSec(ms: number): string {
 function buildPromptText(args: {
   transcriptPath: string | null;
   annotationsPath: string;
-  frames: Array<{ number: number; path: string; drawnAtMs: number }>;
+  frames: Array<{ path: string; startSec: number; transcriptText: string }>;
   annotations: AnnotationRecord[];
 }): string {
   const { transcriptPath, annotationsPath, frames, annotations } = args;
@@ -342,12 +354,13 @@ function buildPromptText(args: {
 
   const frameListing =
     frames.length === 0
-      ? '(No frames — no annotations were drawn this session.)'
+      ? '(No frames — no transcript segments were produced this session.)'
       : frames
-          .map(
-            (f) =>
-              `   #${f.number} (${formatMsAsMinSec(f.drawnAtMs)}): ${f.path}`
-          )
+          .map((f) => {
+            const mm = Math.floor(f.startSec / 60);
+            const ss = String(f.startSec % 60).padStart(2, '0');
+            return `   ${mm}:${ss} → ${f.path}`;
+          })
           .join('\n');
 
   const annotationSummary =
@@ -365,10 +378,10 @@ function buildPromptText(args: {
     '',
     transcriptLine,
     `2. Annotations (numbered rectangles I drew while recording): ${annotationsPath}`,
-    '3. Frames captured at the moment each annotation was drawn (read these images directly):',
+    '3. Frames extracted at each transcript segment start time (read these images directly):',
     frameListing,
     '',
-    'The transcript references my annotations by number ("#1", "the first box", etc.). For each numbered comment, open the matching frame-N.png to see what was on screen at that moment; the red numbered rectangle in the frame shows exactly what I was pointing at. annotations.json lists the region coordinates if you need pixel-level precision.',
+    'Each frame filename encodes its timestamp (e.g. 20260418.1045.0023.png = frame at 0:23 of the session). Open each frame to see what was on screen at that moment in the transcript.',
     '',
     'Annotation summary (timestamps are M:SS since recording start):',
     annotationSummary,
@@ -424,6 +437,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
 
   // 3-4. mp4 → wav → whisper → transcript.txt (skipped if whisper is missing)
   let finalTranscriptPath: string | null = null;
+  let transcriptSegments: TranscriptSegment[] = [];
   const whisper = findWhisperBinary();
   if (whisper && fs.existsSync(mp4Path)) {
     try {
@@ -433,8 +447,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       const srtPath = `${whisperOutPrefix}.srt`;
       if (fs.existsSync(srtPath)) {
         const srt = fs.readFileSync(srtPath, 'utf-8');
-        const lines = parseSrtToTranscript(srt);
-        fs.writeFileSync(transcriptPath, lines.join('\n') + '\n', 'utf-8');
+        transcriptSegments = parseSrtToTranscript(srt);
+        fs.writeFileSync(transcriptPath, transcriptSegments.map((s) => s.text).join('\n') + '\n', 'utf-8');
         finalTranscriptPath = transcriptPath;
         try {
           fs.unlinkSync(srtPath);
@@ -472,24 +486,27 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     }
   }
 
-  // 6. Extract a PNG frame for each annotation at its drawnAtMs. These are
-  //    what the LLM actually reads — a still with the red numbered rectangle
-  //    already baked in, showing exactly what was on screen when the user
-  //    drew annotation #N.
-  const extractedFrames: Array<{ number: number; path: string; drawnAtMs: number }> = [];
-  if (fs.existsSync(mp4Path) && input.annotations.length > 0) {
-    for (const a of input.annotations) {
-      const framePath = path.join(sessionDir, `frame-${a.number}.png`);
+  // 6. Extract a PNG frame at the start of each transcript segment.
+  //    Named {sessionStamp}.{MMSS}.png so the filename is self-describing
+  //    when viewed alongside the transcript.
+  //    e.g. "20260418.1045.0023.png" = frame at 0:23 of the 10:45 session.
+  const extractedFrames: Array<{ path: string; startSec: number; transcriptText: string }> = [];
+  if (fs.existsSync(mp4Path) && transcriptSegments.length > 0) {
+    for (const seg of transcriptSegments) {
+      const mm = String(Math.floor(seg.startSec / 60)).padStart(2, '0');
+      const ss = String(seg.startSec % 60).padStart(2, '0');
+      const framePath = path.join(sessionDir, `${stamp}.${mm}${ss}.png`);
       try {
-        await extractFrameAt(mp4Path, framePath, a.drawnAtMs);
+        await extractFrameAt(mp4Path, framePath, seg.startSec * 1000);
         if (fs.existsSync(framePath)) {
-          extractedFrames.push({ number: a.number, path: framePath, drawnAtMs: a.drawnAtMs });
+          extractedFrames.push({ path: framePath, startSec: seg.startSec, transcriptText: seg.text });
         }
       } catch (err) {
-        warnings.push(`frame extraction for #${a.number} failed: ${(err as Error).message}`);
-        log('pipeline', 'frame fail', { number: a.number, err: String(err) });
+        warnings.push(`frame at ${mm}:${ss} failed: ${(err as Error).message}`);
+        log('pipeline', 'frame fail', { mmss: `${mm}:${ss}`, err: String(err) });
       }
     }
+    log('pipeline', 'transcript frames extracted', { count: extractedFrames.length });
   }
 
   // 7. annotations.json
@@ -508,6 +525,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     frames: extractedFrames,
     annotations: input.annotations,
   });
+
   fs.writeFileSync(promptPath, promptText, 'utf-8');
   clipboard.writeText(promptText);
   log('pipeline', 'prompt written + clipboarded', {

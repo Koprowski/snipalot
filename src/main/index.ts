@@ -638,8 +638,6 @@ ipcMain.handle(
           'Snipalot',
           `Ready · prompt on clipboard${warningsLine}. Folder: ${result.sessionDir}`
         );
-        // Open the frame picker so the user can export additional frames.
-        openFramePicker(result.mp4Path, result.sessionDir);
       })
       .catch((err) => {
         const msg = (err as Error).message;

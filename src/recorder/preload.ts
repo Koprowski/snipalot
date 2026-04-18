@@ -13,9 +13,12 @@ contextBridge.exposeInMainWorld('snipalotRecorder', {
     ipcRenderer.invoke('recorder:save-webm', payload),
   reportState: (state: 'started' | 'stopped' | 'error', detail?: string) =>
     ipcRenderer.invoke('recorder:state', state, detail),
+  reportSnap: (buffer: ArrayBuffer | null) =>
+    ipcRenderer.send('recorder:snap-result', buffer),
   onStart: (cb: (region: RegionSelection) => void) =>
     ipcRenderer.on('recorder:start', (_evt, region) => cb(region)),
   onStop: (cb: () => void) => ipcRenderer.on('recorder:stop', cb),
   onPause: (cb: () => void) => ipcRenderer.on('recorder:pause', cb),
   onResume: (cb: () => void) => ipcRenderer.on('recorder:resume', cb),
+  onSnap: (cb: () => void) => ipcRenderer.on('recorder:snap', _evt => cb()),
 });

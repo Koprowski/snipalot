@@ -6,6 +6,7 @@ interface Window {
     stop: () => Promise<void>;
     toggleOutline: () => Promise<void>;
     enterAnnotation: () => Promise<void>;
+    snap: () => Promise<void>;
     onState: (
       cb: (payload: { startedAt: number; paused: boolean; totalPausedMs: number }) => void
     ) => void;

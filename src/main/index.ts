@@ -12,7 +12,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { log } from './logger';
-import { runPipeline, AnnotationRecord } from './pipeline';
+import { runPipeline, AnnotationRecord, formatSessionStamp } from './pipeline';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
@@ -78,11 +78,18 @@ let activeSourceId: string | null = null;
 let currentAnnotations: AnnotationRecord[] = [];
 let currentRecordingRegionLocal: { x: number; y: number; w: number; h: number } | null = null;
 
+// Session folder pre-created when recording starts so live snaps have
+// somewhere to land immediately. Passed to the pipeline at stop time so
+// both sources write into the same directory.
+let liveSessionDir: string | null = null;
+let snapCount = 0;
+
 interface PendingProcessing {
   annotations: AnnotationRecord[];
   recordingRegion: { x: number; y: number; w: number; h: number } | null;
   startedAtMs: number;
   durationMs: number;
+  preCreatedSessionDir: string | null;
 }
 // Snapshot of the stopping recording's metadata. The webm buffer arrives
 // async via recorder:save-webm and the pipeline picks up from here.
@@ -299,6 +306,73 @@ function createHudWindow(onDisplay: Display): BrowserWindow {
   return win;
 }
 
+let framePickerWindow: BrowserWindow | null = null;
+
+function openFramePicker(mp4Path: string, sessionDir: string): void {
+  // Skip if the mp4 didn't land (pipeline error).
+  if (!fs.existsSync(mp4Path)) return;
+  // Close previous picker if still open.
+  if (framePickerWindow && !framePickerWindow.isDestroyed()) {
+    framePickerWindow.close();
+  }
+  const primary = screen.getPrimaryDisplay();
+  const w = Math.min(960, primary.workArea.width - 80);
+  const h = Math.min(620, primary.workArea.height - 80);
+  const win = new BrowserWindow({
+    width: w,
+    height: h,
+    x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
+    y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
+    title: 'Snipalot · Frame Picker',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'framepicker', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, '..', 'framepicker', 'framepicker.html'));
+  win.once('ready-to-show', () => {
+    win.show();
+    win.webContents.send('framepicker:init', { mp4Path, sessionDir });
+    log('main', 'framepicker opened', { mp4Path, sessionDir });
+  });
+  win.on('closed', () => {
+    framePickerWindow = null;
+    log('main', 'framepicker closed');
+  });
+  framePickerWindow = win;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ffmpegBin: string | null = require('ffmpeg-static');
+
+ipcMain.handle(
+  'framepicker:export',
+  async (_evt, payload: { timeSec: number; sessionDir: string }) => {
+    if (!ffmpegBin) return { ok: false, error: 'ffmpeg-static missing' };
+    const mm = String(Math.floor(payload.timeSec / 60)).padStart(2, '0');
+    const ss = String(Math.floor(payload.timeSec) % 60).padStart(2, '0');
+    const outPath = path.join(payload.sessionDir, `exported-${mm}-${ss}.png`);
+    const mp4 = path.join(path.dirname(payload.sessionDir), 'recording.mp4');
+    if (!fs.existsSync(mp4)) return { ok: false, error: 'mp4 not found' };
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const { spawn } = require('node:child_process') as typeof import('node:child_process');
+        const args = ['-y', '-ss', payload.timeSec.toFixed(3), '-i', mp4, '-frames:v', '1', '-q:v', '2', outPath];
+        log('framepicker', 'export frame', { args });
+        const proc = spawn(ffmpegBin!, args, { windowsHide: true });
+        proc.on('error', reject);
+        proc.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg exit ${code}`))));
+      });
+      log('framepicker', 'frame exported', { outPath });
+      return { ok: true, path: outPath };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+);
+
 function rebuildOverlays(): void {
   log('main', 'rebuildOverlays');
   for (const [id, win] of overlayWindows) {
@@ -393,12 +467,14 @@ function stopRecording(reason: string): void {
       recordingRegion: currentRecordingRegionLocal,
       startedAtMs: recordingStartedAt,
       durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
+      preCreatedSessionDir: liveSessionDir,
     };
     log('main', 'pendingProcessing snapshotted', {
       annotations: pendingProcessing.annotations.length,
       durationMs: pendingProcessing.durationMs,
     });
   }
+  liveSessionDir = null;
 
   // Tell the recorder to finalize its stream. The webm buffer arrives
   // later via the save-webm IPC — we don't wait for it here.
@@ -546,6 +622,7 @@ ipcMain.handle(
       durationMs: snap?.durationMs ?? 1000,
       recordingRegion: snap?.recordingRegion ?? null,
       annotations: snap?.annotations ?? [],
+      preCreatedSessionDir: snap?.preCreatedSessionDir ?? undefined,
     })
       .then((result) => {
         log('recorder', 'pipeline complete', {
@@ -561,6 +638,8 @@ ipcMain.handle(
           'Snipalot',
           `Ready · prompt on clipboard${warningsLine}. Folder: ${result.sessionDir}`
         );
+        // Open the frame picker so the user can export additional frames.
+        openFramePicker(result.mp4Path, result.sessionDir);
       })
       .catch((err) => {
         const msg = (err as Error).message;
@@ -601,6 +680,15 @@ ipcMain.handle(
       recordingPaused = false;
       pausedAt = null;
       totalPausedMs = 0;
+      snapCount = 0;
+
+      // Pre-create the session folder so live snaps have somewhere to land.
+      const outputRoot = path.join(process.cwd(), 'spike-output');
+      if (!fs.existsSync(outputRoot)) fs.mkdirSync(outputRoot, { recursive: true });
+      const stamp = formatSessionStamp(new Date(recordingStartedAt));
+      liveSessionDir = path.join(outputRoot, `${stamp} feedback`);
+      if (!fs.existsSync(liveSessionDir)) fs.mkdirSync(liveSessionDir, { recursive: true });
+      log('main', 'liveSessionDir created', { liveSessionDir });
 
       const display = screen
         .getAllDisplays()
@@ -631,8 +719,10 @@ ipcMain.handle(
             recordingRegion: currentRecordingRegionLocal,
             startedAtMs: recordingStartedAt,
             durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
+            preCreatedSessionDir: liveSessionDir,
           };
         }
+        liveSessionDir = null;
         setAppState('idle', 'recorder reported stopped (unexpected)');
         recordingStartedAt = null;
         recordingPaused = false;
@@ -690,6 +780,32 @@ ipcMain.handle('hud:enter-annotation', () => {
     return;
   }
   targetOverlay(activeDisplayId, 'overlay:enter-annotation-mode');
+});
+
+ipcMain.handle('hud:snap', () => {
+  if (appState !== 'recording' || !recorderWindow || !liveSessionDir) return;
+  const elapsedMs = recordingStartedAt
+    ? Math.max(0, Date.now() - recordingStartedAt - totalPausedMs)
+    : 0;
+  const ss = Math.floor(elapsedMs / 1000);
+  const mm = Math.floor(ss / 60);
+  const mmss = `${String(mm).padStart(2, '0')}-${String(ss % 60).padStart(2, '0')}`;
+  snapCount++;
+  const snapIndex = snapCount;
+  const snapPath = path.join(liveSessionDir, `snap-${snapIndex}-${mmss}.png`);
+
+  return new Promise<void>((resolve) => {
+    ipcMain.once('recorder:snap-result', (_evt, buffer: ArrayBuffer | null) => {
+      if (buffer) {
+        fs.writeFileSync(snapPath, Buffer.from(buffer));
+        log('hud', 'snap saved', { snapPath, bytes: buffer.byteLength });
+      } else {
+        log('hud', 'snap failed: no buffer from renderer');
+      }
+      resolve();
+    });
+    recorderWindow!.webContents.send('recorder:snap');
+  });
 });
 
 // ─── IPC: launcher ↔ main ─────────────────────────────────────────────

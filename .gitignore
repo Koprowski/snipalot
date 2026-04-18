@@ -16,4 +16,4 @@ test-recordings/
 
 # resources that must be downloaded (not committed)
 resources/models/*.bin
-resources/bin/whisper.cpp/
+resources/bin/

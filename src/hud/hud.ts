@@ -14,6 +14,7 @@ const btnPauseEl = document.getElementById('btn-pause')! as HTMLButtonElement;
 const btnStopEl = document.getElementById('btn-stop')! as HTMLButtonElement;
 const btnOutlineEl = document.getElementById('btn-outline')! as HTMLButtonElement;
 const btnAnnotateEl = document.getElementById('btn-annotate')! as HTMLButtonElement;
+const btnSnapEl = document.getElementById('btn-snap')! as HTMLButtonElement;
 
 let startedAt: number | null = null;
 let paused = false;
@@ -58,6 +59,10 @@ function stopTicker(): void {
 
 btnPauseEl.addEventListener('click', () => window.snipalotHud.pauseResume());
 btnStopEl.addEventListener('click', () => window.snipalotHud.stop());
+btnSnapEl.addEventListener('click', () => {
+  btnSnapEl.disabled = true;
+  window.snipalotHud.snap().finally(() => { btnSnapEl.disabled = false; });
+});
 btnOutlineEl.addEventListener('click', () => {
   btnOutlineEl.classList.toggle('active');
   window.snipalotHud.toggleOutline();

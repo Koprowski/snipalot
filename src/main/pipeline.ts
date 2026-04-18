@@ -52,6 +52,13 @@ export interface PipelineInput {
   recordingRegion: { x: number; y: number; w: number; h: number } | null;
   /** Annotation snapshot pushed by the overlay. */
   annotations: AnnotationRecord[];
+  /**
+   * Session directory that was pre-created during recording (for live snaps).
+   * If provided, the pipeline writes into this directory instead of computing
+   * a new one from startedAtMs. Any snap-N-MMSS.png files already in there
+   * are preserved.
+   */
+  preCreatedSessionDir?: string;
 }
 
 export interface PipelineResult {
@@ -67,7 +74,7 @@ export interface PipelineResult {
 
 // ─── file layout ─────────────────────────────────────────────────────
 
-function formatSessionStamp(date: Date): string {
+export function formatSessionStamp(date: Date): string {
   const pad = (n: number): string => String(n).padStart(2, '0');
   return (
     `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
@@ -383,7 +390,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const startedAt = new Date(input.startedAtMs);
   const stamp = formatSessionStamp(startedAt);
   const sessionBasename = `${stamp} feedback`;
-  const sessionDir = path.join(input.outputRoot, sessionBasename);
+  // Use a pre-created dir (for live snaps) if available, otherwise create one.
+  const sessionDir = input.preCreatedSessionDir ?? path.join(input.outputRoot, sessionBasename);
   ensureDir(sessionDir);
   log('pipeline', 'session start', { sessionDir, annotations: input.annotations.length });
 

@@ -209,6 +209,20 @@ window.snipalotRecorder.onStart((region) => {
   startRecording(region);
 });
 
+window.snipalotRecorder.onSnap(() => {
+  if (!cropCanvas) {
+    window.snipalotRecorder.reportSnap(null);
+    return;
+  }
+  cropCanvas.toBlob((blob) => {
+    if (!blob) {
+      window.snipalotRecorder.reportSnap(null);
+      return;
+    }
+    blob.arrayBuffer().then((buf) => window.snipalotRecorder.reportSnap(buf));
+  }, 'image/png');
+});
+
 window.snipalotRecorder.onStop(() => {
   stopRecording();
 });

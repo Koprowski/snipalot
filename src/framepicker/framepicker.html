@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Snipalot · Frame Picker</title>
+    <link rel="stylesheet" href="framepicker.css" />
+  </head>
+  <body>
+    <header>
+      <h1>📷 Frame Picker — scrub to any moment, export as PNG</h1>
+      <span class="session-dir" id="session-dir"></span>
+    </header>
+    <div class="video-wrap">
+      <video id="player" controls preload="metadata"></video>
+    </div>
+    <footer>
+      <span class="time-display" id="time-display">0:00.0</span>
+      <button class="btn-export" id="btn-export">Export this frame</button>
+      <span class="status" id="status">Scrub to the frame you want, then click Export.</span>
+    </footer>
+    <script src="framepicker.js"></script>
+  </body>
+</html>

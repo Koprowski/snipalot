@@ -31,7 +31,7 @@ function renderLauncherImpl(): void {
     hintEl.textContent = 'Click Record to select a region · Ctrl+Shift+R';
   } else if (currentState === 'selecting') {
     btnPrimaryLabelEl.textContent = 'Cancel';
-    hintEl.textContent = 'Drag a region on any display · Enter to start · Esc to cancel';
+    hintEl.textContent = 'Drag a region on any display · release mouse to confirm · Esc to cancel';
   } else if (currentState === 'recording') {
     btnPrimaryLabelEl.textContent = 'Recording…';
     hintEl.textContent = 'Use the HUD to pause, annotate, or stop';

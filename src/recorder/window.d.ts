@@ -16,9 +16,11 @@ interface Window {
       bytes: number;
     }>;
     reportState: (state: 'started' | 'stopped' | 'error', detail?: string) => Promise<void>;
+    reportSnap: (buffer: ArrayBuffer | null) => void;
     onStart: (cb: (region: RecorderRegion) => void) => void;
     onStop: (cb: () => void) => void;
     onPause: (cb: () => void) => void;
     onResume: (cb: () => void) => void;
+    onSnap: (cb: () => void) => void;
   };
 }

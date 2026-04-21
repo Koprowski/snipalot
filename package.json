@@ -7,7 +7,7 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/make-icon.mjs",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
     "spike:m1": "npm run build && electron . --spike=m1",

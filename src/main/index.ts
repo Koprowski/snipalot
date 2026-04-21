@@ -274,6 +274,7 @@ function createLauncherWindow(): BrowserWindow {
   const y = primary.workArea.y + margin;
   log('main', 'createLauncher', { x, y, w, h });
 
+  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
   const win = new BrowserWindow({
     width: w,
     height: h,
@@ -289,6 +290,7 @@ function createLauncherWindow(): BrowserWindow {
     maximizable: false,
     show: false,
     hasShadow: false,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(__dirname, '..', 'launcher', 'preload.js'),
       contextIsolation: true,
@@ -913,6 +915,7 @@ app.whenReady().then(() => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('app.snipalot');
   }
+
 
   log('main', 'app ready', {
     isDev,

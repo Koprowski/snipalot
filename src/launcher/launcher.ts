@@ -19,7 +19,6 @@ const btnMinimizeEl = document.getElementById('btn-minimize') as HTMLButtonEleme
 const hintEl = document.getElementById('hint')!;
 
 let currentState: 'idle' | 'selecting' | 'recording' = 'idle';
-let minimized = false;
 
 function renderLauncherImpl(): void {
   labelEl.textContent = currentState.toUpperCase();
@@ -54,12 +53,6 @@ btnQuitEl.addEventListener('click', () => {
 
 btnMinimizeEl.addEventListener('click', () => {
   window.snipalotLauncher.toggleMinimize();
-});
-
-window.snipalotLauncher.onMinimized((isMin) => {
-  minimized = isMin;
-  document.body.classList.toggle('minimized', minimized);
-  window.snipalotLauncher.log('minimized', minimized);
 });
 
 window.snipalotLauncher.onState((state) => {

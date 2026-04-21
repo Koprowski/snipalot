@@ -285,7 +285,7 @@ function createLauncherWindow(): BrowserWindow {
     resizable: false,
     skipTaskbar: true,
     focusable: true,
-    minimizable: false,
+    minimizable: true,
     maximizable: false,
     show: false,
     hasShadow: false,
@@ -303,6 +303,12 @@ function createLauncherWindow(): BrowserWindow {
   win.once('ready-to-show', () => {
     win.show();
     broadcastStateToLauncher();
+  });
+  win.on('restore', () => {
+    // Back to floating overlay — hide from taskbar again.
+    win.setSkipTaskbar(true);
+    win.setAlwaysOnTop(true, 'screen-saver');
+    log('launcher', 'restored from taskbar');
   });
   win.on('closed', () => {
     launcherWindow = null;
@@ -871,17 +877,12 @@ ipcMain.handle('launcher:quit', () => {
   app.quit();
 });
 
-let launcherMinimized = false;
-const LAUNCHER_SIZE_FULL = { width: 320, height: 120 };
-const LAUNCHER_SIZE_MIN = { width: 120, height: 42 };
-
 ipcMain.handle('launcher:toggle-minimize', () => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  launcherMinimized = !launcherMinimized;
-  const size = launcherMinimized ? LAUNCHER_SIZE_MIN : LAUNCHER_SIZE_FULL;
-  launcherWindow.setSize(size.width, size.height);
-  launcherWindow.webContents.send('launcher:minimized', launcherMinimized);
-  log('launcher', 'toggle-minimize', { minimized: launcherMinimized, size });
+  // Show in taskbar so the user has something to click to restore, then minimize.
+  launcherWindow.setSkipTaskbar(false);
+  launcherWindow.minimize();
+  log('launcher', 'minimized to taskbar');
 });
 
 // ─── shared coordinators (hotkey entry points) ───────────────────────

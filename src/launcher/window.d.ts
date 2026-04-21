@@ -8,6 +8,5 @@ interface Window {
     toggleMinimize: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;
     onState: (cb: (state: { appState: 'idle' | 'selecting' | 'recording' }) => void) => void;
-    onMinimized: (cb: (minimized: boolean) => void) => void;
   };
 }

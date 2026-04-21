@@ -9,6 +9,4 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     ipcRenderer.invoke('log', `launcher:${scope}`, ...args),
   onState: (cb: (state: { appState: 'idle' | 'selecting' | 'recording' }) => void) =>
     ipcRenderer.on('launcher:state', (_evt, state) => cb(state)),
-  onMinimized: (cb: (minimized: boolean) => void) =>
-    ipcRenderer.on('launcher:minimized', (_evt, minimized) => cb(minimized)),
 });

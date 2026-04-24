@@ -14,6 +14,8 @@ const labelEl = document.getElementById('state-label')!;
 const btnPrimaryEl = document.getElementById('btn-primary') as HTMLButtonElement;
 const btnPrimaryLabelEl = document.getElementById('btn-label')!;
 const btnSettingsEl = document.getElementById('btn-settings') as HTMLButtonElement;
+const btnMinimizeEl = document.getElementById('btn-minimize') as HTMLButtonElement;
+const btnQuitEl = document.getElementById('btn-quit') as HTMLButtonElement;
 const hintEl = document.getElementById('hint')!;
 
 let currentState: 'idle' | 'selecting' | 'recording' = 'idle';
@@ -47,6 +49,14 @@ btnPrimaryEl.addEventListener('click', () => {
 
 btnSettingsEl.addEventListener('click', () => {
   window.snipalotLauncher.settings();
+});
+
+btnMinimizeEl.addEventListener('click', () => {
+  window.snipalotLauncher.toggleMinimize();
+});
+
+btnQuitEl.addEventListener('click', () => {
+  window.snipalotLauncher.quit();
 });
 
 window.snipalotLauncher.onState((state) => {

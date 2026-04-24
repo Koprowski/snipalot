@@ -287,7 +287,7 @@ function createRecorderWindow(): BrowserWindow {
 function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
   const w = 340;
-  // Native title bar adds ~30px on Windows; bump content height accordingly.
+  // Custom title bar is 28px; body content ~130px. Keep some slack.
   const h = 160;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
@@ -300,11 +300,14 @@ function createLauncherWindow(): BrowserWindow {
     height: h,
     x,
     y,
-    // Native window chrome: OS-drawn title bar + minimize/close in upper-right.
-    // Previous build was a frameless always-on-top floater; users asked for a
-    // normal windowed experience that dismisses naturally when another app is
-    // brought forward.
-    frame: true,
+    // Frameless so we can draw our own slim title bar with only minimize +
+    // close (no maximize). Windows' native frame doesn't let us hide the
+    // maximize box even with maximizable:false + resizable:false — it just
+    // grays it out. Window still behaves like a normal windowed app:
+    // alwaysOnTop:false means it drops to the back when another app is
+    // brought forward; minimizable:true routes our custom button through
+    // the OS minimize path to the taskbar.
+    frame: false,
     transparent: false,
     alwaysOnTop: false,
     resizable: false,

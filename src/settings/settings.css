@@ -18,17 +18,19 @@
   --radius: 6px;
 }
 
-html,
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
+  height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
   font-size: 13px;
   line-height: 1.5;
-  min-height: 100vh;
-}
-
-body {
   display: flex;
   flex-direction: column;
 }

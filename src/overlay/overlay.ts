@@ -7,7 +7,8 @@
  *
  * Modes:
  *   - region-select: dim this display, let user drag a rect locally
- *   - annotation: draw numbered rectangles, STRICTLY inside recordingRegion
+ *   - annotation: draw numbered rectangles, STRICTLY inside recordingRegion;
+ *     click an existing rect to move it, drag a corner handle to resize it
  *   - region outline: dashed box just OUTSIDE the recording region (drawn
  *     only by the overlay that owns the active recording)
  *
@@ -33,7 +34,7 @@ interface Rect {
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
-const statusEl = document.getElementById('status')!;
+const overlayStatusEl = document.getElementById('status')!;
 const regionStatusEl = document.getElementById('region-status')!;
 const regionConfirmEl = document.getElementById('region-confirm')!;
 const regionDimsEl = document.getElementById('region-dims')!;
@@ -60,9 +61,6 @@ function nowDrawMs(): number {
 }
 
 function pushAnnotationSync(): void {
-  // Send the current annotation list (plus recording-region snapshot) to main
-  // on every change so main can persist annotations.json without having to
-  // race with the recording-stopped IPC.
   if (!ownsRecording) return;
   void window.snipalot.syncAnnotations({
     annotations: annotations.map((a) => ({
@@ -76,17 +74,67 @@ function pushAnnotationSync(): void {
     recordingRegion,
   });
 }
+
 let dragStart: { x: number; y: number } | null = null;
 let currentRect: Rect | null = null;
 let annotationMode = false;
 let regionSelectMode = false;
 let confirmedRegion: Rect | null = null;
-let recordingRegion: Rect | null = null; // set only on the overlay that owns the recording
+let recordingRegion: Rect | null = null;
 let outlineVisible = true;
 let isRecording = false;
 let ownsRecording = false;
-// Mirror of setIgnoreMouseEvents state. Used to avoid redundant IPC flips.
 let overlayInteractive = false;
+
+// ─── selection / move / resize state ────────────────────────────────
+
+type HandleId = 'tl' | 'tr' | 'bl' | 'br';
+type DragMode = 'none' | 'draw' | 'move' | 'resize';
+
+let selectedIndex: number | null = null;
+let dragMode: DragMode = 'none';
+let activeHandle: HandleId | null = null;
+// The annotation snapshot at drag start (for applying deltas cleanly).
+let dragStartAnn: Annotation | null = null;
+// The anchor corner (opposite to the dragged handle) used for resize.
+let resizeAnchor: { x: number; y: number } | null = null;
+
+const HANDLE_HIT = 8; // px radius for corner handle hit test
+
+function getHandlePos(a: Annotation): Record<HandleId, { x: number; y: number }> {
+  return {
+    tl: { x: a.x,       y: a.y },
+    tr: { x: a.x + a.w, y: a.y },
+    bl: { x: a.x,       y: a.y + a.h },
+    br: { x: a.x + a.w, y: a.y + a.h },
+  };
+}
+
+/** Returns the HandleId if (mx, my) is within HANDLE_HIT of any corner of a. */
+function hitHandle(mx: number, my: number, a: Annotation): HandleId | null {
+  const handles = getHandlePos(a);
+  for (const [id, pos] of Object.entries(handles) as [HandleId, { x: number; y: number }][]) {
+    if (Math.abs(mx - pos.x) <= HANDLE_HIT && Math.abs(my - pos.y) <= HANDLE_HIT) return id;
+  }
+  return null;
+}
+
+/** Returns annotation index (topmost first) if (mx, my) is inside its rect. */
+function hitAnnotation(mx: number, my: number): number | null {
+  for (let i = annotations.length - 1; i >= 0; i--) {
+    const a = annotations[i];
+    if (mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h) return i;
+  }
+  return null;
+}
+
+function deselect(): void {
+  selectedIndex = null;
+  dragMode = 'none';
+  activeHandle = null;
+  dragStartAnn = null;
+  resizeAnchor = null;
+}
 
 const STYLE = {
   annotationColor: '#EF4444',
@@ -98,6 +146,9 @@ const STYLE = {
   regionStroke: '#EF4444',
   regionStrokeWidth: 2,
   outlineOutsideOffset: 4,
+  handleSize: 8,    // half-width of corner handle square
+  handleColor: '#FFFFFF',
+  handleBorderColor: '#EF4444',
 };
 
 // ─── canvas setup & render ───────────────────────────────────────────
@@ -138,8 +189,12 @@ function redraw(): void {
     ctx.restore();
   }
 
-  for (const ann of annotations) drawAnnotation(ann);
-  if (annotationMode && currentRect && !regionSelectMode) {
+  for (let i = 0; i < annotations.length; i++) {
+    drawAnnotation(annotations[i], i === selectedIndex);
+  }
+
+  // Draw the live preview rect (new draw or active drag of existing).
+  if (dragMode === 'draw' && currentRect && !regionSelectMode) {
     drawAnnotation({
       number: nextNumber,
       x: currentRect.x,
@@ -147,11 +202,11 @@ function redraw(): void {
       w: currentRect.w,
       h: currentRect.h,
       drawnAtMs: 0,
-    });
+    }, false);
   }
 }
 
-function drawAnnotation(a: Annotation): void {
+function drawAnnotation(a: Annotation, selected = false): void {
   ctx.strokeStyle = STYLE.annotationColor;
   ctx.lineWidth = STYLE.strokeWidth;
   ctx.strokeRect(a.x, a.y, a.w, a.h);
@@ -166,6 +221,20 @@ function drawAnnotation(a: Annotation): void {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(String(a.number), a.x, a.y + 1);
+
+  // Corner handles when selected.
+  if (selected) {
+    const hs = STYLE.handleSize;
+    const handles = getHandlePos(a);
+    for (const pos of Object.values(handles)) {
+      // White fill, red border.
+      ctx.fillStyle = STYLE.handleColor;
+      ctx.fillRect(pos.x - hs, pos.y - hs, hs * 2, hs * 2);
+      ctx.strokeStyle = STYLE.handleBorderColor;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(pos.x - hs, pos.y - hs, hs * 2, hs * 2);
+    }
+  }
 }
 
 // ─── containment helpers ─────────────────────────────────────────────
@@ -185,7 +254,15 @@ function clampToRecordingRegion(x: number, y: number): { x: number; y: number } 
   };
 }
 
-// ─── interactivity helper (avoids redundant IPC flips) ──────────────
+function clampRectToRegion(r: Rect): Rect {
+  if (!recordingRegion) return r;
+  const rr = recordingRegion;
+  const x = Math.max(rr.x, Math.min(rr.x + rr.w - r.w, r.x));
+  const y = Math.max(rr.y, Math.min(rr.y + rr.h - r.h, r.y));
+  return { x, y, w: r.w, h: r.h };
+}
+
+// ─── interactivity helper ─────────────────────────────────────────────
 
 async function setInteractiveIfChanged(interactive: boolean): Promise<void> {
   if (interactive === overlayInteractive) return;
@@ -205,7 +282,6 @@ async function enterRegionSelectMode(): Promise<void> {
   dragStart = null;
   document.body.classList.add('region-select-mode');
   regionStatusEl.classList.remove('region-hidden');
-  // Region-select needs the whole overlay interactive — user can drag anywhere.
   await setInteractiveIfChanged(true);
   window.snipalot.log('mode', 'enter region-select');
   redraw();
@@ -242,48 +318,38 @@ function showRegionConfirmPanel(r: Rect): void {
 async function enterAnnotationMode(): Promise<void> {
   if (!isRecording || !ownsRecording || !recordingRegion) {
     window.snipalot.log('mode', 'enter annotation REJECTED', {
-      isRecording,
-      ownsRecording,
-      hasRegion: !!recordingRegion,
+      isRecording, ownsRecording, hasRegion: !!recordingRegion,
     });
     return;
   }
   if (annotationMode) return;
   annotationMode = true;
   document.body.classList.add('annotation-mode');
-  statusEl.classList.remove('status-hidden');
-  // Start click-through. The mousemove handler flips the overlay to
-  // interactive when the cursor enters the recording region, and back to
-  // click-through when it leaves, so clicks outside the region (on the HUD
-  // especially) pass through to the right window.
+  overlayStatusEl.classList.remove('status-hidden');
   await setInteractiveIfChanged(false);
-  // Keyboard focus is separate from mouse interactivity on Windows — this
-  // lets Esc reach the overlay even while it's click-through.
   await window.snipalot.focusWindow();
-  window.snipalot.log('mode', 'enter annotation (click-through until cursor enters region)');
+  window.snipalot.log('mode', 'enter annotation');
 }
 
 async function exitAnnotationMode(): Promise<void> {
   if (!annotationMode) return;
   annotationMode = false;
   drawing = false;
+  dragMode = 'none';
   dragStart = null;
   currentRect = null;
+  deselect();
   document.body.classList.remove('annotation-mode');
-  statusEl.classList.add('status-hidden');
+  overlayStatusEl.classList.add('status-hidden');
   await setInteractiveIfChanged(false);
   window.snipalot.log('mode', 'exit annotation');
   redraw();
 }
 
-// Dynamically flip interactivity based on cursor position while in
-// annotation mode. mousemove events still fire in the renderer when the
-// overlay is click-through because we create it with
-// setIgnoreMouseEvents(true, { forward: true }). We never flip during an
-// active drag (drawing === true) so mid-drag mouse capture isn't disrupted.
+// Dynamically flip interactivity based on cursor position.
 function refreshAnnotationInteractivity(x: number, y: number): void {
   if (!annotationMode) return;
-  if (drawing) return;
+  if (dragMode !== 'none') return; // never flip during an active drag
   const inside = isInsideRecordingRegion(x, y);
   void setInteractiveIfChanged(inside);
 }
@@ -295,6 +361,7 @@ window.addEventListener('mousemove', (e) => {
 // ─── undo / clear ────────────────────────────────────────────────────
 
 function undoLastAnnotation(): void {
+  if (selectedIndex !== null) deselect();
   const removed = annotations.pop();
   if (removed) nextNumber = removed.number;
   pushAnnotationSync();
@@ -302,58 +369,165 @@ function undoLastAnnotation(): void {
 }
 
 function clearAllAnnotations(): void {
+  deselect();
   annotations = [];
   pushAnnotationSync();
   redraw();
 }
 
+// ─── cursor style ─────────────────────────────────────────────────────
+
+/** Update canvas cursor to give move/resize affordance. */
+function updateCursor(mx: number, my: number): void {
+  if (!annotationMode || regionSelectMode) { canvas.style.cursor = ''; return; }
+  if (dragMode === 'move') { canvas.style.cursor = 'grabbing'; return; }
+  if (dragMode === 'resize') {
+    const cursors: Record<HandleId, string> = { tl: 'nw-resize', tr: 'ne-resize', bl: 'sw-resize', br: 'se-resize' };
+    canvas.style.cursor = activeHandle ? cursors[activeHandle] : 'se-resize';
+    return;
+  }
+  // Hover feedback.
+  if (selectedIndex !== null) {
+    const h = hitHandle(mx, my, annotations[selectedIndex]);
+    if (h) {
+      const cursors: Record<HandleId, string> = { tl: 'nw-resize', tr: 'ne-resize', bl: 'sw-resize', br: 'se-resize' };
+      canvas.style.cursor = cursors[h];
+      return;
+    }
+  }
+  const idx = hitAnnotation(mx, my);
+  if (idx !== null) { canvas.style.cursor = 'grab'; return; }
+  canvas.style.cursor = 'crosshair';
+}
+
 // ─── pointer drawing ─────────────────────────────────────────────────
+
+canvas.addEventListener('mousemove', (e) => {
+  const mx = e.clientX;
+  const my = e.clientY;
+
+  updateCursor(mx, my);
+
+  if (dragMode === 'draw') {
+    let x = mx;
+    let y = my;
+    if (recordingRegion) { const c = clampToRecordingRegion(x, y); x = c.x; y = c.y; }
+    if (dragStart) {
+      currentRect = {
+        x: Math.min(dragStart.x, x),
+        y: Math.min(dragStart.y, y),
+        w: Math.abs(x - dragStart.x),
+        h: Math.abs(y - dragStart.y),
+      };
+    }
+    redraw();
+    return;
+  }
+
+  if (dragMode === 'move' && dragStartAnn && dragStart) {
+    const dx = mx - dragStart.x;
+    const dy = my - dragStart.y;
+    const moved = clampRectToRegion({
+      x: dragStartAnn.x + dx,
+      y: dragStartAnn.y + dy,
+      w: dragStartAnn.w,
+      h: dragStartAnn.h,
+    });
+    if (selectedIndex !== null) {
+      annotations[selectedIndex] = { ...annotations[selectedIndex], ...moved };
+    }
+    redraw();
+    return;
+  }
+
+  if (dragMode === 'resize' && resizeAnchor && dragStart) {
+    // Clamp mouse to recording region.
+    const c = recordingRegion ? clampToRecordingRegion(mx, my) : { x: mx, y: my };
+    const ax = resizeAnchor.x;
+    const ay = resizeAnchor.y;
+    const newRect: Rect = {
+      x: Math.min(ax, c.x),
+      y: Math.min(ay, c.y),
+      w: Math.max(4, Math.abs(c.x - ax)),
+      h: Math.max(4, Math.abs(c.y - ay)),
+    };
+    if (selectedIndex !== null) {
+      annotations[selectedIndex] = { ...annotations[selectedIndex], ...newRect };
+    }
+    redraw();
+    return;
+  }
+});
 
 canvas.addEventListener('mousedown', (e) => {
   if (!(annotationMode || regionSelectMode)) return;
 
-  if (annotationMode && !isInsideRecordingRegion(e.clientX, e.clientY)) {
-    window.snipalot.log('input', 'mousedown outside region', { x: e.clientX, y: e.clientY });
+  const mx = e.clientX;
+  const my = e.clientY;
+
+  // ── region-select path ──
+  if (regionSelectMode) {
+    drawing = true;
+    dragStart = { x: mx, y: my };
+    currentRect = { x: mx, y: my, w: 0, h: 0 };
+    confirmedRegion = null;
+    regionConfirmEl.classList.add('region-hidden');
     return;
   }
 
-  drawing = true;
-  dragStart = { x: e.clientX, y: e.clientY };
-  currentRect = { x: e.clientX, y: e.clientY, w: 0, h: 0 };
-  if (regionSelectMode) {
-    confirmedRegion = null;
-    regionConfirmEl.classList.add('region-hidden');
-  }
-});
+  // ── annotation path ──
+  if (!isInsideRecordingRegion(mx, my)) return;
 
-canvas.addEventListener('mousemove', (e) => {
-  if (!drawing || !dragStart) return;
-  let x = e.clientX;
-  let y = e.clientY;
-  if (annotationMode && recordingRegion) {
-    const c = clampToRecordingRegion(x, y);
-    x = c.x;
-    y = c.y;
+  // 1. Check handles on selected annotation first.
+  if (selectedIndex !== null) {
+    const h = hitHandle(mx, my, annotations[selectedIndex]);
+    if (h) {
+      // Resize drag: anchor = opposite corner.
+      const a = annotations[selectedIndex];
+      const opposite: Record<HandleId, HandleId> = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
+      const anchorPos = getHandlePos(a)[opposite[h]];
+      dragMode = 'resize';
+      activeHandle = h;
+      resizeAnchor = anchorPos;
+      dragStart = { x: mx, y: my };
+      dragStartAnn = { ...a };
+      return;
+    }
   }
-  currentRect = {
-    x: Math.min(dragStart.x, x),
-    y: Math.min(dragStart.y, y),
-    w: Math.abs(x - dragStart.x),
-    h: Math.abs(y - dragStart.y),
-  };
+
+  // 2. Check if click lands inside any existing annotation body.
+  const hit = hitAnnotation(mx, my);
+  if (hit !== null) {
+    // Move drag.
+    selectedIndex = hit;
+    dragMode = 'move';
+    dragStart = { x: mx, y: my };
+    dragStartAnn = { ...annotations[hit] };
+    activeHandle = null;
+    resizeAnchor = null;
+    redraw();
+    return;
+  }
+
+  // 3. No hit — start a new draw and deselect.
+  deselect();
+  dragMode = 'draw';
+  dragStart = { x: mx, y: my };
+  currentRect = { x: mx, y: my, w: 0, h: 0 };
   redraw();
 });
 
-canvas.addEventListener('mouseup', () => {
-  if (!drawing || !currentRect) return;
-  drawing = false;
-  const r = currentRect;
+canvas.addEventListener('mouseup', (e) => {
+  const mx = e.clientX;
+  const my = e.clientY;
 
   if (regionSelectMode) {
+    if (!currentRect) return;
+    const r = currentRect;
+    drawing = false;
     if (r.w > 8 && r.h > 8) {
       confirmedRegion = { ...r };
       showRegionConfirmPanel(r);
-      window.snipalot.log('region', 'draft confirmed locally', r);
     }
     currentRect = null;
     dragStart = null;
@@ -361,15 +535,43 @@ canvas.addEventListener('mouseup', () => {
     return;
   }
 
-  if (annotationMode) {
-    if (r.w > 4 && r.h > 4) {
-      annotations.push({ number: nextNumber, ...r, drawnAtMs: nowDrawMs() });
+  if (dragMode === 'draw') {
+    const r = currentRect;
+    if (r && r.w > 4 && r.h > 4) {
+      const newAnn: Annotation = { number: nextNumber, ...r, drawnAtMs: nowDrawMs() };
+      annotations.push(newAnn);
+      selectedIndex = annotations.length - 1;
       nextNumber += 1;
       pushAnnotationSync();
+    } else {
+      deselect();
     }
     currentRect = null;
     dragStart = null;
+    dragMode = 'none';
     redraw();
+    return;
+  }
+
+  if (dragMode === 'move' || dragMode === 'resize') {
+    // Commit the in-place edit already applied during mousemove.
+    dragMode = 'none';
+    dragStart = null;
+    dragStartAnn = null;
+    resizeAnchor = null;
+    activeHandle = null;
+    pushAnnotationSync();
+    updateCursor(mx, my);
+    redraw();
+    return;
+  }
+});
+
+// Clicking outside the recording region deselects.
+canvas.addEventListener('click', (e) => {
+  if (!annotationMode || regionSelectMode) return;
+  if (!isInsideRecordingRegion(e.clientX, e.clientY)) {
+    if (selectedIndex !== null) { deselect(); redraw(); }
   }
 });
 
@@ -377,11 +579,12 @@ canvas.addEventListener('mouseup', () => {
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    if (regionSelectMode) {
-      window.snipalot.cancelRegion();
-      return;
-    }
+    if (regionSelectMode) { window.snipalot.cancelRegion(); return; }
     if (annotationMode) {
+      if (selectedIndex !== null) {
+        // First Esc: deselect. Second Esc: exit annotation mode.
+        deselect(); redraw(); return;
+      }
       exitAnnotationMode();
       return;
     }
@@ -392,7 +595,7 @@ window.addEventListener('keydown', (e) => {
     const r = confirmedRegion;
     recordingRegion = { ...r };
     outlineVisible = true;
-    ownsRecording = true; // local optimistic; main confirms via owns-recording event
+    ownsRecording = true;
     window.snipalot.confirmRegion(r);
     return;
   }
@@ -406,6 +609,36 @@ window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
       e.preventDefault();
       clearAllAnnotations();
+      return;
+    }
+    // Delete / Backspace removes selected annotation.
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIndex !== null) {
+      e.preventDefault();
+      annotations.splice(selectedIndex, 1);
+      // Renumber from the removed point to keep badges sequential.
+      for (let i = selectedIndex; i < annotations.length; i++) {
+        annotations[i].number = i + 1;
+      }
+      nextNumber = annotations.length + 1;
+      deselect();
+      pushAnnotationSync();
+      redraw();
+      return;
+    }
+    // Arrow keys nudge selected annotation.
+    if (selectedIndex !== null && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      const a = annotations[selectedIndex];
+      const nudge = {
+        ArrowUp:    { x: 0, y: -step },
+        ArrowDown:  { x: 0, y: step },
+        ArrowLeft:  { x: -step, y: 0 },
+        ArrowRight: { x: step, y: 0 },
+      }[e.key]!;
+      annotations[selectedIndex] = { ...a, ...clampRectToRegion({ ...a, x: a.x + nudge.x, y: a.y + nudge.y }) };
+      pushAnnotationSync();
+      redraw();
       return;
     }
   }
@@ -425,27 +658,14 @@ regionCancelBtn.addEventListener('click', () => {
 
 // ─── IPC wiring ──────────────────────────────────────────────────────
 
-window.snipalot.onEnterRegionSelect(() => {
-  enterRegionSelectMode();
-});
-
-window.snipalot.onExitRegionSelect(() => {
-  exitRegionSelectMode();
-});
+window.snipalot.onEnterRegionSelect(() => { enterRegionSelectMode(); });
+window.snipalot.onExitRegionSelect(() => { exitRegionSelectMode(); });
 
 window.snipalot.onEnterAnnotationMode(() => {
-  // Treat this as a toggle: if annotation mode is already on, exit; else enter.
-  // That way the HUD button (and Ctrl+Shift+N) can be used to turn annotation
-  // back off without relying on Esc + overlay focus.
-  if (annotationMode) {
-    void exitAnnotationMode();
-  } else {
-    void enterAnnotationMode();
-  }
+  if (annotationMode) { void exitAnnotationMode(); } else { void enterAnnotationMode(); }
 });
 
 window.snipalot.onOwnsRecording((payload) => {
-  // Main confirms this overlay is the one hosting the recording.
   ownsRecording = true;
   recordingRegion = { ...payload.rect };
   window.snipalot.log('owns-recording', payload);
@@ -461,7 +681,6 @@ window.snipalot.onRecordingStarted((payload) => {
   } else {
     ownsRecording = true;
     outlineVisible = true;
-    // Seed main with an empty annotation list at session start.
     pushAnnotationSync();
   }
   window.snipalot.log('recording-started', payload);
@@ -469,8 +688,6 @@ window.snipalot.onRecordingStarted((payload) => {
 });
 
 window.snipalot.onRecordingStopped(() => {
-  // Do a final sync BEFORE clearing, so main gets whatever was on screen at
-  // stop time.
   if (ownsRecording) pushAnnotationSync();
   isRecording = false;
   recordingStartedAt = null;
@@ -479,23 +696,13 @@ window.snipalot.onRecordingStopped(() => {
   outlineVisible = true;
   annotations = [];
   nextNumber = 1;
-  if (annotationMode) {
-    void exitAnnotationMode();
-  } else {
-    redraw();
-  }
+  deselect();
+  if (annotationMode) { void exitAnnotationMode(); } else { redraw(); }
   window.snipalot.log('recording-stopped');
 });
 
-window.snipalot.onGlobalUndo(() => {
-  if (!annotationMode) return;
-  undoLastAnnotation();
-});
-
-window.snipalot.onGlobalClear(() => {
-  if (!annotationMode) return;
-  clearAllAnnotations();
-});
+window.snipalot.onGlobalUndo(() => { if (annotationMode) undoLastAnnotation(); });
+window.snipalot.onGlobalClear(() => { if (annotationMode) clearAllAnnotations(); });
 
 window.snipalot.onToggleOutline(() => {
   outlineVisible = !outlineVisible;

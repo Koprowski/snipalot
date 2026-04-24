@@ -76,9 +76,9 @@ btnSave.addEventListener('click', async () => {
   setStatus('Saving…');
   try {
     await api.save({ outputDir: dir, firstRun: false });
-    setStatus('Saved!', false);
     firstRunBanner.style.display = 'none';
-    setTimeout(() => setStatus(''), 2000);
+    // Close immediately — no need for user to also hit X.
+    api.close();
   } catch (err) {
     setStatus(`Error: ${(err as Error).message}`, true);
   } finally {

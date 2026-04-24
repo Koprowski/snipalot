@@ -372,6 +372,9 @@ let settingsWindow: BrowserWindow | null = null;
 
 function openSettings(isFirstRun = false): void {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
+    // Bring it above the overlays and focus.
+    settingsWindow.setAlwaysOnTop(true, 'screen-saver');
+    settingsWindow.moveTop();
     settingsWindow.focus();
     return;
   }
@@ -391,7 +394,9 @@ function openSettings(isFirstRun = false): void {
     maximizable: false,
     minimizable: false,
     skipTaskbar: false,
-    alwaysOnTop: isFirstRun, // stay on top during first-run so it's not hidden behind launcher
+    // Always on top at screen-saver level so it isn't buried under the overlay
+    // windows, which also run at that level and cover the full screen.
+    alwaysOnTop: true,
     show: false,
     icon: iconPath,
     webPreferences: {
@@ -400,9 +405,12 @@ function openSettings(isFirstRun = false): void {
       nodeIntegration: false,
     },
   });
+  win.setAlwaysOnTop(true, 'screen-saver');
   win.loadFile(path.join(__dirname, '..', 'settings', 'settings.html'));
   win.once('ready-to-show', () => {
     win.show();
+    win.moveTop();
+    win.focus();
     log('settings', 'window opened', { isFirstRun });
   });
   win.on('closed', () => {

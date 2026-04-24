@@ -8,11 +8,14 @@ import {
   session,
   Notification,
   Display,
+  dialog,
 } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { log } from './logger';
 import { runPipeline, AnnotationRecord, formatSessionStamp } from './pipeline';
+import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
+import { createTray, updateTrayMenu, destroyTray } from './tray';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
@@ -113,6 +116,7 @@ function setAppState(next: AppState, why: string): void {
 
   broadcastStateToLauncher();
   updateLauncherVisibility();
+  updateTrayMenu(next);
 }
 
 function registerAnnotationHotkey(): void {
@@ -362,6 +366,73 @@ function createHudWindow(onDisplay: Display): BrowserWindow {
 }
 
 let framePickerWindow: BrowserWindow | null = null;
+let settingsWindow: BrowserWindow | null = null;
+
+// ─── settings window ──────────────────────────────────────────────────
+
+function openSettings(isFirstRun = false): void {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus();
+    return;
+  }
+  const primary = screen.getPrimaryDisplay();
+  const w = 480;
+  const h = 520;
+  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  const win = new BrowserWindow({
+    width: w,
+    height: h,
+    x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
+    y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
+    title: 'Snipalot · Settings',
+    frame: false,
+    transparent: false,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    skipTaskbar: false,
+    alwaysOnTop: isFirstRun, // stay on top during first-run so it's not hidden behind launcher
+    show: false,
+    icon: iconPath,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'settings', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.loadFile(path.join(__dirname, '..', 'settings', 'settings.html'));
+  win.once('ready-to-show', () => {
+    win.show();
+    log('settings', 'window opened', { isFirstRun });
+  });
+  win.on('closed', () => {
+    settingsWindow = null;
+    log('settings', 'window closed');
+  });
+  settingsWindow = win;
+}
+
+ipcMain.handle('settings:get-config', () => getConfig());
+
+ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
+  saveConfig(partial);
+  log('settings', 'config saved via IPC', partial);
+});
+
+ipcMain.handle('settings:pick-folder', async () => {
+  const parent = settingsWindow && !settingsWindow.isDestroyed() ? settingsWindow : undefined;
+  const result = await dialog.showOpenDialog(parent!, {
+    title: 'Choose Output Folder',
+    defaultPath: getConfig().outputDir,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('settings:close', () => {
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+});
 
 function openFramePicker(mp4Path: string, sessionDir: string): void {
   // Skip if the mp4 didn't land (pipeline error).
@@ -643,7 +714,7 @@ ipcMain.handle('overlay:region-cancelled', (_evt, displayId: string) => {
 // where we save the final mp4 — we just need a temp webm target. We'll
 // actually hand the buffer to the pipeline in recorder:save-webm.
 ipcMain.handle('recorder:get-output-path', () => {
-  const outDir = path.join(process.cwd(), 'spike-output');
+  const outDir = getConfig().outputDir;
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   return path.join(outDir, `recording-${ts}.webm`);
@@ -666,7 +737,7 @@ ipcMain.handle(
     }
 
     const fallbackStart = Date.now() - 1000; // arbitrary; used only if snap missing
-    const outputRoot = path.join(process.cwd(), 'spike-output');
+    const outputRoot = getConfig().outputDir;
 
     // FIRE AND FORGET: pipeline runs in the background. The UI has already
     // been cleaned up by stopRecording() so the user isn't blocked by this.
@@ -736,7 +807,7 @@ ipcMain.handle(
       snapCount = 0;
 
       // Pre-create the session folder so live snaps have somewhere to land.
-      const outputRoot = path.join(process.cwd(), 'spike-output');
+      const outputRoot = getConfig().outputDir;
       if (!fs.existsSync(outputRoot)) fs.mkdirSync(outputRoot, { recursive: true });
       const stamp = formatSessionStamp(new Date(recordingStartedAt));
       liveSessionDir = path.join(outputRoot, `${stamp} feedback`);
@@ -879,6 +950,11 @@ ipcMain.handle('launcher:quit', () => {
   app.quit();
 });
 
+ipcMain.handle('launcher:settings', () => {
+  log('launcher', 'settings click');
+  openSettings();
+});
+
 ipcMain.handle('launcher:toggle-minimize', () => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
   // Show in taskbar so the user has something to click to restore, then minimize.
@@ -916,12 +992,16 @@ app.whenReady().then(() => {
     app.setAppUserModelId('app.snipalot');
   }
 
+  // Load persisted config before anything else so outputDir etc. are available.
+  const cfg = loadConfig();
 
   log('main', 'app ready', {
     isDev,
     isSpikeM1,
     cwd: process.cwd(),
     platform: process.platform,
+    outputDir: cfg.outputDir,
+    firstRun: cfg.firstRun,
   });
 
   session.defaultSession.setDisplayMediaRequestHandler((_req, callback) => {
@@ -942,6 +1022,27 @@ app.whenReady().then(() => {
   rebuildOverlays();
   recorderWindow = createRecorderWindow();
   launcherWindow = createLauncherWindow();
+
+  // System tray — persistent access point independent of the launcher.
+  createTray({
+    onStartStop: () => handleToggleHotkey(),
+    onSettings: () => openSettings(),
+    onQuit: () => app.quit(),
+    onShowLauncher: () => {
+      if (launcherWindow && !launcherWindow.isDestroyed()) {
+        if (!launcherWindow.isVisible()) launcherWindow.show();
+        launcherWindow.focus();
+        // Restore from taskbar if minimized.
+        if (launcherWindow.isMinimized()) launcherWindow.restore();
+      }
+    },
+  });
+
+  // First-run onboarding: open settings so the user can pick an output dir.
+  if (cfg.firstRun) {
+    // Slight delay so the launcher renders first, giving context.
+    setTimeout(() => openSettings(true), 800);
+  }
 
   screen.on('display-added', () => {
     log('main', 'display-added; rebuilding overlays');
@@ -996,6 +1097,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  destroyTray();
   log('main', 'will-quit');
 });
 

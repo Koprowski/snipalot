@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Snipalot · Settings</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <div class="titlebar">
+      <h1><span class="dot"></span> Snipalot Settings</h1>
+      <button class="close-btn" id="btn-close" title="Close">✕</button>
+    </div>
+
+    <div class="content">
+      <!-- first-run banner, hidden after first save -->
+      <div class="first-run-banner" id="first-run-banner" style="display:none">
+        <strong>Welcome to Snipalot!</strong> Choose where recordings should be saved, then click
+        Save to get started.
+      </div>
+
+      <!-- output folder -->
+      <div class="section">
+        <div class="section-title">Output Folder</div>
+        <div class="field">
+          <label for="input-dir">Recordings are saved here</label>
+          <div class="input-row">
+            <input type="text" id="input-dir" spellcheck="false" autocomplete="off" />
+            <button class="btn" id="btn-browse">Browse…</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- hotkeys -->
+      <div class="section">
+        <div class="section-title">Hotkeys</div>
+        <table class="hotkeys-table">
+          <tbody id="hotkeys-body">
+            <!-- filled by settings.ts -->
+          </tbody>
+        </table>
+        <p class="info">Hotkey rebinding via UI is coming in a future release. To remap now, edit
+          <code>%USERPROFILE%\.snipalot\config.json</code> and restart.</p>
+      </div>
+
+      <!-- about -->
+      <div class="section">
+        <div class="section-title">About</div>
+        <p class="info">
+          Snipalot records your screen with live numbered annotations, transcribes your voice with
+          Whisper, and builds an LLM-ready prompt on your clipboard — all locally, no cloud required.
+        </p>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span class="status" id="status"></span>
+      <button class="btn" id="btn-cancel">Cancel</button>
+      <button class="btn primary" id="btn-save">Save</button>
+    </div>
+
+    <script src="settings.js"></script>
+  </body>
+</html>

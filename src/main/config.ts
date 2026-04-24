@@ -1,0 +1,118 @@
+/**
+ * Snipalot configuration — load / save / access.
+ *
+ * Config lives at %USERPROFILE%\.snipalot\config.json.
+ * Missing keys fall back to DEFAULT_CONFIG so old installs upgrade gracefully.
+ */
+
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { log } from './logger';
+
+export interface HotkeyConfig {
+  startStop: string;
+  annotate: string;
+  clear: string;
+  undo: string;
+  pauseResume: string;
+  toggleOutline: string;
+}
+
+export interface SnipalotConfig {
+  outputDir: string;
+  retention: 'keep-all' | 'keep-latest';
+  audio: { microphone: boolean };
+  hotkeys: HotkeyConfig;
+  annotation: {
+    color: string;
+    strokeWidth: number;
+  };
+  /** true until the user completes first-run onboarding. */
+  firstRun: boolean;
+}
+
+// ─── paths ───────────────────────────────────────────────────────────
+
+export const CONFIG_DIR = path.join(os.homedir(), '.snipalot');
+export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+
+// ─── defaults ────────────────────────────────────────────────────────
+
+export const DEFAULT_CONFIG: SnipalotConfig = {
+  outputDir: path.join(os.homedir(), 'Videos', 'Snipalot'),
+  retention: 'keep-all',
+  audio: { microphone: true },
+  hotkeys: {
+    startStop: 'Ctrl+Shift+R',
+    annotate: 'Ctrl+Shift+N',
+    clear: 'Ctrl+Shift+C',
+    undo: 'Ctrl+Z',
+    pauseResume: 'Ctrl+Shift+P',
+    toggleOutline: 'Ctrl+Shift+H',
+  },
+  annotation: {
+    color: '#EF4444',
+    strokeWidth: 3,
+  },
+  firstRun: true,
+};
+
+// ─── in-memory singleton ──────────────────────────────────────────────
+
+let _config: SnipalotConfig = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
+
+/**
+ * Load config from disk. Call once at app startup.
+ * Always returns a fully-populated config (missing keys merged from defaults).
+ */
+export function loadConfig(): SnipalotConfig {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+      const parsed = JSON.parse(raw) as Partial<SnipalotConfig>;
+      _config = deepMerge(DEFAULT_CONFIG, parsed) as SnipalotConfig;
+      log('config', 'loaded', { path: CONFIG_PATH, outputDir: _config.outputDir, firstRun: _config.firstRun });
+    } else {
+      _config = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
+      log('config', 'no config file found; using defaults');
+    }
+  } catch (err) {
+    _config = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
+    log('config', 'load error; falling back to defaults', { err: (err as Error).message });
+  }
+  return _config;
+}
+
+/**
+ * Merge a partial update into the in-memory config and flush to disk.
+ */
+export function saveConfig(partial: Partial<SnipalotConfig>): void {
+  _config = deepMerge(_config, partial) as SnipalotConfig;
+  try {
+    if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(_config, null, 2), 'utf-8');
+    log('config', 'saved', { path: CONFIG_PATH });
+  } catch (err) {
+    log('config', 'save error', { err: (err as Error).message });
+  }
+}
+
+/** Return the current in-memory config (no disk read). */
+export function getConfig(): SnipalotConfig {
+  return _config;
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────
+
+function deepMerge(base: unknown, override: unknown): unknown {
+  if (override === null || override === undefined) return base;
+  if (typeof base !== 'object' || Array.isArray(base)) return override ?? base;
+  const b = base as Record<string, unknown>;
+  const o = override as Record<string, unknown>;
+  const result: Record<string, unknown> = { ...b };
+  for (const key of Object.keys(o)) {
+    result[key] = deepMerge(b[key], o[key]);
+  }
+  return result;
+}

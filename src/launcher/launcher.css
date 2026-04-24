@@ -126,7 +126,7 @@ body {
   justify-content: center;
 }
 
-.btn-quit:hover {
+.btn-icon:hover {
   background: #252932;
   color: #e5e7eb;
 }
@@ -165,6 +165,7 @@ body.minimized .app-title,
 body.minimized .state-label,
 body.minimized .drag-grip,
 body.minimized .hint,
+body.minimized #btn-settings,
 body.minimized #btn-quit,
 body.minimized #btn-label {
   display: none;

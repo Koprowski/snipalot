@@ -9,6 +9,7 @@ import {
   Notification,
   Display,
   dialog,
+  Menu,
 } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -287,7 +288,7 @@ function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
   const w = 340;
   // Native title bar adds ~30px on Windows; bump content height accordingly.
-  const h = 150;
+  const h = 160;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;
@@ -1053,6 +1054,10 @@ app.whenReady().then(() => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('app.snipalot');
   }
+
+  // Strip Electron's default File/Edit/View/Window/Help menu. We don't use it
+  // and it eats ~30px of vertical space off every native-chrome window.
+  Menu.setApplicationMenu(null);
 
   // Load persisted config before anything else so outputDir etc. are available.
   const cfg = loadConfig();

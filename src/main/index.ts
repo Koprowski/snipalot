@@ -285,8 +285,9 @@ function createRecorderWindow(): BrowserWindow {
 
 function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
-  const w = 320;
-  const h = 120;
+  const w = 340;
+  // Native title bar adds ~30px on Windows; bump content height accordingly.
+  const h = 150;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;
@@ -298,18 +299,19 @@ function createLauncherWindow(): BrowserWindow {
     height: h,
     x,
     y,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
+    // Native window chrome: OS-drawn title bar + minimize/close in upper-right.
+    // Previous build was a frameless always-on-top floater; users asked for a
+    // normal windowed experience that dismisses naturally when another app is
+    // brought forward.
+    frame: true,
+    transparent: false,
+    alwaysOnTop: false,
     resizable: false,
-    // Always show in taskbar so the Snipalot icon is visible even when the
-    // floating launcher is on-screen. Gives users a familiar way to locate the app.
     skipTaskbar: false,
     focusable: true,
     minimizable: true,
     maximizable: false,
     show: false,
-    hasShadow: false,
     icon: iconPath,
     title: 'Snipalot',
     webPreferences: {
@@ -318,7 +320,6 @@ function createLauncherWindow(): BrowserWindow {
       nodeIntegration: false,
     },
   });
-  win.setAlwaysOnTop(true, 'screen-saver');
   // Launcher is hidden during Snipalot's own recording, so we don't need
   // content protection on it. Keeping it off means Print Screen / OS-level
   // screen capture still works when debugging the launcher's appearance.
@@ -326,12 +327,6 @@ function createLauncherWindow(): BrowserWindow {
   win.once('ready-to-show', () => {
     win.show();
     broadcastStateToLauncher();
-  });
-  win.on('restore', () => {
-    // Re-assert screen-saver alwaysOnTop level after restore (Windows sometimes
-    // demotes it to normal on unminimize).
-    win.setAlwaysOnTop(true, 'screen-saver');
-    log('launcher', 'restored from taskbar');
   });
   win.on('closed', () => {
     launcherWindow = null;

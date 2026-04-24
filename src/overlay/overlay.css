@@ -134,3 +134,62 @@ body.region-select-mode #canvas {
 .region-hidden {
   display: none !important;
 }
+
+/* ─── shape picker ───────────────────────────────────────────── */
+
+.shape-picker {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: rgba(15, 17, 21, 0.95);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+.shape-btn {
+  background: #1a1d24;
+  color: #e5e7eb;
+  border: 1px solid #2b2f38;
+  border-radius: 4px;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  min-width: 34px;
+  line-height: 1;
+}
+
+.shape-btn:hover {
+  background: #252932;
+}
+
+.shape-btn.active {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+}
+
+/* ─── text annotation input ──────────────────────────────────── */
+
+.text-input {
+  position: fixed;
+  background: rgba(255, 255, 255, 0.95);
+  color: #111;
+  border: 2px solid #ef4444;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  outline: none;
+  min-width: 160px;
+  pointer-events: auto;
+  z-index: 11;
+}

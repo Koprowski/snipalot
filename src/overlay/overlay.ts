@@ -7,25 +7,78 @@
  *
  * Modes:
  *   - region-select: dim this display, let user drag a rect locally
- *   - annotation: draw numbered rectangles, STRICTLY inside recordingRegion;
- *     click an existing rect to move it, drag a corner handle to resize it
+ *   - annotation: draw numbered shapes (rect, circle, oval, line, arrow, text),
+ *     STRICTLY inside recordingRegion; click an existing shape to move it, drag
+ *     a handle to resize it
  *   - region outline: dashed box just OUTSIDE the recording region (drawn
  *     only by the overlay that owns the active recording)
+ *
+ * Snapshot chapters: main sends overlay:snapshot-reset on 📸; we flush the
+ * current annotation list then zero it out and restart numbering at 1.
  *
  * Lifecycle: when recording stops, annotation mode exits + annotations clear.
  */
 
-interface Annotation {
+// ─── schema v2: discriminated shape union ────────────────────────────
+
+type FeedbackType = 'bug' | 'improvement' | 'question' | 'praise';
+type ShapeKind = 'rect' | 'circle' | 'oval' | 'line' | 'arrow' | 'text';
+
+interface BoundedAnnotation {
+  id: string;
+  shape: 'rect' | 'circle' | 'oval';
   number: number;
   x: number;
   y: number;
   w: number;
   h: number;
-  /** ms since recording started. 0 if drawn before recording began. */
+  color: string;
+  strokeWidth: number;
   drawnAtMs: number;
+  type?: FeedbackType;
+  note?: string;
 }
 
+interface LineAnnotation {
+  id: string;
+  shape: 'line' | 'arrow';
+  number: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  color: string;
+  strokeWidth: number;
+  drawnAtMs: number;
+  type?: FeedbackType;
+  note?: string;
+}
+
+interface TextAnnotation {
+  id: string;
+  shape: 'text';
+  number: number;
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  fontSize: number;
+  strokeWidth: number;
+  drawnAtMs: number;
+  type?: FeedbackType;
+  note?: string;
+}
+
+type Annotation = BoundedAnnotation | LineAnnotation | TextAnnotation;
+
 interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface Bbox {
   x: number;
   y: number;
   w: number;
@@ -40,6 +93,8 @@ const regionConfirmEl = document.getElementById('region-confirm')!;
 const regionDimsEl = document.getElementById('region-dims')!;
 const regionConfirmBtn = document.getElementById('region-confirm-btn')!;
 const regionCancelBtn = document.getElementById('region-cancel-btn')!;
+const shapePickerEl = document.getElementById('shape-picker')!;
+const textInputEl = document.getElementById('text-input') as HTMLInputElement;
 
 const DPR = window.devicePixelRatio || 1;
 const myDisplayId = window.snipalot.displayId;
@@ -53,30 +108,29 @@ window.snipalot.log('boot', {
 
 let annotations: Annotation[] = [];
 let nextNumber = 1;
-let drawing = false;
 let recordingStartedAt: number | null = null;
+let currentShape: ShapeKind = 'rect';
 
 function nowDrawMs(): number {
   return recordingStartedAt ? Date.now() - recordingStartedAt : 0;
 }
 
+function genId(): string {
+  return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function pushAnnotationSync(): void {
   if (!ownsRecording) return;
+  // Send a plain-JSON copy so IPC doesn't choke on class instances or proxies.
   void window.snipalot.syncAnnotations({
-    annotations: annotations.map((a) => ({
-      number: a.number,
-      x: a.x,
-      y: a.y,
-      w: a.w,
-      h: a.h,
-      drawnAtMs: a.drawnAtMs,
-    })),
+    annotations: annotations.map((a) => JSON.parse(JSON.stringify(a))),
     recordingRegion,
   });
 }
 
 let dragStart: { x: number; y: number } | null = null;
 let currentRect: Rect | null = null;
+let currentLine: { x1: number; y1: number; x2: number; y2: number } | null = null;
 let annotationMode = false;
 let regionSelectMode = false;
 let confirmedRegion: Rect | null = null;
@@ -88,42 +142,126 @@ let overlayInteractive = false;
 
 // ─── selection / move / resize state ────────────────────────────────
 
-type HandleId = 'tl' | 'tr' | 'bl' | 'br';
+type HandleId = 'tl' | 'tr' | 'bl' | 'br' | 'p1' | 'p2';
 type DragMode = 'none' | 'draw' | 'move' | 'resize';
 
 let selectedIndex: number | null = null;
 let dragMode: DragMode = 'none';
 let activeHandle: HandleId | null = null;
-// The annotation snapshot at drag start (for applying deltas cleanly).
 let dragStartAnn: Annotation | null = null;
-// The anchor corner (opposite to the dragged handle) used for resize.
 let resizeAnchor: { x: number; y: number } | null = null;
 
-const HANDLE_HIT = 8; // px radius for corner handle hit test
+const HANDLE_HIT = 8; // px radius for handle hit test
 
-function getHandlePos(a: Annotation): Record<HandleId, { x: number; y: number }> {
-  return {
-    tl: { x: a.x,       y: a.y },
-    tr: { x: a.x + a.w, y: a.y },
-    bl: { x: a.x,       y: a.y + a.h },
-    br: { x: a.x + a.w, y: a.y + a.h },
-  };
+const STYLE = {
+  annotationColor: '#EF4444',
+  badgeColor: '#FFFFFF',
+  strokeWidth: 3,
+  fontSize: 16,
+  textFontSize: 18,
+  badgeRadius: 14,
+  dimColor: 'rgba(0, 0, 0, 0.5)',
+  regionStroke: '#EF4444',
+  regionStrokeWidth: 2,
+  outlineOutsideOffset: 4,
+  handleSize: 8, // half-width of corner handle square
+  handleColor: '#FFFFFF',
+  handleBorderColor: '#EF4444',
+  arrowHeadLen: 14,
+  arrowHeadWidth: 10,
+};
+
+// ─── shape geometry helpers ─────────────────────────────────────────
+
+/** Compute the bounding box for any annotation (used for badge placement + clamp). */
+function bboxOf(a: Annotation): Bbox {
+  if (a.shape === 'line' || a.shape === 'arrow') {
+    const minX = Math.min(a.x1, a.x2);
+    const minY = Math.min(a.y1, a.y2);
+    return { x: minX, y: minY, w: Math.abs(a.x2 - a.x1), h: Math.abs(a.y2 - a.y1) };
+  }
+  if (a.shape === 'text') {
+    // Approximate: measure the text width.
+    ctx.save();
+    ctx.font = `bold ${a.fontSize}px "Segoe UI", system-ui, sans-serif`;
+    const w = Math.max(40, ctx.measureText(a.text || ' ').width + 12);
+    ctx.restore();
+    const h = a.fontSize + 12;
+    return { x: a.x, y: a.y, w, h };
+  }
+  // Remaining: BoundedAnnotation (rect/circle/oval).
+  const b = a as BoundedAnnotation;
+  return { x: b.x, y: b.y, w: b.w, h: b.h };
 }
 
-/** Returns the HandleId if (mx, my) is within HANDLE_HIT of any corner of a. */
+/** Top-left badge position for an annotation. */
+function badgePosOf(a: Annotation): { x: number; y: number } {
+  const bb = bboxOf(a);
+  return { x: bb.x, y: bb.y };
+}
+
+/** Get handle positions for a selected annotation. */
+function getHandlePositions(a: Annotation): Array<{ id: HandleId; x: number; y: number }> {
+  if (a.shape === 'line' || a.shape === 'arrow') {
+    return [
+      { id: 'p1', x: a.x1, y: a.y1 },
+      { id: 'p2', x: a.x2, y: a.y2 },
+    ];
+  }
+  if (a.shape === 'text') {
+    // No resize handles on text — move only (body drag).
+    return [];
+  }
+  const b = a as BoundedAnnotation;
+  return [
+    { id: 'tl', x: b.x, y: b.y },
+    { id: 'tr', x: b.x + b.w, y: b.y },
+    { id: 'bl', x: b.x, y: b.y + b.h },
+    { id: 'br', x: b.x + b.w, y: b.y + b.h },
+  ];
+}
+
+/** Returns handle id if (mx,my) is within HANDLE_HIT of any handle of a, else null. */
 function hitHandle(mx: number, my: number, a: Annotation): HandleId | null {
-  const handles = getHandlePos(a);
-  for (const [id, pos] of Object.entries(handles) as [HandleId, { x: number; y: number }][]) {
-    if (Math.abs(mx - pos.x) <= HANDLE_HIT && Math.abs(my - pos.y) <= HANDLE_HIT) return id;
+  for (const h of getHandlePositions(a)) {
+    if (Math.abs(mx - h.x) <= HANDLE_HIT && Math.abs(my - h.y) <= HANDLE_HIT) return h.id;
   }
   return null;
 }
 
-/** Returns annotation index (topmost first) if (mx, my) is inside its rect. */
+/** Distance from point (px,py) to segment (x1,y1)-(x2,y2). */
+function distPointToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const qx = x1 + t * dx;
+  const qy = y1 + t * dy;
+  return Math.hypot(px - qx, py - qy);
+}
+
+/** Hit test: returns annotation index (topmost first) containing (mx,my), else null. */
 function hitAnnotation(mx: number, my: number): number | null {
   for (let i = annotations.length - 1; i >= 0; i--) {
     const a = annotations[i];
-    if (mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h) return i;
+    if (a.shape === 'rect') {
+      if (mx >= a.x && mx <= a.x + a.w && my >= a.y && my <= a.y + a.h) return i;
+    } else if (a.shape === 'circle' || a.shape === 'oval') {
+      // Ellipse equation: ((mx-cx)/rx)^2 + ((my-cy)/ry)^2 <= 1
+      const cx = a.x + a.w / 2;
+      const cy = a.y + a.h / 2;
+      const rx = Math.max(1, a.w / 2);
+      const ry = Math.max(1, a.h / 2);
+      const v = ((mx - cx) / rx) ** 2 + ((my - cy) / ry) ** 2;
+      // Allow a small inner miss so clicks on the outline itself count.
+      if (v <= 1.05) return i;
+    } else if (a.shape === 'line' || a.shape === 'arrow') {
+      if (distPointToSegment(mx, my, a.x1, a.y1, a.x2, a.y2) <= Math.max(6, a.strokeWidth + 2)) return i;
+    } else if (a.shape === 'text') {
+      const bb = bboxOf(a);
+      if (mx >= bb.x && mx <= bb.x + bb.w && my >= bb.y && my <= bb.y + bb.h) return i;
+    }
   }
   return null;
 }
@@ -135,21 +273,6 @@ function deselect(): void {
   dragStartAnn = null;
   resizeAnchor = null;
 }
-
-const STYLE = {
-  annotationColor: '#EF4444',
-  badgeColor: '#FFFFFF',
-  strokeWidth: 3,
-  fontSize: 16,
-  badgeRadius: 14,
-  dimColor: 'rgba(0, 0, 0, 0.5)',
-  regionStroke: '#EF4444',
-  regionStrokeWidth: 2,
-  outlineOutsideOffset: 4,
-  handleSize: 8,    // half-width of corner handle square
-  handleColor: '#FFFFFF',
-  handleBorderColor: '#EF4444',
-};
 
 // ─── canvas setup & render ───────────────────────────────────────────
 
@@ -193,48 +316,144 @@ function redraw(): void {
     drawAnnotation(annotations[i], i === selectedIndex);
   }
 
-  // Draw the live preview rect (new draw or active drag of existing).
-  if (dragMode === 'draw' && currentRect && !regionSelectMode) {
-    drawAnnotation({
-      number: nextNumber,
-      x: currentRect.x,
-      y: currentRect.y,
-      w: currentRect.w,
-      h: currentRect.h,
-      drawnAtMs: 0,
-    }, false);
+  // Live-preview draw (new shape being created).
+  if (dragMode === 'draw' && !regionSelectMode) {
+    if ((currentShape === 'rect' || currentShape === 'circle' || currentShape === 'oval') && currentRect) {
+      drawAnnotation(
+        {
+          id: 'preview',
+          shape: currentShape,
+          number: nextNumber,
+          x: currentRect.x,
+          y: currentRect.y,
+          w: currentRect.w,
+          h: currentRect.h,
+          color: STYLE.annotationColor,
+          strokeWidth: STYLE.strokeWidth,
+          drawnAtMs: 0,
+        } as BoundedAnnotation,
+        false
+      );
+    } else if ((currentShape === 'line' || currentShape === 'arrow') && currentLine) {
+      drawAnnotation(
+        {
+          id: 'preview',
+          shape: currentShape,
+          number: nextNumber,
+          x1: currentLine.x1,
+          y1: currentLine.y1,
+          x2: currentLine.x2,
+          y2: currentLine.y2,
+          color: STYLE.annotationColor,
+          strokeWidth: STYLE.strokeWidth,
+          drawnAtMs: 0,
+        } as LineAnnotation,
+        false
+      );
+    }
   }
 }
 
 function drawAnnotation(a: Annotation, selected = false): void {
-  ctx.strokeStyle = STYLE.annotationColor;
-  ctx.lineWidth = STYLE.strokeWidth;
-  ctx.strokeRect(a.x, a.y, a.w, a.h);
+  ctx.save();
+  ctx.strokeStyle = a.color || STYLE.annotationColor;
+  ctx.fillStyle = a.color || STYLE.annotationColor;
+  ctx.lineWidth = a.strokeWidth || STYLE.strokeWidth;
 
-  ctx.fillStyle = STYLE.annotationColor;
+  if (a.shape === 'rect') {
+    ctx.strokeRect(a.x, a.y, a.w, a.h);
+  } else if (a.shape === 'circle' || a.shape === 'oval') {
+    const cx = a.x + a.w / 2;
+    const cy = a.y + a.h / 2;
+    const rx = Math.max(1, a.w / 2);
+    const ry = Math.max(1, a.h / 2);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (a.shape === 'line') {
+    ctx.beginPath();
+    ctx.moveTo(a.x1, a.y1);
+    ctx.lineTo(a.x2, a.y2);
+    ctx.stroke();
+  } else if (a.shape === 'arrow') {
+    drawArrow(a);
+  } else if (a.shape === 'text') {
+    drawText(a);
+  }
+
+  // Badge at the annotation's top-left.
+  const badge = badgePosOf(a);
+  ctx.fillStyle = a.color || STYLE.annotationColor;
   ctx.beginPath();
-  ctx.arc(a.x, a.y, STYLE.badgeRadius, 0, Math.PI * 2);
+  ctx.arc(badge.x, badge.y, STYLE.badgeRadius, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = STYLE.badgeColor;
   ctx.font = `bold ${STYLE.fontSize}px "Segoe UI", system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(String(a.number), a.x, a.y + 1);
+  ctx.fillText(String(a.number), badge.x, badge.y + 1);
 
-  // Corner handles when selected.
+  // Handles if selected.
   if (selected) {
     const hs = STYLE.handleSize;
-    const handles = getHandlePos(a);
-    for (const pos of Object.values(handles)) {
-      // White fill, red border.
+    for (const h of getHandlePositions(a)) {
       ctx.fillStyle = STYLE.handleColor;
-      ctx.fillRect(pos.x - hs, pos.y - hs, hs * 2, hs * 2);
+      ctx.fillRect(h.x - hs, h.y - hs, hs * 2, hs * 2);
       ctx.strokeStyle = STYLE.handleBorderColor;
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(pos.x - hs, pos.y - hs, hs * 2, hs * 2);
+      ctx.strokeRect(h.x - hs, h.y - hs, hs * 2, hs * 2);
     }
   }
+
+  ctx.restore();
+}
+
+function drawArrow(a: LineAnnotation): void {
+  ctx.beginPath();
+  ctx.moveTo(a.x1, a.y1);
+  ctx.lineTo(a.x2, a.y2);
+  ctx.stroke();
+
+  // Arrow head at (x2,y2).
+  const dx = a.x2 - a.x1;
+  const dy = a.y2 - a.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const headLen = STYLE.arrowHeadLen;
+  const headW = STYLE.arrowHeadWidth;
+  const baseX = a.x2 - ux * headLen;
+  const baseY = a.y2 - uy * headLen;
+  const leftX = baseX + -uy * (headW / 2);
+  const leftY = baseY + ux * (headW / 2);
+  const rightX = baseX + uy * (headW / 2);
+  const rightY = baseY + -ux * (headW / 2);
+  ctx.beginPath();
+  ctx.moveTo(a.x2, a.y2);
+  ctx.lineTo(leftX, leftY);
+  ctx.lineTo(rightX, rightY);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawText(a: TextAnnotation): void {
+  ctx.save();
+  ctx.font = `bold ${a.fontSize}px "Segoe UI", system-ui, sans-serif`;
+  const metrics = ctx.measureText(a.text || ' ');
+  const w = Math.max(40, metrics.width + 12);
+  const h = a.fontSize + 12;
+  // White background box with red border so text reads against any backdrop.
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.strokeStyle = a.color;
+  ctx.lineWidth = a.strokeWidth;
+  ctx.fillRect(a.x, a.y, w, h);
+  ctx.strokeRect(a.x, a.y, w, h);
+  ctx.fillStyle = a.color;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(a.text || '', a.x + 6, a.y + h / 2);
+  ctx.restore();
 }
 
 // ─── containment helpers ─────────────────────────────────────────────
@@ -254,12 +473,32 @@ function clampToRecordingRegion(x: number, y: number): { x: number; y: number } 
   };
 }
 
-function clampRectToRegion(r: Rect): Rect {
-  if (!recordingRegion) return r;
+function clampBboxToRegion(bb: Bbox): Bbox {
+  if (!recordingRegion) return bb;
   const rr = recordingRegion;
-  const x = Math.max(rr.x, Math.min(rr.x + rr.w - r.w, r.x));
-  const y = Math.max(rr.y, Math.min(rr.y + rr.h - r.h, r.y));
-  return { x, y, w: r.w, h: r.h };
+  const x = Math.max(rr.x, Math.min(rr.x + rr.w - bb.w, bb.x));
+  const y = Math.max(rr.y, Math.min(rr.y + rr.h - bb.h, bb.y));
+  return { x, y, w: bb.w, h: bb.h };
+}
+
+/** Translate any annotation by (dx, dy), clamped to recording region. */
+function translateAnnotation(a: Annotation, dx: number, dy: number): Annotation {
+  if (a.shape === 'line' || a.shape === 'arrow') {
+    // Clamp based on bbox so both endpoints stay in-region.
+    const bb = bboxOf(a);
+    const clamped = clampBboxToRegion({ x: bb.x + dx, y: bb.y + dy, w: bb.w, h: bb.h });
+    const actualDx = clamped.x - bb.x;
+    const actualDy = clamped.y - bb.y;
+    return { ...a, x1: a.x1 + actualDx, y1: a.y1 + actualDy, x2: a.x2 + actualDx, y2: a.y2 + actualDy };
+  }
+  if (a.shape === 'text') {
+    const bb = bboxOf(a);
+    const c = clampBboxToRegion({ x: bb.x + dx, y: bb.y + dy, w: bb.w, h: bb.h });
+    return { ...a, x: c.x, y: c.y };
+  }
+  const b = a as BoundedAnnotation;
+  const c = clampBboxToRegion({ x: b.x + dx, y: b.y + dy, w: b.w, h: b.h });
+  return { ...b, x: c.x, y: c.y };
 }
 
 // ─── interactivity helper ─────────────────────────────────────────────
@@ -278,7 +517,6 @@ async function enterRegionSelectMode(): Promise<void> {
   regionSelectMode = true;
   confirmedRegion = null;
   currentRect = null;
-  drawing = false;
   dragStart = null;
   document.body.classList.add('region-select-mode');
   regionStatusEl.classList.remove('region-hidden');
@@ -326,6 +564,8 @@ async function enterAnnotationMode(): Promise<void> {
   annotationMode = true;
   document.body.classList.add('annotation-mode');
   overlayStatusEl.classList.remove('status-hidden');
+  shapePickerEl.classList.remove('region-hidden');
+  positionShapePicker();
   await setInteractiveIfChanged(false);
   await window.snipalot.focusWindow();
   window.snipalot.log('mode', 'enter annotation');
@@ -334,13 +574,15 @@ async function enterAnnotationMode(): Promise<void> {
 async function exitAnnotationMode(): Promise<void> {
   if (!annotationMode) return;
   annotationMode = false;
-  drawing = false;
   dragMode = 'none';
   dragStart = null;
   currentRect = null;
+  currentLine = null;
   deselect();
+  hideTextInput();
   document.body.classList.remove('annotation-mode');
   overlayStatusEl.classList.add('status-hidden');
+  shapePickerEl.classList.add('region-hidden');
   await setInteractiveIfChanged(false);
   window.snipalot.log('mode', 'exit annotation');
   redraw();
@@ -350,15 +592,30 @@ async function exitAnnotationMode(): Promise<void> {
 function refreshAnnotationInteractivity(x: number, y: number): void {
   if (!annotationMode) return;
   if (dragMode !== 'none') return; // never flip during an active drag
-  const inside = isInsideRecordingRegion(x, y);
+  // Shape-picker area or text-input is also interactive even when outside region.
+  const overPicker = isPointOverShapePicker(x, y);
+  const overTextInput = textInputEl.style.display !== 'none'
+    && isPointOverTextInput(x, y);
+  const inside = isInsideRecordingRegion(x, y) || overPicker || overTextInput;
   void setInteractiveIfChanged(inside);
+}
+
+function isPointOverShapePicker(x: number, y: number): boolean {
+  if (shapePickerEl.classList.contains('region-hidden')) return false;
+  const r = shapePickerEl.getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+function isPointOverTextInput(x: number, y: number): boolean {
+  const r = textInputEl.getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 }
 
 window.addEventListener('mousemove', (e) => {
   refreshAnnotationInteractivity(e.clientX, e.clientY);
 });
 
-// ─── undo / clear ────────────────────────────────────────────────────
+// ─── undo / clear / reset ────────────────────────────────────────────
 
 function undoLastAnnotation(): void {
   if (selectedIndex !== null) deselect();
@@ -375,29 +632,43 @@ function clearAllAnnotations(): void {
   redraw();
 }
 
+/** Flush current annotations to main as a chapter, then reset for next chapter. */
+function snapshotReset(): Annotation[] {
+  const chapter = annotations.map((a) => JSON.parse(JSON.stringify(a))) as Annotation[];
+  annotations = [];
+  nextNumber = 1;
+  deselect();
+  hideTextInput();
+  pushAnnotationSync();
+  redraw();
+  return chapter;
+}
+
 // ─── cursor style ─────────────────────────────────────────────────────
 
-/** Update canvas cursor to give move/resize affordance. */
 function updateCursor(mx: number, my: number): void {
   if (!annotationMode || regionSelectMode) { canvas.style.cursor = ''; return; }
   if (dragMode === 'move') { canvas.style.cursor = 'grabbing'; return; }
   if (dragMode === 'resize') {
-    const cursors: Record<HandleId, string> = { tl: 'nw-resize', tr: 'ne-resize', bl: 'sw-resize', br: 'se-resize' };
-    canvas.style.cursor = activeHandle ? cursors[activeHandle] : 'se-resize';
+    canvas.style.cursor = resizeCursorFor(activeHandle);
     return;
   }
-  // Hover feedback.
   if (selectedIndex !== null) {
     const h = hitHandle(mx, my, annotations[selectedIndex]);
-    if (h) {
-      const cursors: Record<HandleId, string> = { tl: 'nw-resize', tr: 'ne-resize', bl: 'sw-resize', br: 'se-resize' };
-      canvas.style.cursor = cursors[h];
-      return;
-    }
+    if (h) { canvas.style.cursor = resizeCursorFor(h); return; }
   }
   const idx = hitAnnotation(mx, my);
   if (idx !== null) { canvas.style.cursor = 'grab'; return; }
   canvas.style.cursor = 'crosshair';
+}
+
+function resizeCursorFor(h: HandleId | null): string {
+  switch (h) {
+    case 'tl': case 'br': return 'nwse-resize';
+    case 'tr': case 'bl': return 'nesw-resize';
+    case 'p1': case 'p2': return 'move';
+    default: return 'se-resize';
+  }
 }
 
 // ─── pointer drawing ─────────────────────────────────────────────────
@@ -409,16 +680,21 @@ canvas.addEventListener('mousemove', (e) => {
   updateCursor(mx, my);
 
   if (dragMode === 'draw') {
-    let x = mx;
-    let y = my;
-    if (recordingRegion) { const c = clampToRecordingRegion(x, y); x = c.x; y = c.y; }
-    if (dragStart) {
-      currentRect = {
-        x: Math.min(dragStart.x, x),
-        y: Math.min(dragStart.y, y),
-        w: Math.abs(x - dragStart.x),
-        h: Math.abs(y - dragStart.y),
-      };
+    if (currentShape === 'rect' || currentShape === 'circle' || currentShape === 'oval') {
+      let x = mx, y = my;
+      if (recordingRegion) { const c = clampToRecordingRegion(x, y); x = c.x; y = c.y; }
+      if (dragStart) {
+        currentRect = {
+          x: Math.min(dragStart.x, x),
+          y: Math.min(dragStart.y, y),
+          w: Math.abs(x - dragStart.x),
+          h: Math.abs(y - dragStart.y),
+        };
+      }
+    } else if (currentShape === 'line' || currentShape === 'arrow') {
+      let x = mx, y = my;
+      if (recordingRegion) { const c = clampToRecordingRegion(x, y); x = c.x; y = c.y; }
+      if (dragStart) currentLine = { x1: dragStart.x, y1: dragStart.y, x2: x, y2: y };
     }
     redraw();
     return;
@@ -427,32 +703,33 @@ canvas.addEventListener('mousemove', (e) => {
   if (dragMode === 'move' && dragStartAnn && dragStart) {
     const dx = mx - dragStart.x;
     const dy = my - dragStart.y;
-    const moved = clampRectToRegion({
-      x: dragStartAnn.x + dx,
-      y: dragStartAnn.y + dy,
-      w: dragStartAnn.w,
-      h: dragStartAnn.h,
-    });
     if (selectedIndex !== null) {
-      annotations[selectedIndex] = { ...annotations[selectedIndex], ...moved };
+      annotations[selectedIndex] = translateAnnotation(dragStartAnn, dx, dy);
     }
     redraw();
     return;
   }
 
-  if (dragMode === 'resize' && resizeAnchor && dragStart) {
-    // Clamp mouse to recording region.
+  if (dragMode === 'resize' && dragStart && selectedIndex !== null && dragStartAnn) {
     const c = recordingRegion ? clampToRecordingRegion(mx, my) : { x: mx, y: my };
-    const ax = resizeAnchor.x;
-    const ay = resizeAnchor.y;
-    const newRect: Rect = {
-      x: Math.min(ax, c.x),
-      y: Math.min(ay, c.y),
-      w: Math.max(4, Math.abs(c.x - ax)),
-      h: Math.max(4, Math.abs(c.y - ay)),
-    };
-    if (selectedIndex !== null) {
-      annotations[selectedIndex] = { ...annotations[selectedIndex], ...newRect };
+    const a = dragStartAnn;
+    if (a.shape === 'rect' || a.shape === 'circle' || a.shape === 'oval') {
+      if (!resizeAnchor) return;
+      const ax = resizeAnchor.x, ay = resizeAnchor.y;
+      const newBb: Bbox = {
+        x: Math.min(ax, c.x),
+        y: Math.min(ay, c.y),
+        w: Math.max(4, Math.abs(c.x - ax)),
+        h: Math.max(4, Math.abs(c.y - ay)),
+      };
+      annotations[selectedIndex] = { ...a, ...newBb };
+    } else if (a.shape === 'line' || a.shape === 'arrow') {
+      // Drag one endpoint, keep the other pinned.
+      if (activeHandle === 'p1') {
+        annotations[selectedIndex] = { ...a, x1: c.x, y1: c.y };
+      } else if (activeHandle === 'p2') {
+        annotations[selectedIndex] = { ...a, x2: c.x, y2: c.y };
+      }
     }
     redraw();
     return;
@@ -467,53 +744,67 @@ canvas.addEventListener('mousedown', (e) => {
 
   // ── region-select path ──
   if (regionSelectMode) {
-    drawing = true;
     dragStart = { x: mx, y: my };
     currentRect = { x: mx, y: my, w: 0, h: 0 };
     confirmedRegion = null;
     regionConfirmEl.classList.add('region-hidden');
+    dragMode = 'draw';
     return;
   }
 
   // ── annotation path ──
   if (!isInsideRecordingRegion(mx, my)) return;
 
-  // 1. Check handles on selected annotation first.
+  // 1. Check handle on selected annotation first.
   if (selectedIndex !== null) {
     const h = hitHandle(mx, my, annotations[selectedIndex]);
     if (h) {
-      // Resize drag: anchor = opposite corner.
       const a = annotations[selectedIndex];
-      const opposite: Record<HandleId, HandleId> = { tl: 'br', tr: 'bl', bl: 'tr', br: 'tl' };
-      const anchorPos = getHandlePos(a)[opposite[h]];
       dragMode = 'resize';
       activeHandle = h;
-      resizeAnchor = anchorPos;
       dragStart = { x: mx, y: my };
-      dragStartAnn = { ...a };
+      dragStartAnn = JSON.parse(JSON.stringify(a));
+      if (a.shape === 'rect' || a.shape === 'circle' || a.shape === 'oval') {
+        const opposite: Record<string, { x: number; y: number }> = {
+          tl: { x: a.x + a.w, y: a.y + a.h },
+          tr: { x: a.x, y: a.y + a.h },
+          bl: { x: a.x + a.w, y: a.y },
+          br: { x: a.x, y: a.y },
+        };
+        resizeAnchor = opposite[h];
+      } else {
+        resizeAnchor = null;
+      }
       return;
     }
   }
 
-  // 2. Check if click lands inside any existing annotation body.
+  // 2. Click inside an existing annotation body → start move drag.
   const hit = hitAnnotation(mx, my);
   if (hit !== null) {
-    // Move drag.
     selectedIndex = hit;
     dragMode = 'move';
     dragStart = { x: mx, y: my };
-    dragStartAnn = { ...annotations[hit] };
+    dragStartAnn = JSON.parse(JSON.stringify(annotations[hit]));
     activeHandle = null;
     resizeAnchor = null;
     redraw();
     return;
   }
 
-  // 3. No hit — start a new draw and deselect.
+  // 3. Start a new draw (or text placement).
   deselect();
+  if (currentShape === 'text') {
+    startTextInput(mx, my);
+    return;
+  }
   dragMode = 'draw';
   dragStart = { x: mx, y: my };
-  currentRect = { x: mx, y: my, w: 0, h: 0 };
+  if (currentShape === 'rect' || currentShape === 'circle' || currentShape === 'oval') {
+    currentRect = { x: mx, y: my, w: 0, h: 0 };
+  } else {
+    currentLine = { x1: mx, y1: my, x2: mx, y2: my };
+  }
   redraw();
 });
 
@@ -524,27 +815,9 @@ canvas.addEventListener('mouseup', (e) => {
   if (regionSelectMode) {
     if (!currentRect) return;
     const r = currentRect;
-    drawing = false;
     if (r.w > 8 && r.h > 8) {
       confirmedRegion = { ...r };
       showRegionConfirmPanel(r);
-    }
-    currentRect = null;
-    dragStart = null;
-    redraw();
-    return;
-  }
-
-  if (dragMode === 'draw') {
-    const r = currentRect;
-    if (r && r.w > 4 && r.h > 4) {
-      const newAnn: Annotation = { number: nextNumber, ...r, drawnAtMs: nowDrawMs() };
-      annotations.push(newAnn);
-      selectedIndex = annotations.length - 1;
-      nextNumber += 1;
-      pushAnnotationSync();
-    } else {
-      deselect();
     }
     currentRect = null;
     dragStart = null;
@@ -553,8 +826,55 @@ canvas.addEventListener('mouseup', (e) => {
     return;
   }
 
+  if (dragMode === 'draw') {
+    if ((currentShape === 'rect' || currentShape === 'circle' || currentShape === 'oval') && currentRect) {
+      const r = currentRect;
+      if (r.w > 4 && r.h > 4) {
+        const newAnn: BoundedAnnotation = {
+          id: genId(),
+          shape: currentShape,
+          number: nextNumber,
+          x: r.x, y: r.y, w: r.w, h: r.h,
+          color: STYLE.annotationColor,
+          strokeWidth: STYLE.strokeWidth,
+          drawnAtMs: nowDrawMs(),
+        };
+        annotations.push(newAnn);
+        selectedIndex = annotations.length - 1;
+        nextNumber += 1;
+        pushAnnotationSync();
+      } else {
+        deselect();
+      }
+    } else if ((currentShape === 'line' || currentShape === 'arrow') && currentLine) {
+      const l = currentLine;
+      if (Math.hypot(l.x2 - l.x1, l.y2 - l.y1) > 6) {
+        const newAnn: LineAnnotation = {
+          id: genId(),
+          shape: currentShape,
+          number: nextNumber,
+          x1: l.x1, y1: l.y1, x2: l.x2, y2: l.y2,
+          color: STYLE.annotationColor,
+          strokeWidth: STYLE.strokeWidth,
+          drawnAtMs: nowDrawMs(),
+        };
+        annotations.push(newAnn);
+        selectedIndex = annotations.length - 1;
+        nextNumber += 1;
+        pushAnnotationSync();
+      } else {
+        deselect();
+      }
+    }
+    currentRect = null;
+    currentLine = null;
+    dragStart = null;
+    dragMode = 'none';
+    redraw();
+    return;
+  }
+
   if (dragMode === 'move' || dragMode === 'resize') {
-    // Commit the in-place edit already applied during mousemove.
     dragMode = 'none';
     dragStart = null;
     dragStartAnn = null;
@@ -575,16 +895,104 @@ canvas.addEventListener('click', (e) => {
   }
 });
 
+// ─── text input ──────────────────────────────────────────────────────
+
+let textInputAt: { x: number; y: number } | null = null;
+
+function startTextInput(x: number, y: number): void {
+  textInputAt = { x, y };
+  textInputEl.style.left = `${x}px`;
+  textInputEl.style.top = `${y}px`;
+  textInputEl.style.display = 'block';
+  textInputEl.value = '';
+  setTimeout(() => textInputEl.focus(), 0);
+}
+
+function hideTextInput(): void {
+  textInputEl.style.display = 'none';
+  textInputAt = null;
+}
+
+function commitTextInput(): void {
+  if (!textInputAt) return;
+  const text = textInputEl.value.trim();
+  if (text) {
+    const newAnn: TextAnnotation = {
+      id: genId(),
+      shape: 'text',
+      number: nextNumber,
+      x: textInputAt.x,
+      y: textInputAt.y,
+      text,
+      color: STYLE.annotationColor,
+      fontSize: STYLE.textFontSize,
+      strokeWidth: STYLE.strokeWidth,
+      drawnAtMs: nowDrawMs(),
+    };
+    annotations.push(newAnn);
+    selectedIndex = annotations.length - 1;
+    nextNumber += 1;
+    pushAnnotationSync();
+  }
+  hideTextInput();
+  redraw();
+}
+
+textInputEl.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') { e.preventDefault(); commitTextInput(); }
+  else if (e.key === 'Escape') { e.preventDefault(); hideTextInput(); }
+});
+textInputEl.addEventListener('blur', () => {
+  // Commit on blur so clicking elsewhere finalizes the text.
+  if (textInputEl.value.trim()) commitTextInput(); else hideTextInput();
+});
+
+// ─── shape picker ────────────────────────────────────────────────────
+
+function setCurrentShape(s: ShapeKind): void {
+  currentShape = s;
+  for (const btn of Array.from(shapePickerEl.querySelectorAll('button'))) {
+    btn.classList.toggle('active', btn.getAttribute('data-shape') === s);
+  }
+  hideTextInput();
+}
+
+function positionShapePicker(): void {
+  if (!recordingRegion) return;
+  const pickerH = 44;
+  const margin = 8;
+  // Center horizontally over the recording region, just below its bottom edge.
+  const rect = recordingRegion;
+  let top = rect.y + rect.h + margin;
+  if (top + pickerH > window.innerHeight - 8) {
+    top = Math.max(8, rect.y - pickerH - margin);
+  }
+  shapePickerEl.style.top = `${top}px`;
+  // Horizontal center.
+  const pickerW = shapePickerEl.getBoundingClientRect().width || 320;
+  let left = rect.x + rect.w / 2 - pickerW / 2;
+  if (left < 8) left = 8;
+  if (left + pickerW > window.innerWidth - 8) left = window.innerWidth - pickerW - 8;
+  shapePickerEl.style.left = `${left}px`;
+}
+
+shapePickerEl.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement;
+  const btn = target.closest('button[data-shape]') as HTMLButtonElement | null;
+  if (!btn) return;
+  const s = btn.getAttribute('data-shape') as ShapeKind;
+  setCurrentShape(s);
+});
+
 // ─── keyboard ────────────────────────────────────────────────────────
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (regionSelectMode) { window.snipalot.cancelRegion(); return; }
     if (annotationMode) {
-      if (selectedIndex !== null) {
-        // First Esc: deselect. Second Esc: exit annotation mode.
-        deselect(); redraw(); return;
-      }
+      if (textInputEl.style.display !== 'none') { hideTextInput(); return; }
+      if (selectedIndex !== null) { deselect(); redraw(); return; }
       exitAnnotationMode();
       return;
     }
@@ -601,6 +1009,13 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (annotationMode) {
+    // Shape-picker shortcuts: 1..6 select shape.
+    if (['1','2','3','4','5','6'].includes(e.key)) {
+      const shapes: ShapeKind[] = ['rect','circle','oval','line','arrow','text'];
+      setCurrentShape(shapes[parseInt(e.key, 10) - 1]);
+      e.preventDefault();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       undoLastAnnotation();
@@ -611,11 +1026,9 @@ window.addEventListener('keydown', (e) => {
       clearAllAnnotations();
       return;
     }
-    // Delete / Backspace removes selected annotation.
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIndex !== null) {
       e.preventDefault();
       annotations.splice(selectedIndex, 1);
-      // Renumber from the removed point to keep badges sequential.
       for (let i = selectedIndex; i < annotations.length; i++) {
         annotations[i].number = i + 1;
       }
@@ -625,18 +1038,17 @@ window.addEventListener('keydown', (e) => {
       redraw();
       return;
     }
-    // Arrow keys nudge selected annotation.
     if (selectedIndex !== null && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) {
       e.preventDefault();
       const step = e.shiftKey ? 10 : 1;
-      const a = annotations[selectedIndex];
       const nudge = {
         ArrowUp:    { x: 0, y: -step },
         ArrowDown:  { x: 0, y: step },
         ArrowLeft:  { x: -step, y: 0 },
         ArrowRight: { x: step, y: 0 },
       }[e.key]!;
-      annotations[selectedIndex] = { ...a, ...clampRectToRegion({ ...a, x: a.x + nudge.x, y: a.y + nudge.y }) };
+      const a = annotations[selectedIndex];
+      annotations[selectedIndex] = translateAnnotation(a, nudge.x, nudge.y);
       pushAnnotationSync();
       redraw();
       return;
@@ -669,6 +1081,7 @@ window.snipalot.onOwnsRecording((payload) => {
   ownsRecording = true;
   recordingRegion = { ...payload.rect };
   window.snipalot.log('owns-recording', payload);
+  positionShapePicker();
   redraw();
 });
 
@@ -709,7 +1122,19 @@ window.snipalot.onToggleOutline(() => {
   redraw();
 });
 
+// Snapshot reset: flush current chapter's annotations to main and start fresh.
+window.snipalot.onSnapshotReset(() => {
+  if (!ownsRecording) return;
+  const chapter = snapshotReset();
+  void window.snipalot.reportSnapshotChapter({ annotations: chapter, capturedAtMs: nowDrawMs() });
+  window.snipalot.log('snapshot', 'chapter flushed', { count: chapter.length });
+});
+
 // ─── boot ────────────────────────────────────────────────────────────
 
-window.addEventListener('resize', resizeCanvas);
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  positionShapePicker();
+});
+setCurrentShape('rect');
 resizeCanvas();

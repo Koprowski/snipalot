@@ -22,6 +22,19 @@
       <span class="region-dims" id="region-dims"></span>
     </div>
 
+    <!-- shape picker — visible only in annotation mode -->
+    <div id="shape-picker" class="shape-picker region-hidden">
+      <button class="shape-btn active" data-shape="rect" title="Rectangle (1)">▭</button>
+      <button class="shape-btn" data-shape="circle" title="Circle (2)">◯</button>
+      <button class="shape-btn" data-shape="oval" title="Oval (3)">⬭</button>
+      <button class="shape-btn" data-shape="line" title="Line (4)">╱</button>
+      <button class="shape-btn" data-shape="arrow" title="Arrow (5)">➜</button>
+      <button class="shape-btn" data-shape="text" title="Text (6)">T</button>
+    </div>
+
+    <!-- text input for text annotations -->
+    <input id="text-input" class="text-input" type="text" placeholder="type, Enter to commit, Esc to cancel" spellcheck="false" style="display:none" />
+
     <script src="overlay.js"></script>
   </body>
 </html>

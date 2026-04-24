@@ -13,7 +13,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { log } from './logger';
-import { runPipeline, AnnotationRecord, formatSessionStamp } from './pipeline';
+import { runPipeline, AnnotationRecord, ChapterRecord, formatSessionStamp } from './pipeline';
 import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 
@@ -91,12 +91,22 @@ let currentRecordingRegionLocal: { x: number; y: number; w: number; h: number } 
 let liveSessionDir: string | null = null;
 let snapCount = 0;
 
+// Snapshot chapters accumulated during the current recording. Each 📸
+// press pushes one entry; overlay reports the annotation payload via
+// `overlay:report-snapshot-chapter` after we send `overlay:snapshot-reset`.
+let currentChapters: ChapterRecord[] = [];
+// Pending chapter PNG path, keyed by snapshotIndex — filled in by hud:snap
+// and merged into the corresponding chapter record when the overlay reports
+// its annotation payload.
+const pendingChapterPngs = new Map<number, string>();
+
 interface PendingProcessing {
   annotations: AnnotationRecord[];
   recordingRegion: { x: number; y: number; w: number; h: number } | null;
   startedAtMs: number;
   durationMs: number;
   preCreatedSessionDir: string | null;
+  chapters: ChapterRecord[];
 }
 // Snapshot of the stopping recording's metadata. The webm buffer arrives
 // async via recorder:save-webm and the pipeline picks up from here.
@@ -609,9 +619,11 @@ function stopRecording(reason: string): void {
       startedAtMs: recordingStartedAt,
       durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
       preCreatedSessionDir: liveSessionDir,
+      chapters: [...currentChapters],
     };
     log('main', 'pendingProcessing snapshotted', {
       annotations: pendingProcessing.annotations.length,
+      chapters: pendingProcessing.chapters.length,
       durationMs: pendingProcessing.durationMs,
     });
   }
@@ -633,6 +645,8 @@ function stopRecording(reason: string): void {
   activeSourceId = null;
   currentAnnotations = [];
   currentRecordingRegionLocal = null;
+  currentChapters = [];
+  pendingChapterPngs.clear();
 
   if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
   broadcastOverlay('overlay:recording-stopped');
@@ -764,6 +778,7 @@ ipcMain.handle(
       recordingRegion: snap?.recordingRegion ?? null,
       annotations: snap?.annotations ?? [],
       preCreatedSessionDir: snap?.preCreatedSessionDir ?? undefined,
+      chapters: snap?.chapters ?? [],
     })
       .then((result) => {
         log('recorder', 'pipeline complete', {
@@ -820,6 +835,8 @@ ipcMain.handle(
       pausedAt = null;
       totalPausedMs = 0;
       snapCount = 0;
+      currentChapters = [];
+      pendingChapterPngs.clear();
 
       // Pre-create the session folder so live snaps have somewhere to land.
       const outputRoot = getConfig().outputDir;
@@ -859,6 +876,7 @@ ipcMain.handle(
             startedAtMs: recordingStartedAt,
             durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
             preCreatedSessionDir: liveSessionDir,
+            chapters: [...currentChapters],
           };
         }
         liveSessionDir = null;
@@ -872,6 +890,8 @@ ipcMain.handle(
         activeSourceId = null;
         currentAnnotations = [];
         currentRecordingRegionLocal = null;
+        currentChapters = [];
+        pendingChapterPngs.clear();
         if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
         broadcastOverlay('overlay:recording-stopped');
       } else {
@@ -923,29 +943,62 @@ ipcMain.handle('hud:enter-annotation', () => {
 
 ipcMain.handle('hud:snap', () => {
   if (appState !== 'recording' || !recorderWindow || !liveSessionDir) return;
-  const elapsedMs = recordingStartedAt
-    ? Math.max(0, Date.now() - recordingStartedAt - totalPausedMs)
-    : 0;
-  const ss = Math.floor(elapsedMs / 1000);
-  const mm = Math.floor(ss / 60);
-  const mmss = `${String(mm).padStart(2, '0')}-${String(ss % 60).padStart(2, '0')}`;
   snapCount++;
   const snapIndex = snapCount;
-  const snapPath = path.join(liveSessionDir, `snap-${snapIndex}-${mmss}.png`);
+  const folderName = `snapshot-${snapIndex}`;
+  const chapterDir = path.join(liveSessionDir, 'snapshots', folderName);
+  if (!fs.existsSync(chapterDir)) fs.mkdirSync(chapterDir, { recursive: true });
+  const snapPath = path.join(chapterDir, `${folderName}.png`);
+  pendingChapterPngs.set(snapIndex, snapPath);
+
+  // Tell the overlay to flush its current annotations as a chapter and
+  // reset numbering. Overlay replies via `overlay:report-snapshot-chapter`.
+  if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:snapshot-reset');
 
   return new Promise<void>((resolve) => {
     ipcMain.once('recorder:snap-result', (_evt, buffer: ArrayBuffer | null) => {
       if (buffer) {
         fs.writeFileSync(snapPath, Buffer.from(buffer));
-        log('hud', 'snap saved', { snapPath, bytes: buffer.byteLength });
+        log('hud', 'snap saved', { snapPath, bytes: buffer.byteLength, snapIndex });
       } else {
-        log('hud', 'snap failed: no buffer from renderer');
+        log('hud', 'snap failed: no buffer from renderer', { snapIndex });
       }
       resolve();
     });
     recorderWindow!.webContents.send('recorder:snap');
   });
 });
+
+// Overlay reports its chapter-closed annotations after receiving
+// `overlay:snapshot-reset`. We merge with the pre-reserved PNG path
+// (written by the hud:snap handler) and push onto currentChapters.
+ipcMain.handle(
+  'overlay:report-snapshot-chapter',
+  (_evt, payload: { annotations: AnnotationRecord[]; capturedAtMs: number }) => {
+    if (appState !== 'recording') {
+      log('overlay', 'report-snapshot-chapter ignored (not recording)');
+      return;
+    }
+    const snapshotIndex = currentChapters.length + 1;
+    const folderName = `snapshot-${snapshotIndex}`;
+    const pngPath = pendingChapterPngs.get(snapshotIndex);
+    pendingChapterPngs.delete(snapshotIndex);
+    const record: ChapterRecord = {
+      snapshotIndex,
+      folderName,
+      capturedAtMs: payload.capturedAtMs,
+      annotations: payload.annotations ?? [],
+      pngPath,
+    };
+    currentChapters.push(record);
+    log('overlay', 'chapter reported', {
+      snapshotIndex,
+      annotations: record.annotations.length,
+      capturedAtMs: record.capturedAtMs,
+      pngPath: pngPath ?? '(none)',
+    });
+  }
+);
 
 // ─── IPC: launcher ↔ main ─────────────────────────────────────────────
 

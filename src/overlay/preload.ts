@@ -21,17 +21,21 @@ contextBridge.exposeInMainWorld('snipalot', {
   confirmRegion: (rect: OverlayRect) =>
     ipcRenderer.invoke('overlay:region-confirmed', { displayId: myDisplayId, rect }),
   cancelRegion: () => ipcRenderer.invoke('overlay:region-cancelled', myDisplayId),
+  /**
+   * Push the current annotation list to main. Payload is JSON-compatible
+   * (discriminated-union shapes v2).
+   */
   syncAnnotations: (payload: {
-    annotations: Array<{
-      number: number;
-      x: number;
-      y: number;
-      w: number;
-      h: number;
-      drawnAtMs: number;
-    }>;
+    annotations: unknown[];
     recordingRegion: OverlayRect | null;
   }) => ipcRenderer.invoke('overlay:sync-annotations', payload),
+  /**
+   * Report a snapshot chapter to main (annotations accumulated since the last
+   * 📸, plus the ms offset when the snapshot fired). Overlay has already
+   * cleared its local annotation list and reset numbering before this call.
+   */
+  reportSnapshotChapter: (payload: { annotations: unknown[]; capturedAtMs: number }) =>
+    ipcRenderer.invoke('overlay:report-snapshot-chapter', payload),
   onEnterAnnotationMode: (cb: () => void) =>
     ipcRenderer.on('overlay:enter-annotation-mode', cb),
   onEnterRegionSelect: (cb: () => void) =>
@@ -49,4 +53,6 @@ contextBridge.exposeInMainWorld('snipalot', {
     ipcRenderer.on('overlay:toggle-outline', cb),
   onGlobalUndo: (cb: () => void) => ipcRenderer.on('overlay:global-undo', cb),
   onGlobalClear: (cb: () => void) => ipcRenderer.on('overlay:global-clear', cb),
+  onSnapshotReset: (cb: () => void) =>
+    ipcRenderer.on('overlay:snapshot-reset', cb),
 });

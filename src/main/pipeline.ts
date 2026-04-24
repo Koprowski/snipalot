@@ -30,13 +30,57 @@ import { log } from './logger';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ffmpegPathRaw: string | null = require('ffmpeg-static');
 
+/**
+ * Annotation schema v2 (discriminated union). Mirrors the shape types the
+ * overlay produces; typed here as a loose record so pipeline-side callers
+ * don't need to re-derive the union.
+ */
+export type FeedbackType = 'bug' | 'improvement' | 'question' | 'praise';
+
 export interface AnnotationRecord {
+  id?: string;
+  shape?: 'rect' | 'circle' | 'oval' | 'line' | 'arrow' | 'text';
   number: number;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+  /** Common rect/circle/oval fields. */
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  /** Line/arrow endpoints. */
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  /** Text shape. */
+  text?: string;
+  fontSize?: number;
+  color?: string;
+  strokeWidth?: number;
   drawnAtMs: number;
+  type?: FeedbackType;
+  /** Filled in by the pipeline from the transcript word bucket. */
+  note?: string;
+}
+
+/**
+ * Snapshot chapter: a bounded slice of the recording closed off by a 📸 press.
+ * Main collects these during recording; the pipeline emits one folder per chapter.
+ */
+export interface ChapterRecord {
+  /** 1-based snapshot number. */
+  snapshotIndex: number;
+  /** Ms offset from recording start at which the snapshot fired. */
+  capturedAtMs: number;
+  /** Annotations that were on the overlay at the moment 📸 was pressed. */
+  annotations: AnnotationRecord[];
+  /**
+   * Path to a PNG captured live at the snapshot moment (already written by
+   * main in hud:snap). Optional: the pipeline falls back to extractFrameAt
+   * if it's missing.
+   */
+  pngPath?: string;
+  /** "snapshot-1" etc. — folder name inside snapshots/. */
+  folderName: string;
 }
 
 export interface PipelineInput {
@@ -50,13 +94,17 @@ export interface PipelineInput {
   durationMs: number;
   /** Region coordinates in display-local CSS pixels. */
   recordingRegion: { x: number; y: number; w: number; h: number } | null;
-  /** Annotation snapshot pushed by the overlay. */
+  /** Annotation snapshot at stop time (the tail chapter, if any). */
   annotations: AnnotationRecord[];
+  /**
+   * Snapshot chapters accumulated during recording. Empty array ⇒ legacy
+   * single-prompt behaviour.
+   */
+  chapters?: ChapterRecord[];
   /**
    * Session directory that was pre-created during recording (for live snaps).
    * If provided, the pipeline writes into this directory instead of computing
-   * a new one from startedAtMs. Any snap-N-MMSS.png files already in there
-   * are preserved.
+   * a new one from startedAtMs.
    */
   preCreatedSessionDir?: string;
 }
@@ -340,6 +388,308 @@ function formatMsAsMinSec(ms: number): string {
   return `${mm}:${String(ss).padStart(2, '0')}`;
 }
 
+// ─── snapshot chapter helpers ────────────────────────────────────────
+
+/**
+ * Keyword heuristic for classifying an annotation's transcript-derived note
+ * into bug / improvement / question / praise (matches the buckets in
+ * screenshot-annotator's prompt template).
+ */
+export function classifyAnnotationType(note: string): FeedbackType {
+  const s = (note || '').toLowerCase().trim();
+  if (!s) return 'improvement';
+  // Question: trailing "?" or common interrogatives at the start.
+  if (/\?\s*$/.test(s) || /^(what|why|how|when|where|who|can|could|should|would|is|are|do|does)\b/.test(s)) {
+    return 'question';
+  }
+  // Bug: problem indicators.
+  if (/\b(bug|broken|error|crash|fail|failed|glitch|wrong|missing|not\s+working|doesn'?t\s+work)\b/.test(s)) {
+    return 'bug';
+  }
+  // Praise: positive sentiment.
+  if (/\b(love|great|awesome|nice|beautiful|excellent|perfect|wonderful)\b/.test(s)) {
+    return 'praise';
+  }
+  return 'improvement';
+}
+
+/**
+ * Slice transcript segments to a time range, returning the formatted lines.
+ * Time units are whole seconds; chapter ranges are supplied in ms.
+ */
+function sliceTranscriptByRange(
+  segments: TranscriptSegment[],
+  startMs: number,
+  endMs: number
+): TranscriptSegment[] {
+  const startSec = Math.floor(startMs / 1000);
+  const endSec = Math.ceil(endMs / 1000);
+  return segments.filter((s) => s.startSec >= startSec && s.startSec < endSec);
+}
+
+/**
+ * Given the transcript segments for a chapter's time range and the chapter's
+ * annotations (sorted by drawnAtMs), bucket each transcript segment into the
+ * annotation whose [drawnAtMs, nextDrawnAtMs) window contains the segment
+ * start. Returns a map from annotation number → concatenated note text.
+ */
+function bucketNotesToAnnotations(
+  segments: TranscriptSegment[],
+  annotations: AnnotationRecord[],
+  chapterStartMs: number,
+  chapterEndMs: number
+): Map<number, string> {
+  const sorted = [...annotations].sort((a, b) => a.drawnAtMs - b.drawnAtMs);
+  const bucketRanges = sorted.map((a, i) => ({
+    number: a.number,
+    startSec: Math.floor(Math.max(chapterStartMs, a.drawnAtMs) / 1000),
+    endSec: Math.floor(
+      (i + 1 < sorted.length ? sorted[i + 1].drawnAtMs : chapterEndMs) / 1000
+    ),
+  }));
+
+  const out = new Map<number, string>();
+  for (const b of bucketRanges) out.set(b.number, '');
+
+  for (const seg of segments) {
+    // Strip the leading "[M:SS - M:SS] " prefix so notes read cleanly.
+    const cleanText = seg.text.replace(/^\[.*?\]\s*/, '').trim();
+    if (!cleanText) continue;
+    const bucket = bucketRanges.find((b) => seg.startSec >= b.startSec && seg.startSec < b.endSec);
+    if (!bucket) continue;
+    const prev = out.get(bucket.number) ?? '';
+    out.set(bucket.number, prev ? `${prev} ${cleanText}` : cleanText);
+  }
+  return out;
+}
+
+/**
+ * Build a screenshot-annotator-format prompt.md for a chapter's annotations.
+ * Matches the template in E:\OneDrive\Apps\claude-toolkit\tools\screenshot-annotator.html.
+ */
+function buildPerSnapshotPromptMd(annotations: AnnotationRecord[], pngPath: string): string {
+  if (annotations.length === 0) {
+    return `Screenshot: ${pngPath}\n\nNo annotations were drawn on this screen.\n`;
+  }
+
+  const groups: Record<FeedbackType, AnnotationRecord[]> = {
+    bug: [], improvement: [], question: [], praise: [],
+  };
+  for (const a of annotations) {
+    const t = a.type ?? classifyAnnotationType(a.note ?? '');
+    groups[t].push(a);
+  }
+
+  const lines: string[] = [];
+  lines.push(`Screenshot: ${pngPath}`);
+  lines.push('');
+  lines.push(
+    `I've annotated a screenshot with ${annotations.length} note${annotations.length === 1 ? '' : 's'}. Please apply the following feedback:`
+  );
+  lines.push('');
+
+  const sections: Array<{ type: FeedbackType; heading: string }> = [
+    { type: 'bug', heading: '🐛 Bugs:' },
+    { type: 'improvement', heading: '💡 Improvements:' },
+    { type: 'question', heading: '❓ Questions:' },
+    { type: 'praise', heading: '✅ Praise:' },
+  ];
+
+  for (const { type, heading } of sections) {
+    const group = groups[type];
+    if (group.length === 0) continue;
+    lines.push(heading);
+    for (const a of group.sort((x, y) => x.number - y.number)) {
+      const body = (a.note && a.note.trim()) || '(no spoken note)';
+      lines.push(`  #${a.number}: ${body}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('Please make all changes in the file, keeping the same overall structure.');
+  lines.push('');
+  return lines.join('\n');
+}
+
+interface ChapterArtifact {
+  folderName: string;
+  snapshotIndex: number;
+  capturedAtMs: number;
+  chapterStartMs: number;
+  chapterEndMs: number;
+  dir: string;
+  pngPath: string;
+  promptPath: string;
+  transcriptPath: string;
+  annotationsPath: string;
+  annotationCount: number;
+}
+
+/**
+ * Emit all chapter artifacts. Called after transcript parsing completes.
+ */
+async function buildSnapshotChapters(
+  mp4Path: string,
+  sessionDir: string,
+  chapters: ChapterRecord[],
+  tailAnnotations: AnnotationRecord[],
+  segments: TranscriptSegment[],
+  recordingDurationMs: number,
+  warnings: string[]
+): Promise<ChapterArtifact[]> {
+  if (chapters.length === 0 && tailAnnotations.length === 0) return [];
+
+  const snapshotsRoot = path.join(sessionDir, 'snapshots');
+  ensureDir(snapshotsRoot);
+
+  // Build the full chapter list: explicit chapters + optional tail chapter.
+  // Tail chapter covers [lastSnapshot.capturedAtMs, recordingDurationMs) and
+  // uses the stop-time annotations (which were never snapshot-flushed).
+  const allChapters: ChapterRecord[] = [...chapters];
+  if (tailAnnotations.length > 0) {
+    const lastCapture = chapters.length > 0 ? chapters[chapters.length - 1].capturedAtMs : 0;
+    allChapters.push({
+      snapshotIndex: chapters.length + 1,
+      capturedAtMs: recordingDurationMs,
+      annotations: tailAnnotations,
+      folderName: chapters.length > 0 ? 'snapshot-final' : 'snapshot-1',
+      // For the tail, extract the frame at the very end (minus 500ms so the
+      // last real frame is preserved — extractFrameAt rounds down).
+      pngPath: undefined,
+    });
+    // Note: if chapters.length === 0, a "tail-only" session gets labeled
+    // snapshot-1 (not snapshot-final), since there's nothing to be "final" to.
+    void lastCapture;
+  }
+
+  const artifacts: ChapterArtifact[] = [];
+
+  for (let i = 0; i < allChapters.length; i++) {
+    const ch = allChapters[i];
+    const chapterStartMs = i === 0 ? 0 : allChapters[i - 1].capturedAtMs;
+    const chapterEndMs = ch.capturedAtMs;
+    const folderName = ch.folderName;
+    const dir = path.join(snapshotsRoot, folderName);
+    ensureDir(dir);
+
+    // PNG: use the live one if already written; else extract from MP4 at capturedAtMs.
+    const canonicalPng = path.join(dir, `${folderName}.png`);
+    let pngPath = canonicalPng;
+    if (ch.pngPath && fs.existsSync(ch.pngPath) && ch.pngPath !== canonicalPng) {
+      try {
+        fs.renameSync(ch.pngPath, canonicalPng);
+      } catch {
+        // Copy fallback if rename across dirs fails.
+        try {
+          fs.copyFileSync(ch.pngPath, canonicalPng);
+          fs.unlinkSync(ch.pngPath);
+        } catch { /* leave it */ }
+      }
+    } else if (!fs.existsSync(canonicalPng) && fs.existsSync(mp4Path)) {
+      // Extract from MP4 at capturedAtMs (offset back a hair so we don't land
+      // past the end of stream for the tail chapter).
+      const extractAtMs = Math.max(0, Math.min(chapterEndMs, recordingDurationMs) - 100);
+      try {
+        await extractFrameAt(mp4Path, canonicalPng, extractAtMs);
+      } catch (err) {
+        warnings.push(`chapter ${folderName} PNG extraction failed: ${(err as Error).message}`);
+      }
+    }
+
+    // Bucket transcript → per-annotation notes.
+    const chapterSegs = sliceTranscriptByRange(segments, chapterStartMs, chapterEndMs);
+    const noteMap = bucketNotesToAnnotations(chapterSegs, ch.annotations, chapterStartMs, chapterEndMs);
+
+    // Clone annotations and fill in `note` + `type`.
+    const annsWithNotes = ch.annotations.map((a) => {
+      const note = noteMap.get(a.number) ?? '';
+      const type = classifyAnnotationType(note);
+      return { ...a, note, type };
+    });
+
+    // Chapter artifacts.
+    const transcriptPath = path.join(dir, 'transcript.txt');
+    fs.writeFileSync(
+      transcriptPath,
+      chapterSegs.map((s) => s.text).join('\n') + (chapterSegs.length > 0 ? '\n' : ''),
+      'utf-8'
+    );
+
+    const annotationsPath = path.join(dir, 'annotations.json');
+    fs.writeFileSync(
+      annotationsPath,
+      JSON.stringify({
+        snapshotIndex: ch.snapshotIndex,
+        folderName,
+        chapterStartMs,
+        chapterEndMs,
+        capturedAtMs: ch.capturedAtMs,
+        annotations: annsWithNotes,
+      }, null, 2),
+      'utf-8'
+    );
+
+    const promptMd = buildPerSnapshotPromptMd(annsWithNotes, pngPath);
+    const promptPath = path.join(dir, 'prompt.md');
+    fs.writeFileSync(promptPath, promptMd, 'utf-8');
+
+    artifacts.push({
+      folderName,
+      snapshotIndex: ch.snapshotIndex,
+      capturedAtMs: ch.capturedAtMs,
+      chapterStartMs,
+      chapterEndMs,
+      dir,
+      pngPath,
+      promptPath,
+      transcriptPath,
+      annotationsPath,
+      annotationCount: ch.annotations.length,
+    });
+  }
+
+  return artifacts;
+}
+
+/**
+ * Combined prompt when snapshot chapters are present. References each chapter's
+ * prompt.md by absolute path so Claude Code can walk them in order.
+ */
+function buildCombinedSnapshotPrompt(args: {
+  sessionDir: string;
+  mp4Path: string;
+  gifPath: string;
+  transcriptPath: string | null;
+  chapters: ChapterArtifact[];
+  durationMs: number;
+}): string {
+  const { sessionDir, mp4Path, gifPath, transcriptPath, chapters, durationMs } = args;
+  const screenCount = chapters.length;
+  const durationLabel = formatMsAsMinSec(durationMs);
+
+  const lines: string[] = [];
+  lines.push(
+    `I recorded a ${durationLabel} feedback walkthrough covering ${screenCount} screen${screenCount === 1 ? '' : 's'}.`
+  );
+  lines.push('');
+  lines.push(`Session folder: ${sessionDir}`);
+  lines.push(`Recording: ${mp4Path}`);
+  lines.push(`GIF (for visual reference, not for Claude): ${gifPath}`);
+  if (transcriptPath) lines.push(`Full transcript: ${transcriptPath}`);
+  lines.push('');
+  lines.push('Per-screen deliverables (each prompt.md has its own screenshot + transcript slice + numbered annotations):');
+  for (const c of chapters) {
+    const dur = formatMsAsMinSec(c.chapterEndMs - c.chapterStartMs);
+    lines.push(`  ${c.snapshotIndex}. ${c.promptPath}   (${c.annotationCount} annotation${c.annotationCount === 1 ? '' : 's'}, ${dur})`);
+  }
+  lines.push('');
+  lines.push(
+    'Please process each per-screen prompt.md in order. Open each screenshot PNG to see exactly what was on screen and what was annotated. The transcript slice in each chapter folder contains the spoken notes that belong to those numbered annotations (bucketed by the timestamp when each was drawn). Keep track of which file/component each screen refers to.'
+  );
+  lines.push('');
+  return lines.join('\n');
+}
+
 function buildPromptText(args: {
   transcriptPath: string | null;
   annotationsPath: string;
@@ -489,11 +839,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     }
   }
 
-  // 6a. Extract a PNG at the exact millisecond each annotation was drawn.
-  //     The overlay bakes the red numbered rectangle into the live canvas,
-  //     so these frames show exactly what was on screen + what was circled.
+  const chapters = input.chapters ?? [];
+  const useChapterFlow = chapters.length > 0;
+
+  // 6a. (legacy path only) Extract a PNG at the exact millisecond each
+  //     annotation was drawn. Skipped in the snapshot-chapter flow because
+  //     each chapter's own PNG already bakes in the relevant annotations.
   const annotationFrames: Array<{ number: number; path: string; drawnAtMs: number }> = [];
-  if (fs.existsSync(mp4Path) && input.annotations.length > 0) {
+  if (!useChapterFlow && fs.existsSync(mp4Path) && input.annotations.length > 0) {
     for (const a of input.annotations) {
       const framePath = path.join(sessionDir, `frame-${a.number}.png`);
       try {
@@ -510,8 +863,9 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   }
 
   // 6b. Collect any snap-N-MM-SS.png files the user captured live via the
-  //     HUD snap button. They already exist in sessionDir (written during
-  //     recording); we just need to discover and sort them.
+  //     HUD snap button (legacy — preserved for back-compat). They already
+  //     exist in sessionDir (written during recording); we just need to
+  //     discover and sort them.
   const snapFrames: Array<{ path: string; name: string }> = fs
     .readdirSync(sessionDir)
     .filter((f) => /^snap-\d+-.+\.png$/.test(f))
@@ -521,28 +875,73 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     log('pipeline', 'snap frames found', { count: snapFrames.length });
   }
 
-  // 7. annotations.json
+  // 6c. Snapshot chapters: one folder per 📸 press plus an optional tail
+  //     chapter for any annotations drawn after the last snapshot.
+  let chapterArtifacts: ChapterArtifact[] = [];
+  if (useChapterFlow) {
+    try {
+      chapterArtifacts = await buildSnapshotChapters(
+        mp4Path,
+        sessionDir,
+        chapters,
+        input.annotations,
+        transcriptSegments,
+        input.durationMs,
+        warnings
+      );
+      log('pipeline', 'chapters written', { count: chapterArtifacts.length });
+    } catch (err) {
+      warnings.push(`snapshot chapters failed: ${(err as Error).message}`);
+      log('pipeline', 'chapters fail', { err: String(err) });
+    }
+  }
+
+  // 7. annotations.json (master — every annotation across all chapters + tail).
+  const allAnnotations: AnnotationRecord[] = useChapterFlow
+    ? [...chapters.flatMap((c) => c.annotations), ...input.annotations]
+    : input.annotations;
   const annotationsDoc = {
     recordingStartedAtUtc: startedAt.toISOString(),
     durationMs: input.durationMs,
     recordingRegion: input.recordingRegion,
-    annotations: input.annotations,
+    annotations: allAnnotations,
+    chapters: useChapterFlow
+      ? chapterArtifacts.map((c) => ({
+          snapshotIndex: c.snapshotIndex,
+          folderName: c.folderName,
+          chapterStartMs: c.chapterStartMs,
+          chapterEndMs: c.chapterEndMs,
+          capturedAtMs: c.capturedAtMs,
+          annotationCount: c.annotationCount,
+        }))
+      : undefined,
   };
   fs.writeFileSync(annotationsPath, JSON.stringify(annotationsDoc, null, 2), 'utf-8');
 
   // 8. prompt.txt + clipboard
-  const promptText = buildPromptText({
-    transcriptPath: finalTranscriptPath,
-    annotationsPath,
-    annotationFrames,
-    snapFrames,
-    annotations: input.annotations,
-  });
+  const promptText = useChapterFlow
+    ? buildCombinedSnapshotPrompt({
+        sessionDir,
+        mp4Path,
+        gifPath,
+        transcriptPath: finalTranscriptPath,
+        chapters: chapterArtifacts,
+        durationMs: input.durationMs,
+      })
+    : buildPromptText({
+        transcriptPath: finalTranscriptPath,
+        annotationsPath,
+        annotationFrames,
+        snapFrames,
+        annotations: input.annotations,
+      });
 
   fs.writeFileSync(promptPath, promptText, 'utf-8');
   clipboard.writeText(promptText);
   log('pipeline', 'prompt written + clipboarded', {
     length: promptText.length,
+    mode: useChapterFlow ? 'chapters' : 'legacy',
+    chapters: chapterArtifacts.length,
     annotationFrames: annotationFrames.length,
     snapFrames: snapFrames.length,
   });
@@ -562,7 +961,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     transcriptPath: finalTranscriptPath,
     annotationsPath,
     promptPath,
-    framePaths: [...annotationFrames.map((f) => f.path), ...snapFrames.map((f) => f.path)],
+    framePaths: [
+      ...annotationFrames.map((f) => f.path),
+      ...snapFrames.map((f) => f.path),
+      ...chapterArtifacts.map((c) => c.pngPath),
+    ],
     promptText,
     warnings,
   };

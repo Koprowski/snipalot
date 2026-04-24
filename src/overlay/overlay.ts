@@ -194,10 +194,22 @@ function bboxOf(a: Annotation): Bbox {
   return { x: b.x, y: b.y, w: b.w, h: b.h };
 }
 
-/** Top-left badge position for an annotation. */
+/**
+ * Badge center position for an annotation.
+ *
+ * Placed just below-and-left of the bbox's bottom-left corner so:
+ *   - For lines/arrows pointing up-and-right, the badge stays attached
+ *     to the visible shape instead of floating in the empty upper-left
+ *     corner of the rectangular bounding box.
+ *   - For rects, circles, ovals, and text, the badge sits outside the
+ *     shape so it doesn't obscure the annotated content.
+ *
+ * The -6 / +6 offsets pull the badge clear of the shape's stroke while
+ * keeping it visually associated with the shape.
+ */
 function badgePosOf(a: Annotation): { x: number; y: number } {
   const bb = bboxOf(a);
-  return { x: bb.x, y: bb.y };
+  return { x: bb.x - 6, y: bb.y + bb.h + 6 };
 }
 
 /** Get handle positions for a selected annotation. */
@@ -274,6 +286,13 @@ function deselect(): void {
   resizeAnchor = null;
 }
 
+function renumberAnnotations(): void {
+  for (let i = 0; i < annotations.length; i++) {
+    annotations[i].number = i + 1;
+  }
+  nextNumber = annotations.length + 1;
+}
+
 // ─── canvas setup & render ───────────────────────────────────────────
 
 function resizeCanvas(): void {
@@ -313,6 +332,9 @@ function redraw(): void {
   }
 
   for (let i = 0; i < annotations.length; i++) {
+    // Skip the annotation currently being edited via the floating text input
+    // so the live <input> doesn't sit on top of a stale render of itself.
+    if (i === editingTextIndex) continue;
     drawAnnotation(annotations[i], i === selectedIndex);
   }
 
@@ -895,28 +917,74 @@ canvas.addEventListener('click', (e) => {
   }
 });
 
+// Double-click a text annotation to re-edit its contents in place.
+canvas.addEventListener('dblclick', (e) => {
+  if (!annotationMode || regionSelectMode) return;
+  if (!isInsideRecordingRegion(e.clientX, e.clientY)) return;
+  // Walk top-down so the most recently drawn annotation wins on overlap.
+  for (let i = annotations.length - 1; i >= 0; i--) {
+    const a = annotations[i];
+    if (a.shape !== 'text') continue;
+    const bb = bboxOf(a);
+    if (e.clientX >= bb.x && e.clientX <= bb.x + bb.w &&
+        e.clientY >= bb.y && e.clientY <= bb.y + bb.h) {
+      e.preventDefault();
+      selectedIndex = i;
+      startTextInput(a.x, a.y, { editingIndex: i, initialText: a.text });
+      redraw();
+      return;
+    }
+  }
+});
+
 // ─── text input ──────────────────────────────────────────────────────
 
 let textInputAt: { x: number; y: number } | null = null;
+/**
+ * Index of the annotation we're re-editing (set by dblclick on an existing
+ * text annotation). When non-null, commitTextInput updates that annotation
+ * in-place instead of appending a new one, and redraw() skips rendering it
+ * so the live input is the only thing the user sees at that position.
+ */
+let editingTextIndex: number | null = null;
 
-function startTextInput(x: number, y: number): void {
+function startTextInput(x: number, y: number, opts?: { editingIndex: number; initialText: string }): void {
   textInputAt = { x, y };
   textInputEl.style.left = `${x}px`;
   textInputEl.style.top = `${y}px`;
   textInputEl.style.display = 'block';
-  textInputEl.value = '';
-  setTimeout(() => textInputEl.focus(), 0);
+  textInputEl.value = opts?.initialText ?? '';
+  editingTextIndex = opts?.editingIndex ?? null;
+  setTimeout(() => {
+    textInputEl.focus();
+    textInputEl.select();
+  }, 0);
 }
 
 function hideTextInput(): void {
   textInputEl.style.display = 'none';
   textInputAt = null;
+  editingTextIndex = null;
 }
 
 function commitTextInput(): void {
   if (!textInputAt) return;
   const text = textInputEl.value.trim();
-  if (text) {
+  if (editingTextIndex !== null) {
+    // Editing an existing text annotation: update text in place.
+    const existing = annotations[editingTextIndex];
+    if (existing && existing.shape === 'text') {
+      if (text) {
+        annotations[editingTextIndex] = { ...existing, text };
+      } else {
+        // Empty text deletes the annotation and renumbers.
+        annotations.splice(editingTextIndex, 1);
+        renumberAnnotations();
+        if (selectedIndex === editingTextIndex) deselect();
+      }
+      pushAnnotationSync();
+    }
+  } else if (text) {
     const newAnn: TextAnnotation = {
       id: genId(),
       shape: 'text',
@@ -1029,10 +1097,7 @@ window.addEventListener('keydown', (e) => {
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIndex !== null) {
       e.preventDefault();
       annotations.splice(selectedIndex, 1);
-      for (let i = selectedIndex; i < annotations.length; i++) {
-        annotations[i].number = i + 1;
-      }
-      nextNumber = annotations.length + 1;
+      renumberAnnotations();
       deselect();
       pushAnnotationSync();
       redraw();

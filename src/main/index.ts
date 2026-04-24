@@ -1087,6 +1087,24 @@ app.whenReady().then(() => {
     });
   });
 
+  // The hidden recorder window calls getUserMedia({audio:true}) to capture
+  // the microphone. Electron's default permission handler denies this
+  // silently for hidden windows (no prompt can fire), so we have to
+  // explicitly grant 'media' permission. Without this the recording's
+  // MP4 has a video stream but no audio, and whisper's mp4→wav step
+  // fails with "Output file does not contain any stream".
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (permission === 'media') {
+      log('permissions', 'granted', { permission });
+      callback(true);
+      return;
+    }
+    callback(false);
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
+    return permission === 'media';
+  });
+
   rebuildOverlays();
   recorderWindow = createRecorderWindow();
   launcherWindow = createLauncherWindow();

@@ -287,8 +287,9 @@ function createRecorderWindow(): BrowserWindow {
 function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
   const w = 340;
-  // Custom title bar is 28px; body content ~130px. Keep some slack.
-  const h = 160;
+  // Custom title bar is 28px + content ~112px (header 20, gap 8, controls 32,
+  // gap 8, hint 16, padding 20). No need for extra slack.
+  const h = 140;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;

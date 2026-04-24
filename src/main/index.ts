@@ -292,13 +292,16 @@ function createLauncherWindow(): BrowserWindow {
     transparent: true,
     alwaysOnTop: true,
     resizable: false,
-    skipTaskbar: true,
+    // Always show in taskbar so the Snipalot icon is visible even when the
+    // floating launcher is on-screen. Gives users a familiar way to locate the app.
+    skipTaskbar: false,
     focusable: true,
     minimizable: true,
     maximizable: false,
     show: false,
     hasShadow: false,
     icon: iconPath,
+    title: 'Snipalot',
     webPreferences: {
       preload: path.join(__dirname, '..', 'launcher', 'preload.js'),
       contextIsolation: true,
@@ -315,8 +318,8 @@ function createLauncherWindow(): BrowserWindow {
     broadcastStateToLauncher();
   });
   win.on('restore', () => {
-    // Back to floating overlay — hide from taskbar again.
-    win.setSkipTaskbar(true);
+    // Re-assert screen-saver alwaysOnTop level after restore (Windows sometimes
+    // demotes it to normal on unminimize).
     win.setAlwaysOnTop(true, 'screen-saver');
     log('launcher', 'restored from taskbar');
   });
@@ -969,8 +972,7 @@ ipcMain.handle('launcher:settings', () => {
 
 ipcMain.handle('launcher:toggle-minimize', () => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  // Show in taskbar so the user has something to click to restore, then minimize.
-  launcherWindow.setSkipTaskbar(false);
+  // Taskbar button is always present (skipTaskbar:false at creation), so just minimize.
   launcherWindow.minimize();
   log('launcher', 'minimized to taskbar');
 });

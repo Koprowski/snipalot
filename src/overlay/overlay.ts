@@ -921,6 +921,21 @@ canvas.addEventListener('click', (e) => {
 canvas.addEventListener('dblclick', (e) => {
   if (!annotationMode || regionSelectMode) return;
   if (!isInsideRecordingRegion(e.clientX, e.clientY)) return;
+
+  // The sequence leading here is: mousedown → mouseup → click → mousedown →
+  // mousemove (possibly, even a 1px jitter) → mouseup → click → dblclick.
+  // The second mousedown set dragMode='move' with a deep-copy dragStartAnn,
+  // and any jitter during the double-click translated the annotation. Revert
+  // that pre-edit mutation so the text re-opens at its original position.
+  if (dragMode === 'move' && dragStartAnn && selectedIndex !== null) {
+    annotations[selectedIndex] = dragStartAnn;
+  }
+  dragMode = 'none';
+  dragStart = null;
+  dragStartAnn = null;
+  resizeAnchor = null;
+  activeHandle = null;
+
   // Walk top-down so the most recently drawn annotation wins on overlap.
   for (let i = annotations.length - 1; i >= 0; i--) {
     const a = annotations[i];

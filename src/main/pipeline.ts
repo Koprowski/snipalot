@@ -272,6 +272,31 @@ async function extractFrameAt(
   );
 }
 
+/**
+ * Decode-accurate seek fallback. Slower, but always produces a frame as long
+ * as the timestamp is within the stream. Used when the fast-seek variant
+ * returns success without writing a PNG (happens near EOF when the nearest
+ * keyframe is before the request and the decoder hits stream end first).
+ */
+async function extractFrameAtAccurate(
+  mp4Path: string,
+  framePath: string,
+  atMs: number
+): Promise<void> {
+  const seekSec = Math.max(0, atMs / 1000).toFixed(3);
+  await runFfmpeg(
+    [
+      '-y',
+      '-i', mp4Path,
+      '-ss', seekSec,
+      '-frames:v', '1',
+      '-q:v', '2',
+      framePath,
+    ],
+    `frame at ${seekSec}s (accurate)`
+  );
+}
+
 // ─── whisper.cpp helpers ─────────────────────────────────────────────
 
 function findWhisperBinary(): { exe: string; model: string } | null {
@@ -586,13 +611,30 @@ async function buildSnapshotChapters(
         } catch { /* leave it */ }
       }
     } else if (!fs.existsSync(canonicalPng) && fs.existsSync(mp4Path)) {
-      // Extract from MP4 at capturedAtMs (offset back a hair so we don't land
-      // past the end of stream for the tail chapter).
-      const extractAtMs = Math.max(0, Math.min(chapterEndMs, recordingDurationMs) - 100);
+      // Extract from MP4 at capturedAtMs. For the tail chapter, offset further
+      // back (500ms) so fast-seek lands safely inside the stream: libx264 at
+      // -g default puts keyframes ~8s apart and `-ss` before `-i` can silently
+      // exit 0 without writing a PNG when the request lands between the last
+      // keyframe and true EOF. Verify the file exists; if not, retry with
+      // accurate (slow) seek by placing -ss after -i.
+      const isTail = folderName.startsWith('snapshot-final');
+      const safetyMs = isTail ? 500 : 100;
+      const extractAtMs = Math.max(0, Math.min(chapterEndMs, recordingDurationMs) - safetyMs);
       try {
         await extractFrameAt(mp4Path, canonicalPng, extractAtMs);
       } catch (err) {
         warnings.push(`chapter ${folderName} PNG extraction failed: ${(err as Error).message}`);
+      }
+      if (!fs.existsSync(canonicalPng)) {
+        // Fallback: accurate seek (slower, but always decodes to the frame).
+        try {
+          await extractFrameAtAccurate(mp4Path, canonicalPng, extractAtMs);
+        } catch (err) {
+          warnings.push(`chapter ${folderName} accurate-seek PNG fallback failed: ${(err as Error).message}`);
+        }
+      }
+      if (!fs.existsSync(canonicalPng)) {
+        warnings.push(`chapter ${folderName} PNG missing after extract attempts (extractAtMs=${extractAtMs}, durationMs=${recordingDurationMs})`);
       }
     }
 

@@ -19,6 +19,10 @@ import { createTray, updateTrayMenu, destroyTray } from './tray';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
+// --debug shows the hidden recorder window AND opens DevTools on it.
+// Useful when a recording fails and you need to inspect MediaRecorder errors.
+// npm run dev stays clean; use `npm run debug` to enable.
+const isDebug = process.argv.includes('--debug');
 // --no-protect disables setContentProtection on the HUD so the user can
 // screenshot it for debugging. Don't use in normal recording runs.
 const disableContentProtection = process.argv.includes('--no-protect');
@@ -257,7 +261,7 @@ function createRecorderWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 420,
     height: 300,
-    show: isDev,
+    show: isDebug,
     webPreferences: {
       preload: path.join(__dirname, '..', 'recorder', 'preload.js'),
       contextIsolation: true,
@@ -265,7 +269,7 @@ function createRecorderWindow(): BrowserWindow {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html'));
-  if (isDev) win.webContents.openDevTools({ mode: 'detach' });
+  if (isDebug) win.webContents.openDevTools({ mode: 'detach' });
   return win;
 }
 
@@ -1005,6 +1009,7 @@ app.whenReady().then(() => {
 
   log('main', 'app ready', {
     isDev,
+    isDebug,
     isSpikeM1,
     cwd: process.cwd(),
     platform: process.platform,

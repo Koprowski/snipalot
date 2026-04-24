@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/make-icon.mjs",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
+    "debug": "npm run build && electron . --dev --debug",
     "spike:m1": "npm run build && electron . --spike=m1",
     "package": "npm run build && electron-builder",
     "package:portable": "npm run build && electron-builder --win portable",

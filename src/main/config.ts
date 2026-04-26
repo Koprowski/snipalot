@@ -44,8 +44,12 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   retention: 'keep-all',
   audio: { microphone: true },
   hotkeys: {
-    startStop: 'Ctrl+Shift+R',
-    annotate: 'Ctrl+Shift+N',
+    // 'S' for Snip (was 'R' for Record). The R chord conflicts with several
+    // common reload bindings (Ctrl+Shift+R in browsers, IDEs).
+    startStop: 'Ctrl+Shift+S',
+    // 'A' for Annotate (was 'N'). N is taken by "new file/window" in many
+    // apps and the conflict was costing Jason muscle memory.
+    annotate: 'Ctrl+Shift+A',
     clear: 'Ctrl+Shift+C',
     undo: 'Ctrl+Z',
     pauseResume: 'Ctrl+Shift+P',

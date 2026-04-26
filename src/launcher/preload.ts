@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     cb: (state: {
       appState: 'idle' | 'selecting' | 'recording' | 'processing';
       processingStep: string | null;
+      startStopHotkey?: string;
     }) => void
   ) => ipcRenderer.on('launcher:state', (_evt, state) => cb(state)),
 });

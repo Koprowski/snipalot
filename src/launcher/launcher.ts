@@ -20,6 +20,9 @@ const hintEl = document.getElementById('hint')!;
 
 let currentState: 'idle' | 'selecting' | 'recording' | 'processing' = 'idle';
 let currentProcessingStep: string | null = null;
+// Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
+// idle hint always reflects the current binding (default: Ctrl+Shift+S).
+let currentStartStopHotkey = 'Ctrl+Shift+S';
 
 function renderLauncherImpl(): void {
   // 'processing' is multi-minute background work after Stop. Surface it
@@ -38,7 +41,8 @@ function renderLauncherImpl(): void {
 
   if (currentState === 'idle') {
     btnPrimaryLabelEl.textContent = 'Record';
-    hintEl.textContent = 'Click Record to select a region · Ctrl+Shift+R';
+    btnPrimaryEl.title = `Record (${currentStartStopHotkey})`;
+    hintEl.textContent = `Click Record to select a region · ${currentStartStopHotkey}`;
   } else if (currentState === 'selecting') {
     btnPrimaryLabelEl.textContent = 'Cancel';
     hintEl.textContent = 'Drag a region on any display · release mouse to confirm · Esc to cancel';
@@ -81,6 +85,7 @@ window.snipalotLauncher.onState((state) => {
   window.snipalotLauncher.log('state', state);
   currentState = state.appState;
   currentProcessingStep = state.processingStep;
+  if (state.startStopHotkey) currentStartStopHotkey = state.startStopHotkey;
   renderLauncherImpl();
 });
 

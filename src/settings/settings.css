@@ -216,6 +216,59 @@ body {
   white-space: nowrap;
 }
 
+/* Editable hotkey field. Looks like .kbd at rest; transforms into a
+   focused capture target on click/tab. The value text is the current
+   binding; on focus we swap textContent to "Press keys..." until a
+   chord arrives. */
+.hotkey-input {
+  display: inline-block;
+  min-width: 130px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  transition: border-color 0.1s, background 0.1s;
+}
+
+.hotkey-input:hover {
+  border-color: #444;
+}
+
+.hotkey-input:focus,
+.hotkey-input.capturing {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  color: var(--accent);
+}
+
+.hotkey-input.duplicate {
+  border-color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 10%, var(--surface));
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  align-self: flex-start;
+}
+
+.btn-link:hover {
+  color: var(--accent);
+  background: none;
+}
+
 /* ── info block ── */
 
 .info {

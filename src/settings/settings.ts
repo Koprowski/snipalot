@@ -25,6 +25,23 @@ const HOTKEY_LABELS: Record<string, string> = {
   toggleOutline: 'Toggle region outline',
 };
 
+// Default combos shipped in the build. Source of truth lives in
+// src/main/config.ts DEFAULT_CONFIG.hotkeys; this is a duplicate the
+// Reset button can apply locally without an extra IPC roundtrip. Keep
+// in sync if defaults ever change.
+const DEFAULT_HOTKEYS: Record<string, string> = {
+  startStop: 'Ctrl+Shift+S',
+  annotate: 'Ctrl+Shift+A',
+  clear: 'Ctrl+Shift+C',
+  undo: 'Ctrl+Z',
+  pauseResume: 'Ctrl+Shift+P',
+  toggleOutline: 'Ctrl+Shift+H',
+};
+
+// Working copy of bindings — mutated as the user clicks/captures, flushed
+// to disk on Save. Initialized from config in init().
+const editedHotkeys: Record<string, string> = {};
+
 // ─── init ──────────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
@@ -40,18 +57,141 @@ async function init(): Promise<void> {
   }
 
   // Hotkeys table
-  hotkeysBody.innerHTML = '';
   const hk = (config.hotkeys ?? {}) as unknown as Record<string, string>;
+  for (const key of Object.keys(HOTKEY_LABELS)) {
+    editedHotkeys[key] = hk[key] ?? DEFAULT_HOTKEYS[key] ?? '';
+  }
+  renderHotkeyRows();
+}
+
+// ─── hotkey rendering + capture ────────────────────────────────────────
+
+function renderHotkeyRows(): void {
+  hotkeysBody.innerHTML = '';
   for (const [key, label] of Object.entries(HOTKEY_LABELS)) {
-    const combo: string = hk[key] ?? '—';
+    const combo = editedHotkeys[key] ?? '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${label}</td>
-      <td><span class="kbd">${escHtml(combo)}</span></td>
+      <td>
+        <span class="hotkey-input" data-key="${key}" tabindex="0" role="button"
+              aria-label="Click then press a key combination">${escHtml(combo)}</span>
+      </td>
     `;
     hotkeysBody.appendChild(tr);
   }
+  flagDuplicates();
+
+  // Wire each input.
+  for (const el of Array.from(hotkeysBody.querySelectorAll<HTMLElement>('.hotkey-input'))) {
+    const key = el.dataset.key!;
+
+    el.addEventListener('focus', () => {
+      el.classList.add('capturing');
+      el.textContent = 'Press keys…';
+    });
+
+    el.addEventListener('blur', () => {
+      el.classList.remove('capturing');
+      // Restore display; if user blurred without binding, show the saved one.
+      el.textContent = editedHotkeys[key] || '—';
+    });
+
+    // Capture phase so we beat any default focus behavior.
+    el.addEventListener('keydown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Esc cancels the capture without changing anything.
+      if (e.key === 'Escape') {
+        el.blur();
+        return;
+      }
+      // Backspace clears the binding (renders as the literal default's
+      // placeholder dash; the field is required on save so we'll catch
+      // an empty save before it lands).
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        editedHotkeys[key] = '';
+        el.textContent = '—';
+        flagDuplicates();
+        return;
+      }
+      // Modifier-only presses (Shift alone, Ctrl alone) shouldn't commit.
+      if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+
+      const parts: string[] = [];
+      if (e.ctrlKey) parts.push('Ctrl');
+      if (e.shiftKey) parts.push('Shift');
+      if (e.altKey) parts.push('Alt');
+      if (e.metaKey) parts.push('Meta');
+      // Require at least one modifier so we don't bind 'a' globally.
+      if (parts.length === 0) {
+        setStatus('Combo must include Ctrl, Shift, or Alt.', true);
+        return;
+      }
+
+      const main = normalizeKey(e.key, e.code);
+      if (!main) return;
+      parts.push(main);
+      const combo = parts.join('+');
+
+      editedHotkeys[key] = combo;
+      el.textContent = combo;
+      flagDuplicates();
+      setStatus('');
+      el.blur();
+    });
+
+    // Click → focus (clicks alone don't focus a span by default; tabindex helps).
+    el.addEventListener('click', () => el.focus());
+  }
 }
+
+/**
+ * Convert a KeyboardEvent.key into our canonical combo segment. Maps
+ * letter keys to upper-case (so Ctrl+Shift+S, not Ctrl+Shift+s) and
+ * passes through named keys (Enter, Tab, F1, ArrowUp). Returns empty
+ * string for keys we don't accept (modifier-only events get filtered
+ * earlier).
+ */
+function normalizeKey(key: string, code: string): string {
+  if (key.length === 1) return key.toUpperCase();
+  // Numpad/digit codes occasionally come through as "Numpad5" — accept those.
+  if (/^F\d{1,2}$/.test(key)) return key;
+  if (key.startsWith('Arrow')) return key;
+  if (['Enter', 'Tab', 'Space', 'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown', 'Insert'].includes(key)) {
+    return key === 'Space' ? 'Space' : key;
+  }
+  if (code.startsWith('Numpad')) return code;
+  return key;
+}
+
+/**
+ * Highlight any combo assigned to more than one action. We don't BLOCK
+ * the save — the user might be reassigning and the duplicate is
+ * intermediate — but we make it visible.
+ */
+function flagDuplicates(): void {
+  const counts = new Map<string, number>();
+  for (const v of Object.values(editedHotkeys)) {
+    if (!v) continue;
+    counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
+  for (const el of Array.from(hotkeysBody.querySelectorAll<HTMLElement>('.hotkey-input'))) {
+    const key = el.dataset.key!;
+    const v = editedHotkeys[key];
+    el.classList.toggle('duplicate', !!v && (counts.get(v) ?? 0) > 1);
+  }
+}
+
+// Reset button on the hotkey card.
+document.getElementById('btn-reset-hotkeys')!.addEventListener('click', () => {
+  for (const k of Object.keys(HOTKEY_LABELS)) {
+    editedHotkeys[k] = DEFAULT_HOTKEYS[k] ?? '';
+  }
+  renderHotkeyRows();
+  setStatus('Hotkeys reset to defaults (not yet saved).');
+});
 
 // ─── browse ────────────────────────────────────────────────────────────
 
@@ -72,10 +212,22 @@ btnSave.addEventListener('click', async () => {
     dirInput.focus();
     return;
   }
+  // Bail early if any binding is empty — the global shortcut layer can't
+  // register an empty accelerator and we'd silently lose the action.
+  for (const [key, combo] of Object.entries(editedHotkeys)) {
+    if (!combo) {
+      setStatus(`Hotkey for "${HOTKEY_LABELS[key]}" cannot be blank.`, true);
+      return;
+    }
+  }
   btnSave.disabled = true;
   setStatus('Saving…');
   try {
-    await api.save({ outputDir: dir, firstRun: false });
+    await api.save({
+      outputDir: dir,
+      firstRun: false,
+      hotkeys: editedHotkeys as never,
+    });
     firstRunBanner.style.display = 'none';
     // Close immediately — no need for user to also hit X.
     api.close();

@@ -12,6 +12,7 @@ interface Window {
       cb: (state: {
         appState: 'idle' | 'selecting' | 'recording' | 'processing';
         processingStep: string | null;
+        startStopHotkey?: string;
       }) => void
     ) => void;
   };

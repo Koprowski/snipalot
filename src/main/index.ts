@@ -166,16 +166,77 @@ function setProcessingStep(step: string): void {
   broadcastStateToLauncher();
 }
 
+/**
+ * Translates a config combo string (always "Ctrl+..." form for portability)
+ * into the Electron globalShortcut accelerator shape ("Control+..." on
+ * Windows/Linux). macOS Command keys aren't in scope today; left as a
+ * future generalization.
+ */
+function toAccelerator(combo: string): string {
+  return combo.replace(/\bCtrl\b/gi, 'Control');
+}
+
 function registerAnnotationHotkey(): void {
-  if (globalShortcut.isRegistered('Control+Shift+N')) return;
-  const ok = globalShortcut.register('Control+Shift+N', handleAnnotationHotkey);
-  log('hotkey', 'Ctrl+Shift+N registered (recording started)', { ok });
+  const accel = toAccelerator(getConfig().hotkeys.annotate);
+  if (globalShortcut.isRegistered(accel)) return;
+  const ok = globalShortcut.register(accel, handleAnnotationHotkey);
+  log('hotkey', `${accel} registered (recording started)`, { ok });
 }
 
 function unregisterAnnotationHotkey(): void {
-  if (!globalShortcut.isRegistered('Control+Shift+N')) return;
-  globalShortcut.unregister('Control+Shift+N');
-  log('hotkey', 'Ctrl+Shift+N unregistered (recording ended)');
+  const accel = toAccelerator(getConfig().hotkeys.annotate);
+  if (!globalShortcut.isRegistered(accel)) return;
+  globalShortcut.unregister(accel);
+  log('hotkey', `${accel} unregistered (recording ended)`);
+}
+
+/**
+ * Wipe all global shortcuts and re-register from current config. Called
+ * once at startup and again whenever the settings save mutates hotkeys.
+ * The annotation hotkey is intentionally NOT registered here — it lives
+ * in registerAnnotationHotkey/unregisterAnnotationHotkey, gated to
+ * recording sessions so it doesn't steal global keystrokes when idle.
+ * If we're currently recording when reload fires, re-arm the annotation
+ * hotkey at the (potentially new) combo.
+ */
+function reloadGlobalHotkeys(): void {
+  globalShortcut.unregisterAll();
+  const hk = getConfig().hotkeys;
+
+  const reg = (combo: string, handler: () => void): void => {
+    const accel = toAccelerator(combo);
+    const ok = globalShortcut.register(accel, handler);
+    log('hotkey', 'register', { combo: accel, ok });
+    if (!ok) {
+      showNotification('Snipalot', `Could not register hotkey: ${accel} (another app owns it)`);
+    }
+  };
+
+  reg(hk.startStop, () => {
+    log('hotkey', 'startStop fired', { appState, activeDisplayId });
+    handleToggleHotkey();
+  });
+  reg(hk.toggleOutline, () => {
+    log('hotkey', 'toggleOutline fired', { appState, activeDisplayId });
+    if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:toggle-outline');
+  });
+  reg(hk.pauseResume, () => {
+    log('hotkey', 'pauseResume fired', { appState });
+    togglePause();
+  });
+  reg(hk.undo, () => {
+    if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-undo');
+  });
+  reg(hk.clear, () => {
+    if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-clear');
+  });
+
+  // Re-arm the recording-only annotation hotkey at the new combo if we're
+  // mid-session. unregisterAll() above already cleared the OLD combo, so
+  // this is just registering the new one.
+  if (appState === 'recording') {
+    registerAnnotationHotkey();
+  }
 }
 
 function handleAnnotationHotkey(): void {
@@ -205,7 +266,14 @@ function handleAnnotationHotkey(): void {
 
 function broadcastStateToLauncher(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  launcherWindow.webContents.send('launcher:state', { appState, processingStep });
+  // Include the current startStop combo so the launcher hint can stay in
+  // sync when the user rebinds it via settings — otherwise the hint text
+  // would lie about the keyboard shortcut.
+  launcherWindow.webContents.send('launcher:state', {
+    appState,
+    processingStep,
+    startStopHotkey: getConfig().hotkeys.startStop,
+  });
 }
 
 function updateLauncherVisibility(): void {
@@ -473,7 +541,16 @@ function openSettings(isFirstRun = false): void {
 ipcMain.handle('settings:get-config', () => getConfig());
 
 ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
+  // Detect a hotkey change so we know whether to re-register globalShortcuts.
+  // We compare the partial.hotkeys keys against current to avoid the cost
+  // of unregistering/re-registering on a save that only touched outputDir.
+  const before = JSON.stringify(getConfig().hotkeys);
   saveConfig(partial);
+  const after = JSON.stringify(getConfig().hotkeys);
+  if (before !== after) {
+    log('hotkey', 'config changed; reloading global shortcuts');
+    reloadGlobalHotkeys();
+  }
   log('settings', 'config saved via IPC', partial);
 });
 
@@ -1207,35 +1284,10 @@ app.whenReady().then(() => {
     rebuildOverlays();
   });
 
-  function regShortcut(combo: string, handler: () => void): void {
-    const ok = globalShortcut.register(combo, handler);
-    log('hotkey', 'register', { combo, ok });
-    if (!ok) {
-      // Another app has the hotkey. Surface this so the user knows.
-      showNotification('Snipalot', `Could not register hotkey: ${combo} (another app owns it)`);
-    }
-  }
-
-  // Ctrl+Shift+N is registered/unregistered dynamically in setAppState so it
-  // only captures keystrokes from the OS while a recording is active.
-  regShortcut('Control+Shift+R', () => {
-    log('hotkey', 'Ctrl+Shift+R fired', { appState, activeDisplayId });
-    handleToggleHotkey();
-  });
-  regShortcut('Control+Shift+H', () => {
-    log('hotkey', 'Ctrl+Shift+H fired', { appState, activeDisplayId });
-    if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:toggle-outline');
-  });
-  regShortcut('Control+Shift+P', () => {
-    log('hotkey', 'Ctrl+Shift+P fired', { appState });
-    togglePause();
-  });
-  regShortcut('Control+Z', () => {
-    if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-undo');
-  });
-  regShortcut('Control+Shift+C', () => {
-    if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-clear');
-  });
+  // Initial registration. Kept inside whenReady so app.isReady() is true
+  // before globalShortcut.register is touched. After this, hotkey changes
+  // from the settings UI route through reloadGlobalHotkeys().
+  reloadGlobalHotkeys();
 
   if (isSpikeM1) {
     log(

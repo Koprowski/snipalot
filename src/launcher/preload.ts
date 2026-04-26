@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('snipalotLauncher', {
   record: () => ipcRenderer.invoke('launcher:record'),
+  screenshot: () => ipcRenderer.invoke('launcher:screenshot'),
   cancel: () => ipcRenderer.invoke('launcher:cancel'),
   quit: () => ipcRenderer.invoke('launcher:quit'),
   settings: () => ipcRenderer.invoke('launcher:settings'),
@@ -10,7 +11,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     ipcRenderer.invoke('log', `launcher:${scope}`, ...args),
   onState: (
     cb: (state: {
-      appState: 'idle' | 'selecting' | 'recording' | 'processing';
+      appState: 'idle' | 'selecting' | 'selecting-screenshot' | 'recording' | 'processing';
       processingStep: string | null;
       startStopHotkey?: string;
     }) => void

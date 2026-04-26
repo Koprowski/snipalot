@@ -165,6 +165,48 @@ body {
   border-color: #fbbf24;
 }
 
+/* Screenshot button — sibling to Record. Uses a calm blue accent so the
+   two primary actions read as visually distinct (red = "live recording
+   in progress", blue = "one-shot capture"). Same flex:1 footprint as
+   Record so the row splits 50/50. */
+.btn-screenshot {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #2563eb;
+  border: 1px solid #2563eb;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 80ms ease;
+}
+
+.btn-screenshot:hover {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.btn-screenshot.selecting {
+  background: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.btn-screenshot.selecting:hover {
+  background: #fbbf24;
+  border-color: #fbbf24;
+}
+
+.btn-screenshot:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Disabled-looking blue while the pipeline runs. Click is also blocked
    via the .disabled property in JS to keep keyboard activation off too. */
 .btn-primary.processing {

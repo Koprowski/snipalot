@@ -3,6 +3,7 @@
 interface Window {
   snipalotLauncher: {
     record: () => Promise<void>;
+    screenshot: () => Promise<void>;
     cancel: () => Promise<void>;
     quit: () => Promise<void>;
     settings: () => Promise<void>;
@@ -10,7 +11,12 @@ interface Window {
     log: (scope: string, ...args: unknown[]) => Promise<void>;
     onState: (
       cb: (state: {
-        appState: 'idle' | 'selecting' | 'recording' | 'processing';
+        appState:
+          | 'idle'
+          | 'selecting'
+          | 'selecting-screenshot'
+          | 'recording'
+          | 'processing';
         processingStep: string | null;
         startStopHotkey?: string;
       }) => void

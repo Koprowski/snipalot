@@ -65,7 +65,7 @@ let launcherWindow: BrowserWindow | null = null;
  */
 let hudKeepOnTopInterval: NodeJS.Timeout | null = null;
 
-type AppState = 'idle' | 'selecting' | 'recording' | 'processing';
+type AppState = 'idle' | 'selecting' | 'selecting-screenshot' | 'recording' | 'processing';
 let appState: AppState = 'idle';
 /**
  * When appState === 'processing', this carries the current pipeline step
@@ -412,7 +412,9 @@ function createRecorderWindow(): BrowserWindow {
 
 function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
-  const w = 340;
+  // Wider than the original 340px to comfortably fit two primary actions
+  // (Record + Screenshot) side by side without their labels truncating.
+  const w = 380;
   // Custom title bar is 28px + content ~112px (header 20, gap 8, controls 32,
   // gap 8, hint 16, padding 20). No need for extra slack.
   const h = 140;
@@ -783,6 +785,54 @@ function showNotification(title: string, body: string): void {
   new Notification({ title, body, silent: false }).show();
 }
 
+/**
+ * Single-frame capture for the Screenshot flow. Asks desktopCapturer for
+ * a thumbnail of the chosen display at the display's full device pixel
+ * resolution, then crops it to the user-selected region. Returns a PNG
+ * buffer ready to be encoded as a data URL for the annotator.
+ *
+ * The `regionPct` is in normalized [0..1] of the display's logical
+ * (CSS-pixel) bounds, so we multiply by display.size in device pixels
+ * to get the crop rect that lines up with the thumbnail. The thumbnail
+ * itself is requested at device resolution (logical * scaleFactor) so
+ * cropping doesn't scale or lose detail.
+ */
+async function captureStillFrame(
+  displayId: string,
+  regionPct: { xPct: number; yPct: number; wPct: number; hPct: number }
+): Promise<Buffer | null> {
+  const display = screen.getAllDisplays().find((d) => String(d.id) === displayId);
+  if (!display) {
+    log('screenshot', 'captureStillFrame: display not found', { displayId });
+    return null;
+  }
+  const devW = Math.round(display.bounds.width * display.scaleFactor);
+  const devH = Math.round(display.bounds.height * display.scaleFactor);
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: devW, height: devH },
+  });
+  const source = sources.find((s) => s.display_id === displayId) ?? sources[0];
+  if (!source) {
+    log('screenshot', 'captureStillFrame: no source matched', { displayId });
+    return null;
+  }
+  const thumb = source.thumbnail;
+  const ts = thumb.getSize();
+  // The crop rect is in DEVICE pixels (matches the thumbnail's own units).
+  const cropX = Math.round(regionPct.xPct * ts.width);
+  const cropY = Math.round(regionPct.yPct * ts.height);
+  const cropW = Math.max(2, Math.round(regionPct.wPct * ts.width));
+  const cropH = Math.max(2, Math.round(regionPct.hPct * ts.height));
+  log('screenshot', 'cropping thumbnail', {
+    displayId,
+    thumbSize: ts,
+    cropRect: { x: cropX, y: cropY, w: cropW, h: cropH },
+  });
+  const cropped = thumb.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
+  return cropped.toPNG();
+}
+
 // ffmpeg webm → mp4 logic lives in ./pipeline.ts now.
 
 // ─── shared state-machine actions ────────────────────────────────────
@@ -796,8 +846,24 @@ function enterSelecting(): void {
   broadcastOverlay('overlay:enter-region-select');
 }
 
+/**
+ * Region-select for the Screenshot flow. Same overlay UI as record-mode
+ * region-select; the post-confirm branch in overlay:region-confirmed
+ * decides whether to start MediaRecorder (record) or call captureStillFrame
+ * + openAnnotator (screenshot). The caller of this function is launcher's
+ * Screenshot button.
+ */
+function enterSelectingScreenshot(): void {
+  if (appState !== 'idle') {
+    log('state', 'enterSelectingScreenshot ignored', { appState });
+    return;
+  }
+  setAppState('selecting-screenshot', 'screenshot button from idle');
+  broadcastOverlay('overlay:enter-region-select');
+}
+
 function exitSelecting(reason: string): void {
-  if (appState !== 'selecting') return;
+  if (appState !== 'selecting' && appState !== 'selecting-screenshot') return;
   setAppState('idle', `exitSelecting: ${reason}`);
   broadcastOverlay('overlay:exit-region-select');
   pendingRegion = null;
@@ -891,10 +957,12 @@ ipcMain.handle(
   'overlay:region-confirmed',
   async (_evt, payload: { displayId: string; rect: OverlayRect }) => {
     log('overlay', 'region-confirmed received', payload);
-    if (appState !== 'selecting') {
+    if (appState !== 'selecting' && appState !== 'selecting-screenshot') {
       log('overlay', 'ignoring region-confirmed (wrong state)', { appState });
       return;
     }
+    const intent: 'record' | 'screenshot' =
+      appState === 'selecting-screenshot' ? 'screenshot' : 'record';
 
     const display = screen
       .getAllDisplays()
@@ -917,8 +985,41 @@ ipcMain.handle(
       wPct: clippedW / display.bounds.width,
       hPct: clippedH / display.bounds.height,
     };
-    log('overlay', 'computed region', { region, displayBounds: display.bounds });
+    log('overlay', 'computed region', { region, displayBounds: display.bounds, intent });
 
+    // ── SCREENSHOT branch: capture single PNG, queue for annotator, open. ──
+    if (intent === 'screenshot') {
+      try {
+        const png = await captureStillFrame(payload.displayId, region);
+        if (!png) {
+          showNotification('Snipalot', 'Screenshot capture failed (no source)');
+          setAppState('idle', 'screenshot capture failed');
+          broadcastOverlay('overlay:exit-region-select');
+          return;
+        }
+        const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
+        pendingAnnotatorImage = {
+          dataUrl,
+          sessionStamp: formatSessionStamp(new Date()),
+        };
+        log('screenshot', 'captured + queued for annotator', {
+          bytes: png.length,
+          sessionStamp: pendingAnnotatorImage.sessionStamp,
+        });
+        // Drop region-select state, hide the overlay, then open the annotator.
+        setAppState('idle', 'screenshot captured');
+        broadcastOverlay('overlay:exit-region-select');
+        openAnnotator();
+      } catch (err) {
+        log('screenshot', 'capture error', { err: (err as Error).message });
+        showNotification('Snipalot', `Screenshot failed: ${(err as Error).message}`);
+        setAppState('idle', 'screenshot error');
+        broadcastOverlay('overlay:exit-region-select');
+      }
+      return;
+    }
+
+    // ── RECORD branch: existing flow. ──
     const sources = await desktopCapturer.getSources({ types: ['screen'] });
     log('overlay', 'desktopCapturer sources', sources.map((s) => ({
       id: s.id,
@@ -1253,7 +1354,15 @@ ipcMain.handle('launcher:record', () => {
 
 ipcMain.handle('launcher:cancel', () => {
   log('launcher', 'cancel click', { appState });
-  if (appState === 'selecting') exitSelecting('launcher cancel');
+  if (appState === 'selecting' || appState === 'selecting-screenshot') {
+    exitSelecting('launcher cancel');
+  }
+});
+
+ipcMain.handle('launcher:screenshot', () => {
+  log('launcher', 'screenshot click', { appState });
+  if (appState === 'idle') enterSelectingScreenshot();
+  else if (appState === 'selecting-screenshot') exitSelecting('screenshot toggle');
 });
 
 ipcMain.handle('launcher:quit', () => {

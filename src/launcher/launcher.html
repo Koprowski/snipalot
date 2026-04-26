@@ -28,13 +28,23 @@
       </div>
       <div class="controls">
         <button id="btn-primary" class="btn-primary" title="Record">
-          <!-- Play-triangle glyph; replaces the original white dot. The
-               sibling Screenshot button (when issue #1 ships) will use a
+          <!-- Play-triangle glyph; sibling Screenshot button uses a
                camera glyph for visual symmetry. -->
           <svg class="btn-glyph" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
             <polygon points="2,1 11,6 2,11" fill="currentColor"/>
           </svg>
           <span id="btn-label">Record</span>
+        </button>
+        <button id="btn-screenshot" class="btn-screenshot" title="Screenshot">
+          <!-- Camera glyph: rounded body (rect), viewfinder hump (small
+               rect on top), and lens (circle). currentColor inherits
+               from the button so it re-tints with the active state. -->
+          <svg class="btn-glyph" width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
+            <rect x="4.2" y="0.5" width="3.6" height="1.6" rx="0.4" fill="currentColor"/>
+            <rect x="0.5" y="2" width="11" height="9" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.1"/>
+            <circle cx="6" cy="6.5" r="2.4" fill="none" stroke="currentColor" stroke-width="1.1"/>
+          </svg>
+          <span id="btn-screenshot-label">Screenshot</span>
         </button>
       </div>
       <div class="hint" id="hint">Click Record to select a region</div>

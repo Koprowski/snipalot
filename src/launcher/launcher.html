@@ -28,7 +28,12 @@
       </div>
       <div class="controls">
         <button id="btn-primary" class="btn-primary" title="Record">
-          <span class="btn-dot"></span>
+          <!-- Play-triangle glyph; replaces the original white dot. The
+               sibling Screenshot button (when issue #1 ships) will use a
+               camera glyph for visual symmetry. -->
+          <svg class="btn-glyph" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <polygon points="2,1 11,6 2,11" fill="currentColor"/>
+          </svg>
           <span id="btn-label">Record</span>
         </button>
       </div>

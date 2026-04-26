@@ -183,11 +183,12 @@ body {
   cursor: progress;
 }
 
-.btn-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #fff;
+/* Glyph slot inside .btn-primary. Sized to match the prior 10px dot
+   (12px svg with internal padding lands roughly the same optically).
+   currentColor inherits #fff from the button so it matches the label. */
+.btn-glyph {
+  flex-shrink: 0;
+  color: #fff;
 }
 
 .btn-icon {

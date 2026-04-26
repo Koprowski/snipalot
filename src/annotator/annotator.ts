@@ -80,6 +80,25 @@
     interLayer.style.cursor = tool === 'select' ? 'default' : 'crosshair';
   }
 
+  // ── INITIAL IMAGE FROM HOST ────────────────────────────────────────────────
+  // Snipalot can pre-load an image when the annotator window opens (e.g. via
+  // the upcoming region-select capture flow). The IPC returns null when the
+  // window is opened standalone (dev preview from the tray), and we fall
+  // back to the existing paste-on-Ctrl+V behavior in that case.
+  if (window.snipalotAnnotator?.getInitialImage) {
+    window.snipalotAnnotator.getInitialImage().then((img) => {
+      if (!img) return;
+      void window.snipalotAnnotator.log('init', 'preloaded image from host', {
+        bytes: img.dataUrl.length,
+        sessionStamp: img.sessionStamp,
+      });
+      // Convert the data URL into a Blob and feed the existing loader.
+      fetch(img.dataUrl).then((r) => r.blob()).then(loadImageBlob);
+    }).catch((err) => {
+      console.warn('getInitialImage failed; staying on drop zone', err);
+    });
+  }
+
   // ── PASTE IMAGE ────────────────────────────────────────────────────────────
   document.addEventListener('paste', handlePaste);
   function triggerPaste() {
@@ -1573,145 +1592,25 @@
     });
   }
 
-  const DEFAULT_saveRoot = 'C:\\Tools\\annotator-screenshots';
-  let saveRoot = localStorage.getItem('annotator-save-path') || DEFAULT_saveRoot;
-  let savedDirHandle = null; // cached handle to save directory
-
+  // Save path is implicit in Snipalot: the main process writes into
+  // {outputDir}/{stamp} screenshot/. The standalone "Set Path" button
+  // and localStorage memory are no longer relevant — milestone 4 will
+  // route saveSession() through the annotator:save IPC instead.
   function changeSavePath() {
-    const newPath = prompt(
-      'Set the hardcoded parent directory path.\n\n' +
-      'This is the path string copied to your clipboard after saving.\n' +
-      'Make sure it matches the folder you grant access to when saving.',
-      saveRoot
-    );
-    if (newPath && newPath.trim()) {
-      saveRoot = newPath.trim().replace(/[\\/]+$/, '');
-      localStorage.setItem('annotator-save-path', saveRoot);
-      savedDirHandle = null; // force re-pick on next save
-      alert(`Hardcoded path updated to:\n${saveRoot}\n\nOn next save, you'll need to grant access to this folder.`);
-    }
+    alert('Save path is set in Snipalot Settings → Output Folder.');
   }
 
   async function saveSession() {
+    // M2 placeholder: logs the click and shows a toast on the save buttons.
+    // M4 wires this to ipcRenderer.invoke('annotator:save', ...) which will:
+    //   1. mkdir {outputDir}/{stamp} screenshot/
+    //   2. write annotated PNG + prompt.md
+    //   3. clipboard.writeText(promptText)
+    //   4. close the annotator window via annotator:close
     if (!image) { alert('Paste a screenshot first before saving.'); return; }
-
-    // Use local system time; fall back to America/New_York if unavailable
-    const tsNow = new Date();
-    let localDate;
-    try {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
-      const parts = new Intl.DateTimeFormat('sv-SE', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(tsNow);
-      const get = type => parts.find(p => p.type === type)?.value || '';
-      localDate = `${get('year')}-${get('month')}-${get('day')}-${get('hour')}${get('minute')}`;
-    } catch {
-      const est = new Date(tsNow.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const pad = n => String(n).padStart(2, '0');
-      localDate = `${est.getFullYear()}-${pad(est.getMonth()+1)}-${pad(est.getDate())}-${pad(est.getHours())}${pad(est.getMinutes())}`;
+    if (window.snipalotAnnotator) {
+      void window.snipalotAnnotator.log('save', 'M2 placeholder fired (real save lands in M4)');
     }
-    const dateStr = localDate;
-    const context = document.getElementById('context-input').value.trim();
-    const slug = context ? '-' + context.replace(/[^a-z0-9]/gi, '-').toLowerCase().slice(0, 30) : '';
-    const baseName = `${dateStr}${slug}`;
-
-    // ── 1. ANNOTATED PNG ─────────────────────────────────────────────────────
-    const composite = document.createElement('canvas');
-    composite.width = baseCanvas.width;
-    composite.height = baseCanvas.height;
-    const cx = composite.getContext('2d');
-    cx.drawImage(baseCanvas, 0, 0);
-    // Draw overlay images (between base and annotations)
-    overlays.forEach(ov => cx.drawImage(ov.imgObj, ov.x, ov.y, ov.w, ov.h));
-    cx.drawImage(drawCanvas, 0, 0);
-
-    // Stamp numbered legend at bottom-right corner
-    const legendLines = annotations.map((ann, i) => {
-      const label = ann.note ? ann.note.slice(0, 60) + (ann.note.length > 60 ? '…' : '') : '(no note)';
-      return { num: i + 1, color: ann.color, type: ann.type || 'improvement', label };
-    });
-
-    if (legendLines.length > 0) {
-      const lineH = 20;
-      const padding = 12;
-      const legendH = legendLines.length * lineH + padding * 2;
-      const legendW = Math.min(composite.width, 600);
-      const lx = composite.width - legendW - 12;
-      const ly = composite.height - legendH - 12;
-
-      cx.fillStyle = 'rgba(0,0,0,0.78)';
-      cx.beginPath();
-      cx.roundRect(lx, ly, legendW, legendH, 8);
-      cx.fill();
-
-      cx.font = 'bold 12px -apple-system, Arial, sans-serif';
-      legendLines.forEach((item, i) => {
-        const y = ly + padding + i * lineH + 12;
-        cx.fillStyle = item.color;
-        cx.fillText(`#${item.num}`, lx + padding, y);
-        cx.fillStyle = '#e8eaf6';
-        cx.font = '11px -apple-system, Arial, sans-serif';
-        cx.fillText(item.label, lx + padding + 30, y);
-        cx.font = 'bold 12px -apple-system, Arial, sans-serif';
-      });
-    }
-
-    // ── 2. MARKDOWN FEEDBACK FILE ────────────────────────────────────────────
-    const typeEmoji = { bug: '🐛', improvement: '💡', question: '❓', praise: '✅' };
-    let md = [];
-    md.push(`# Screenshot Feedback Session`);
-    md.push(`**Date:** ${tsNow.toLocaleDateString()} ${tsNow.toLocaleTimeString()}`);
-    if (context) md.push(`**Context:** ${context}`);
-    md.push(`**Annotated image:** ${baseName}.png`);
-    md.push(`**Total annotations:** ${annotations.length}`);
-    md.push('');
-    md.push('---');
-    md.push('');
-    md.push('## How to use this file in a new conversation');
-    md.push('');
-    md.push(`1. Drag **${baseName}.png** into the chat so Claude can see the annotated screenshot`);
-    md.push('2. Paste the **Feedback Prompt** section below into the message');
-    md.push('3. Claude will apply all numbered changes');
-    md.push('');
-    md.push('---');
-    md.push('');
-    md.push('## Feedback Prompt');
-    md.push('');
-    md.push('*(paste this into Claude)*');
-    md.push('');
-    md.push('```');
-
-    const groups = { bug: [], improvement: [], question: [], praise: [] };
-    annotations.forEach((ann, i) => groups[ann.type || 'improvement'].push({ num: i + 1, note: ann.note || '(no note)' }));
-
-    if (context) md.push(`Context: ${context}\n`);
-    md.push(`I've annotated a screenshot with ${annotations.length} note${annotations.length !== 1 ? 's' : ''}. Please apply the following feedback:\n`);
-
-    ['bug', 'improvement', 'question', 'praise'].forEach(type => {
-      if (groups[type].length > 0) {
-        md.push(`${typeEmoji[type]} ${type.charAt(0).toUpperCase() + type.slice(1)}s:`);
-        groups[type].forEach(item => md.push(`  #${item.num}: ${item.note}`));
-        md.push('');
-      }
-    });
-
-    md.push('Please make all changes in the file, keeping the same overall structure. Address each numbered item.');
-    md.push('```');
-    md.push('');
-    md.push('---');
-    md.push('');
-    md.push('## Annotation Details');
-    md.push('');
-    annotations.forEach((ann, i) => {
-      const s = ann.shape || (ann.isArrow ? 'arrow' : 'highlight');
-      const shapeLabel = s === 'highlight' ? `Highlight (${Math.round(Math.abs(ann.w||0))}×${Math.round(Math.abs(ann.h||0))}px)` : s.charAt(0).toUpperCase()+s.slice(1);
-      const shape = shapeLabel;
-      md.push(`### #${i + 1} — ${typeEmoji[ann.type || 'improvement']} ${(ann.type || 'improvement').charAt(0).toUpperCase() + (ann.type || 'improvement').slice(1)}`);
-      md.push(`- **Shape:** ${shape}`);
-      md.push(`- **Color:** ${ann.color}`);
-      md.push(`- **Note:** ${ann.note || '*(no note)*'}`);
-      md.push('');
-    });
-
-    const mdContent = md.join('\n');
     const saveBtns = [document.getElementById('save-btn'), document.getElementById('toolbar-save-btn')].filter(Boolean);
     const setSaveBtnText = (txt) => saveBtns.forEach(b => {
       const orig = b.dataset.origText || b.textContent;
@@ -1721,72 +1620,7 @@
     const restoreSaveBtnText = () => saveBtns.forEach(b => {
       if (b.dataset.origText) b.textContent = b.dataset.origText;
     });
-
-    // Build the clipboard payload: full feedback prompt followed by the saved folder path.
-    const promptText = document.getElementById('prompt-box')?.value || buildPromptText();
-
-    // ── 3. SAVE TO C:\Tools\annotator-screenshots via File System Access API ─
-    if ('showDirectoryPicker' in window) {
-      try {
-        // First save: user selects the save directory directly
-        if (!savedDirHandle) {
-          savedDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-        }
-
-        // Create a subfolder for this session
-        const folderHandle = await savedDirHandle.getDirectoryHandle(baseName, { create: true });
-
-        // Write PNG
-        const pngFileHandle = await folderHandle.getFileHandle(`${baseName}.png`, { create: true });
-        const pngWritable = await pngFileHandle.createWritable();
-        const pngBlob = await new Promise(resolve => composite.toBlob(resolve, 'image/png'));
-        await pngWritable.write(pngBlob);
-        await pngWritable.close();
-
-        // Write Markdown
-        const mdFileHandle = await folderHandle.getFileHandle(`${baseName}.md`, { create: true });
-        const mdWritable = await mdFileHandle.createWritable();
-        await mdWritable.write(new Blob([mdContent], { type: 'text/markdown' }));
-        await mdWritable.close();
-
-        // Copy full prompt + saved folder path to clipboard
-        const folderPath = `${saveRoot}\\${baseName}`;
-        const clipboardPayload = `${promptText}\n\n---\n📁 Saved files: ${folderPath}\n   • ${baseName}.png (annotated screenshot)\n   • ${baseName}.md (full feedback details)`;
-        await navigator.clipboard.writeText(clipboardPayload);
-
-        setSaveBtnText('✓ Saved + prompt copied!');
-        setTimeout(restoreSaveBtnText, 3000);
-        return;
-      } catch (err) {
-        if (err.name === 'AbortError') return;
-        console.warn('File System Access API failed, falling back to downloads:', err);
-        savedDirHandle = null;
-      }
-    }
-
-    // ── FALLBACK: browser download (for browsers without File System Access API)
-    composite.toBlob(pngBlob => {
-      const pngUrl = URL.createObjectURL(pngBlob);
-      const pngLink = document.createElement('a');
-      pngLink.href = pngUrl;
-      pngLink.download = `${baseName}.png`;
-      pngLink.click();
-      setTimeout(() => URL.revokeObjectURL(pngUrl), 5000);
-    }, 'image/png');
-
-    const mdBlob = new Blob([mdContent], { type: 'text/markdown' });
-    const mdUrl = URL.createObjectURL(mdBlob);
-    const mdLink = document.createElement('a');
-    mdLink.href = mdUrl;
-    mdLink.download = `${baseName}.md`;
-    setTimeout(() => {
-      mdLink.click();
-      setTimeout(() => URL.revokeObjectURL(mdUrl), 5000);
-    }, 300);
-
-    // Fallback path also copies the prompt (no folder path available in download mode)
-    try { await navigator.clipboard.writeText(promptText); } catch {}
-    setSaveBtnText('✓ Saved + prompt copied!');
+    setSaveBtnText('⏳ Save lands in M4');
     setTimeout(restoreSaveBtnText, 2500);
   }
 

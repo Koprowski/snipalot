@@ -208,6 +208,10 @@
     align-items: flex-start;
     justify-content: flex-start;
     padding: 24px;
+    /* Containing block for the .drop-zone child (position:absolute; inset:0).
+       Without this, the drop zone escapes up to the body and its dashed
+       border bleeds through the toolbar above. */
+    position: relative;
   }
 
   .canvas-wrap {

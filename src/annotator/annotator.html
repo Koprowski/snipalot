@@ -59,7 +59,8 @@
   <button class="tool-btn" id="btn-paste-overlay" onclick="pasteOverlayImage()">🖼 Paste Overlay</button>
   <button class="tool-btn" id="btn-crop-overlay" onclick="startCropMode()" title="Crop selected overlay image">✂ Crop Overlay</button>
   <button class="tool-btn danger" onclick="clearAll()">🗑 Clear All</button>
-  <button class="tool-btn" onclick="changeSavePath()" title="Change the hardcoded parent directory used for clipboard path">⚙ Set Path</button>
+  <!-- Set Path button removed in M2: save path is Snipalot's outputDir,
+       configured in the main settings panel, not here. -->
   <span id="scale-indicator" style="display:none;font-size:11px;color:var(--muted);white-space:nowrap;margin-left:4px"></span>
   <div class="toolbar-spacer"></div>
   <button class="tool-btn save-prominent" id="toolbar-save-btn" onclick="saveSession()" title="Save Session (Ctrl+S)">💾 Save Session</button>
@@ -77,9 +78,7 @@
         <h2>Paste your screenshot</h2>
         <p>Press <kbd>Ctrl+V</kbd> anywhere to paste a screenshot from your clipboard.<br><br>Then draw highlights over areas you want to annotate, add notes in the sidebar, and copy the feedback prompt to send back to Claude.</p>
         <p style="margin-top:16px;font-size:11px;color:#6b7280;line-height:1.7">
-          <strong>Save location:</strong> Files are saved to <kbd>C:\Tools\annotator-screenshots</kbd>.<br>
-          On first save, you'll be asked to select <kbd>C:\Tools</kbd> to grant access — the <kbd>annotator-screenshots</kbd> subfolder is created automatically.<br>
-          <em>Note: <kbd>C:\Tools</kbd> must exist on your system. If it doesn't, create it first or files will download to your Downloads folder instead.</em>
+          When opened from the Snipalot launcher, this window will be pre-loaded with your captured region — no paste needed. Save writes the annotated screenshot and prompt to your Snipalot output folder (Settings → Output Folder).
         </p>
       </div>
     </div>

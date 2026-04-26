@@ -513,14 +513,21 @@ let settingsWindow: BrowserWindow | null = null;
 
 // ─── settings window ──────────────────────────────────────────────────
 
-// ─── annotator window (Milestone 1: dev preview only) ────────────────
+// ─── annotator window ────────────────────────────────────────────────
 //
-// Opens the ported screenshot-annotator in a Snipalot BrowserWindow. For
-// Milestone 1 we wire this up purely as a dev surface — a tray menu entry
-// triggers it so we can verify the canvas, shape tools, and prompt
-// preview survive the port without regressions. Later milestones add the
-// region-select capture flow that actually preloads a captured PNG.
+// Opens the ported screenshot-annotator in a Snipalot BrowserWindow.
+// The dev-preview tray entry opens it standalone (no preloaded image —
+// user pastes via Ctrl+V). M3+ adds the region-select capture flow that
+// stages a PNG buffer in `pendingAnnotatorImage` before opening the
+// window; the renderer then pulls it via the annotator:get-initial-image
+// IPC on boot.
 let annotatorWindow: BrowserWindow | null = null;
+/**
+ * Image queued for the next annotator window to load on boot. Cleared
+ * after the renderer fetches it. Null when the annotator is opened
+ * standalone (e.g. via the tray dev-preview entry).
+ */
+let pendingAnnotatorImage: { dataUrl: string; sessionStamp: string } | null = null;
 
 function openAnnotator(): void {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) {
@@ -561,8 +568,16 @@ function openAnnotator(): void {
     annotatorWindow = null;
     log('main', 'annotator closed');
   });
-  log('main', 'annotator opened (dev preview)');
+  log('main', 'annotator opened', { hasPreloadedImage: pendingAnnotatorImage !== null });
 }
+
+// IPC: renderer pulls the preloaded image on boot. Returns null when no
+// image is queued (dev-preview tray entry or any standalone open).
+ipcMain.handle('annotator:get-initial-image', () => {
+  const img = pendingAnnotatorImage;
+  pendingAnnotatorImage = null;
+  return img;
+});
 
 function openSettings(isFirstRun = false): void {
   if (settingsWindow && !settingsWindow.isDestroyed()) {

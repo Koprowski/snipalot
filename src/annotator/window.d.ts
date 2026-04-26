@@ -3,5 +3,6 @@
 interface Window {
   snipalotAnnotator: {
     log: (scope: string, ...args: unknown[]) => Promise<void>;
+    getInitialImage: () => Promise<{ dataUrl: string; sessionStamp: string } | null>;
   };
 }

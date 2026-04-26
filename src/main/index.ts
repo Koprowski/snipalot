@@ -527,15 +527,23 @@ function openAnnotator(): void {
     annotatorWindow.focus();
     return;
   }
-  const primary = screen.getPrimaryDisplay();
-  const w = 1280;
-  const h = 800;
+  // Size to the active display's full work area instead of a hardcoded
+  // 1280×800. On a 1280-wide display the prior fixed size left no room
+  // for the toolbar to render its full intrinsic width, so even with
+  // flex-wrap the user only saw partial content. Using the work area
+  // also matches what an annotator-on-a-screenshot workflow wants —
+  // maximum canvas room for the captured image.
+  const cursor = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursor);
+  const wa = display.workArea;
   const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
   annotatorWindow = new BrowserWindow({
-    width: w,
-    height: h,
-    x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
-    y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
+    width: wa.width,
+    height: wa.height,
+    x: wa.x,
+    y: wa.y,
+    minWidth: 720,
+    minHeight: 480,
     title: 'Snipalot · Annotator',
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     backgroundColor: '#0f1117',

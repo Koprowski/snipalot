@@ -179,10 +179,18 @@ async function webmToMp4(webmPath: string, mp4Path: string): Promise<void> {
   // drops that to ~30-40s on the same machine. Trade-off is ~2x file
   // size at the same CRF, which for short feedback clips lands at maybe
   // 25 MB instead of 12 MB. Worth it for the responsiveness.
+  //
+  // Also caps height at 1080p. The user's effective capture is 4K but
+  // the only consumers of the mp4 are (a) human playback and (b) the
+  // tail snapshot-final PNG extraction. 1080p is fine for both, and
+  // halves both the encode time and the file size. The min(1080,ih)
+  // means small captures pass through untouched. The trunc(.../2)*2
+  // shenanigans are because libx264 requires even dimensions.
   await runFfmpeg(
     [
       '-y',
       '-i', webmPath,
+      '-vf', "scale=trunc(iw*min(1\\,1080/ih)/2)*2:trunc(min(ih\\,1080)/2)*2",
       '-c:v', 'libx264',
       '-crf', '23',
       '-preset', 'ultrafast',
@@ -194,22 +202,27 @@ async function webmToMp4(webmPath: string, mp4Path: string): Promise<void> {
       '-movflags', '+faststart',
       mp4Path,
     ],
-    'webm→mp4 (forced CFR 30fps)'
+    'webm→mp4 (CFR 30fps, ≤1080p)'
   );
 }
 
-async function mp4ToWav(mp4Path: string, wavPath: string): Promise<void> {
-  // 16 kHz mono PCM is what whisper.cpp expects.
+async function webmToWav(webmPath: string, wavPath: string): Promise<void> {
+  // Audio-only extraction directly from webm. Used to feed whisper without
+  // waiting on the (slower) video transcode step. The Opus → PCM pass is
+  // <1s on a 7-min recording, so this lets whisper kick off almost
+  // immediately after stop. -vn drops the video stream so we don't burn
+  // cycles decoding frames we'll throw away.
   await runFfmpeg(
     [
       '-y',
-      '-i', mp4Path,
+      '-i', webmPath,
+      '-vn',
       '-ar', '16000',
       '-ac', '1',
       '-c:a', 'pcm_s16le',
       wavPath,
     ],
-    'mp4→wav (16kHz mono)'
+    'webm→wav (16kHz mono, audio-only)'
   );
 }
 
@@ -843,24 +856,26 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   fs.writeFileSync(webmPath, input.webmBuffer);
   log('pipeline', 'wrote webm', { bytes: input.webmBuffer.length });
 
-  // 2. webm → mp4 (at parent level — overwrites the previous "latest").
-  step('Converting video to MP4…');
-  try {
-    await webmToMp4(webmPath, mp4Path);
-    log('pipeline', 'mp4 written (latest, parent level)', { mp4Path });
-  } catch (err) {
-    warnings.push(`mp4 conversion failed: ${(err as Error).message}`);
-    log('pipeline', 'mp4 fail', { err: String(err) });
-  }
-
-  // 3-4. mp4 → wav → whisper → transcript.txt (skipped if whisper is missing)
+  // 2-5. Parallel branches: audio (whisper) and video (mp4 + gif). Both
+  //      read directly from the webm. Whisper is the long pole (~60s on
+  //      a 7-min clip); mp4 transcode is ~30-40s; gif is ~30s. Running
+  //      them in parallel lets the prompt + clipboard land at roughly
+  //      max(whisper, mp4+gif) instead of their sum.
   let finalTranscriptPath: string | null = null;
   let transcriptSegments: TranscriptSegment[] = [];
+
+  // ── Branch A: webm → wav → whisper → transcript.txt ────────────────
   const whisper = findWhisperBinary();
-  if (whisper && fs.existsSync(mp4Path)) {
+  const audioBranch = (async () => {
+    if (!whisper) {
+      warnings.push(
+        'whisper.cpp + model not installed — run `npm run fetch-resources`; skipped transcription'
+      );
+      return;
+    }
     try {
       step('Extracting audio…');
-      await mp4ToWav(mp4Path, wavPath);
+      await webmToWav(webmPath, wavPath);
       const whisperOutPrefix = path.join(sessionDir, 'whisper-out');
       step('Transcribing speech (whisper)…');
       await runWhisper(whisper.exe, whisper.model, wavPath, whisperOutPrefix);
@@ -870,34 +885,34 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         transcriptSegments = parseSrtToTranscript(srt);
         fs.writeFileSync(transcriptPath, transcriptSegments.map((s) => s.text).join('\n') + '\n', 'utf-8');
         finalTranscriptPath = transcriptPath;
-        try {
-          fs.unlinkSync(srtPath);
-        } catch {
-          /* ignore */
-        }
+        try { fs.unlinkSync(srtPath); } catch { /* ignore */ }
       } else {
         warnings.push('whisper ran but produced no SRT');
       }
     } catch (err) {
       warnings.push(`whisper failed: ${(err as Error).message}`);
       log('pipeline', 'whisper fail', { err: String(err) });
+    } finally {
+      try { fs.unlinkSync(wavPath); } catch { /* ignore */ }
     }
-    try {
-      fs.unlinkSync(wavPath);
-    } catch {
-      /* ignore */
-    }
-  } else {
-    warnings.push(
-      whisper
-        ? 'whisper present but mp4 missing; skipped transcription'
-        : 'whisper.cpp + model not installed — run `npm run fetch-resources`; skipped transcription'
-    );
-  }
+  })();
 
-  // 5. mp4 → gif (kept on disk for the human's visual review; not shared
-  //    with the LLM since it can't read animated frames).
-  if (fs.existsSync(mp4Path)) {
+  // ── Branch B: webm → mp4 → gif ─────────────────────────────────────
+  // gif waits on mp4 (it reads from the normalized CFR mp4). The mp4
+  // also gates the chapter PNG extraction below, so we expose the mp4
+  // promise separately and await it before the chapters step.
+  const mp4Promise = (async () => {
+    step('Converting video to MP4…');
+    try {
+      await webmToMp4(webmPath, mp4Path);
+      log('pipeline', 'mp4 written (latest, parent level)', { mp4Path });
+    } catch (err) {
+      warnings.push(`mp4 conversion failed: ${(err as Error).message}`);
+      log('pipeline', 'mp4 fail', { err: String(err) });
+    }
+  })();
+  const gifPromise = mp4Promise.then(async () => {
+    if (!fs.existsSync(mp4Path)) return;
     try {
       step('Generating GIF preview…');
       await mp4ToGif(mp4Path, gifPath, input.outputRoot);
@@ -905,7 +920,12 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       warnings.push(`gif generation failed: ${(err as Error).message}`);
       log('pipeline', 'gif fail', { err: String(err) });
     }
-  }
+  });
+
+  // Wait for whisper + mp4. Chapters need both: the mp4 for tail-frame
+  // extraction, and transcriptSegments for slicing. (gif keeps running
+  // in the background and we'll await it at the very end.)
+  await Promise.all([audioBranch, mp4Promise]);
 
   const chapters = input.chapters ?? [];
   const useChapterFlow = chapters.length > 0;
@@ -1016,7 +1036,15 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     snapFrames: snapFrames.length,
   });
 
-  // 8. cleanup intermediate webm
+  // The user's clipboard is now populated — they can act on it. The gif
+  // may still be encoding in the background; await it so the cleanup of
+  // recording.webm doesn't yank the input out from under it. (gif reads
+  // from the mp4, not the webm, but we await for log/error symmetry.)
+  await gifPromise;
+
+  // 9. cleanup intermediate webm (mp4/gif/transcript stay; this is the
+  //    only intermediate). At this point the gif promise has resolved
+  //    so nothing else is reading from disk.
   try {
     fs.unlinkSync(webmPath);
   } catch {

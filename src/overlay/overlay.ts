@@ -666,15 +666,30 @@ function clearAllAnnotations(): void {
   redraw();
 }
 
-/** Flush current annotations to main as a chapter, then reset for next chapter. */
-function snapshotReset(): Annotation[] {
+/**
+ * Flush current annotations to main as a chapter. Whether to also wipe
+ * the on-screen annotations + reset numbering depends on the user's
+ * "Snapshot behavior" setting, threaded down via `clearAfter`:
+ *  - true  (default): clear on-screen + restart numbering at 1, so the
+ *          next chapter starts fresh. Matches the historical behavior
+ *          of the HUD 📸 button.
+ *  - false (carry-over): keep annotations visible and continue numbering.
+ *          The same shapes will appear in the NEXT chapter too. Useful
+ *          when you're walking through one screen with persistent callouts
+ *          and want each snapshot to retain them as context.
+ */
+function snapshotReset(clearAfter: boolean): Annotation[] {
   const chapter = annotations.map((a) => JSON.parse(JSON.stringify(a))) as Annotation[];
-  annotations = [];
-  nextNumber = 1;
-  deselect();
-  hideTextInput();
-  pushAnnotationSync();
-  redraw();
+  if (clearAfter) {
+    annotations = [];
+    nextNumber = 1;
+    deselect();
+    hideTextInput();
+    pushAnnotationSync();
+    redraw();
+  }
+  // In carry-over mode we leave annotations + nextNumber alone; nothing
+  // to redraw because nothing changed visually.
   return chapter;
 }
 
@@ -1270,12 +1285,15 @@ window.snipalot.onToggleOutline(() => {
   redraw();
 });
 
-// Snapshot reset: flush current chapter's annotations to main and start fresh.
-window.snipalot.onSnapshotReset(() => {
+// Snapshot reset: flush current chapter's annotations to main. The
+// `clearAnnotations` flag is the user's "Snapshot behavior" setting —
+// true wipes the canvas for a fresh chapter, false keeps everything
+// visible so the same callouts apply to the next chapter too.
+window.snipalot.onSnapshotReset(({ clearAnnotations }) => {
   if (!ownsRecording) return;
-  const chapter = snapshotReset();
+  const chapter = snapshotReset(clearAnnotations);
   void window.snipalot.reportSnapshotChapter({ annotations: chapter, capturedAtMs: nowDrawMs() });
-  window.snipalot.log('snapshot', 'chapter flushed', { count: chapter.length });
+  window.snipalot.log('snapshot', 'chapter flushed', { count: chapter.length, clearAnnotations });
 });
 
 // ─── boot ────────────────────────────────────────────────────────────

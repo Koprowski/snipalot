@@ -269,6 +269,59 @@ body {
   background: none;
 }
 
+/* ── radio group (snapshot behavior) ── */
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radio-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+
+.radio-row:hover {
+  background: var(--surface);
+}
+
+.radio-row input[type='radio'] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.radio-row:has(input:checked) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.radio-title {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.radio-title .muted {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.radio-info {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+
 /* ── info block ── */
 
 .info {

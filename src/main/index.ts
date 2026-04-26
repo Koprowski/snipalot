@@ -141,12 +141,14 @@ function setAppState(next: AppState, why: string): void {
   // processingStep is only meaningful while in 'processing'; clear on exit.
   if (next !== 'processing') processingStep = null;
 
-  // Ctrl+Shift+N is registered ONLY while recording so it never steals
-  // the keypress from other apps when Snipalot isn't actively capturing.
+  // Annotate + snapshot hotkeys are registered ONLY while recording so
+  // they never steal keypresses from other apps when Snipalot is idle.
   if (next === 'recording' && prev !== 'recording') {
     registerAnnotationHotkey();
+    registerSnapshotHotkey();
   } else if (prev === 'recording' && next !== 'recording') {
     unregisterAnnotationHotkey();
+    unregisterSnapshotHotkey();
   }
 
   broadcastStateToLauncher();
@@ -191,6 +193,28 @@ function unregisterAnnotationHotkey(): void {
 }
 
 /**
+ * Snapshot hotkey: only registered while recording, same gating logic as
+ * the annotate hotkey. Fires the same code path the HUD 📸 button does.
+ */
+function registerSnapshotHotkey(): void {
+  const accel = toAccelerator(getConfig().hotkeys.snapshot);
+  if (globalShortcut.isRegistered(accel)) return;
+  const ok = globalShortcut.register(accel, () => {
+    log('hotkey', `${accel} fired (snapshot)`, { appState });
+    if (appState !== 'recording') return;
+    void doSnapshot();
+  });
+  log('hotkey', `${accel} registered (recording started, snapshot)`, { ok });
+}
+
+function unregisterSnapshotHotkey(): void {
+  const accel = toAccelerator(getConfig().hotkeys.snapshot);
+  if (!globalShortcut.isRegistered(accel)) return;
+  globalShortcut.unregister(accel);
+  log('hotkey', `${accel} unregistered (recording ended, snapshot)`);
+}
+
+/**
  * Wipe all global shortcuts and re-register from current config. Called
  * once at startup and again whenever the settings save mutates hotkeys.
  * The annotation hotkey is intentionally NOT registered here — it lives
@@ -231,11 +255,12 @@ function reloadGlobalHotkeys(): void {
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-clear');
   });
 
-  // Re-arm the recording-only annotation hotkey at the new combo if we're
-  // mid-session. unregisterAll() above already cleared the OLD combo, so
-  // this is just registering the new one.
+  // Re-arm the recording-only annotate + snapshot hotkeys at their new
+  // combos if we're mid-session. unregisterAll() above already cleared
+  // the OLD combos, so this is just registering the new ones.
   if (appState === 'recording') {
     registerAnnotationHotkey();
+    registerSnapshotHotkey();
   }
 }
 
@@ -1078,8 +1103,16 @@ ipcMain.handle('hud:enter-annotation', () => {
   targetOverlay(activeDisplayId, 'overlay:enter-annotation-mode');
 });
 
-ipcMain.handle('hud:snap', () => {
-  if (appState !== 'recording' || !recorderWindow || !liveSessionDir) return;
+/**
+ * Single source of truth for the snapshot action — used by both the HUD
+ * button click (hud:snap IPC) and the global snapshot hotkey. Returns a
+ * Promise that resolves when the PNG has been captured + written, so the
+ * HUD button can disable itself for the duration. The annotation-wipe
+ * behavior is gated by config.snapshot.clearAnnotationsAfter and threaded
+ * to the overlay through the `overlay:snapshot-reset` IPC payload.
+ */
+function doSnapshot(): Promise<void> {
+  if (appState !== 'recording' || !recorderWindow || !liveSessionDir) return Promise.resolve();
   snapCount++;
   const snapIndex = snapCount;
   const folderName = `snapshot-${snapIndex}`;
@@ -1089,14 +1122,19 @@ ipcMain.handle('hud:snap', () => {
   pendingChapterPngs.set(snapIndex, snapPath);
 
   // Tell the overlay to flush its current annotations as a chapter and
-  // reset numbering. Overlay replies via `overlay:report-snapshot-chapter`.
-  if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:snapshot-reset');
+  // (optionally) reset numbering. Overlay replies via
+  // `overlay:report-snapshot-chapter`. The `clearAnnotations` flag is the
+  // user's "Snapshot behavior" setting: clear-after (default) or keep.
+  const clearAnnotations = getConfig().snapshot.clearAnnotationsAfter;
+  if (activeDisplayId) {
+    targetOverlay(activeDisplayId, 'overlay:snapshot-reset', { clearAnnotations });
+  }
 
   return new Promise<void>((resolve) => {
     ipcMain.once('recorder:snap-result', (_evt, buffer: ArrayBuffer | null) => {
       if (buffer) {
         fs.writeFileSync(snapPath, Buffer.from(buffer));
-        log('hud', 'snap saved', { snapPath, bytes: buffer.byteLength, snapIndex });
+        log('hud', 'snap saved', { snapPath, bytes: buffer.byteLength, snapIndex, clearAnnotations });
       } else {
         log('hud', 'snap failed: no buffer from renderer', { snapIndex });
       }
@@ -1104,7 +1142,9 @@ ipcMain.handle('hud:snap', () => {
     });
     recorderWindow!.webContents.send('recorder:snap');
   });
-});
+}
+
+ipcMain.handle('hud:snap', () => doSnapshot());
 
 // Overlay reports its chapter-closed annotations after receiving
 // `overlay:snapshot-reset`. We merge with the pre-reserved PNG path

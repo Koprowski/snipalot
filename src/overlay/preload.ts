@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld('snipalot', {
     ipcRenderer.on('overlay:toggle-outline', cb),
   onGlobalUndo: (cb: () => void) => ipcRenderer.on('overlay:global-undo', cb),
   onGlobalClear: (cb: () => void) => ipcRenderer.on('overlay:global-clear', cb),
-  onSnapshotReset: (cb: () => void) =>
-    ipcRenderer.on('overlay:snapshot-reset', cb),
+  onSnapshotReset: (cb: (payload: { clearAnnotations: boolean }) => void) =>
+    ipcRenderer.on('overlay:snapshot-reset', (_evt, payload) =>
+      // payload may be undefined for older callers; default to clear-after
+      // so existing behavior is preserved.
+      cb(payload ?? { clearAnnotations: true })
+    ),
 });

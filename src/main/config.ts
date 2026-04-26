@@ -13,6 +13,8 @@ import { log } from './logger';
 export interface HotkeyConfig {
   startStop: string;
   annotate: string;
+  /** Mirrors the HUD 📸 button: capture this screen and close the chapter. */
+  snapshot: string;
   clear: string;
   undo: string;
   pauseResume: string;
@@ -27,6 +29,15 @@ export interface SnipalotConfig {
   annotation: {
     color: string;
     strokeWidth: number;
+  };
+  snapshot: {
+    /**
+     * After a snapshot fires (button or hotkey), should the overlay's
+     * existing annotations be cleared (true, default — what the HUD
+     * button has always done) or kept on screen so they continue to
+     * apply to the next chapter (false, the new "carry over" mode)?
+     */
+    clearAnnotationsAfter: boolean;
   };
   /** true until the user completes first-run onboarding. */
   firstRun: boolean;
@@ -50,6 +61,8 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     // 'A' for Annotate (was 'N'). N is taken by "new file/window" in many
     // apps and the conflict was costing Jason muscle memory.
     annotate: 'Ctrl+Shift+A',
+    // 'N' for "next snapshot" — freed up when annotate moved to A.
+    snapshot: 'Ctrl+Shift+N',
     clear: 'Ctrl+Shift+C',
     undo: 'Ctrl+Z',
     pauseResume: 'Ctrl+Shift+P',
@@ -58,6 +71,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   annotation: {
     color: '#EF4444',
     strokeWidth: 3,
+  },
+  snapshot: {
+    clearAnnotationsAfter: true,
   },
   firstRun: true,
 };

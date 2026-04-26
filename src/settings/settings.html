@@ -45,6 +45,30 @@
         <button class="btn btn-link" id="btn-reset-hotkeys">Reset to defaults</button>
       </div>
 
+      <!-- snapshot behavior -->
+      <div class="section">
+        <div class="section-title">Snapshot Behavior</div>
+        <p class="info">When you press <span class="kbd">📸</span> or the snapshot hotkey during a
+          recording, what should happen to the on-screen annotations?</p>
+        <div class="radio-group">
+          <label class="radio-row">
+            <input type="radio" name="snap-behavior" value="clear" id="snap-clear" />
+            <div>
+              <div class="radio-title">Clear after snapshot <span class="muted">(default)</span></div>
+              <div class="radio-info">Each chapter starts fresh. Numbering restarts at #1.</div>
+            </div>
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="snap-behavior" value="keep" id="snap-keep" />
+            <div>
+              <div class="radio-title">Keep annotations after snapshot</div>
+              <div class="radio-info">Existing callouts stay visible and apply to the next
+                chapter too. Useful when you're walking one screen with persistent markers.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
       <!-- about -->
       <div class="section">
         <div class="section-title">About</div>

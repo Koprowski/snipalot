@@ -39,6 +39,6 @@ interface Window {
     onToggleOutline: (cb: () => void) => void;
     onGlobalUndo: (cb: () => void) => void;
     onGlobalClear: (cb: () => void) => void;
-    onSnapshotReset: (cb: () => void) => void;
+    onSnapshotReset: (cb: (payload: { clearAnnotations: boolean }) => void) => void;
   };
 }

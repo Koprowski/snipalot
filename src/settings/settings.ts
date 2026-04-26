@@ -19,6 +19,7 @@ const firstRunBanner = document.getElementById('first-run-banner') as HTMLElemen
 const HOTKEY_LABELS: Record<string, string> = {
   startStop: 'Start / Stop recording',
   annotate: 'Enter annotation mode',
+  snapshot: 'Take snapshot (close chapter)',
   clear: 'Clear annotations',
   undo: 'Undo annotation',
   pauseResume: 'Pause / Resume',
@@ -32,6 +33,7 @@ const HOTKEY_LABELS: Record<string, string> = {
 const DEFAULT_HOTKEYS: Record<string, string> = {
   startStop: 'Ctrl+Shift+S',
   annotate: 'Ctrl+Shift+A',
+  snapshot: 'Ctrl+Shift+N',
   clear: 'Ctrl+Shift+C',
   undo: 'Ctrl+Z',
   pauseResume: 'Ctrl+Shift+P',
@@ -43,6 +45,10 @@ const DEFAULT_HOTKEYS: Record<string, string> = {
 const editedHotkeys: Record<string, string> = {};
 
 // ─── init ──────────────────────────────────────────────────────────────
+
+// Working copy of the snapshot behavior. Mutates as the user clicks the
+// radio; flushed on Save.
+let editedSnapClearAfter = true;
 
 async function init(): Promise<void> {
   const config = await api.getConfig();
@@ -62,6 +68,16 @@ async function init(): Promise<void> {
     editedHotkeys[key] = hk[key] ?? DEFAULT_HOTKEYS[key] ?? '';
   }
   renderHotkeyRows();
+
+  // Snapshot behavior radios. Default to clear-after if config is missing
+  // the field (older configs predate this setting).
+  const cfgSnap = (config as unknown as { snapshot?: { clearAnnotationsAfter?: boolean } }).snapshot;
+  editedSnapClearAfter = cfgSnap?.clearAnnotationsAfter ?? true;
+  const radioClear = document.getElementById('snap-clear') as HTMLInputElement;
+  const radioKeep = document.getElementById('snap-keep') as HTMLInputElement;
+  if (editedSnapClearAfter) radioClear.checked = true; else radioKeep.checked = true;
+  radioClear.addEventListener('change', () => { if (radioClear.checked) editedSnapClearAfter = true; });
+  radioKeep.addEventListener('change', () => { if (radioKeep.checked) editedSnapClearAfter = false; });
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────
@@ -227,6 +243,7 @@ btnSave.addEventListener('click', async () => {
       outputDir: dir,
       firstRun: false,
       hotkeys: editedHotkeys as never,
+      snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
     });
     firstRunBanner.style.display = 'none';
     // Close immediately — no need for user to also hit X.

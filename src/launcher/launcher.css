@@ -90,6 +90,13 @@ body {
   gap: 10px;
 }
 
+/* Pushes the settings gear all the way to the right of the header row,
+   leaving the title + state label flush left. Without this the gear
+   would sit immediately next to "IDLE". */
+.header-spacer {
+  flex: 1;
+}
+
 .app-title {
   font-size: 12px;
   font-weight: 700;
@@ -201,6 +208,15 @@ body {
 .btn-icon:hover {
   background: #252932;
   color: #e5e7eb;
+}
+
+/* Smaller variant used in the header row so the gear matches the
+   slim 11–12px header height instead of the 32px controls-row buttons. */
+.btn-icon-sm {
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+  border-radius: 4px;
 }
 
 .hint {

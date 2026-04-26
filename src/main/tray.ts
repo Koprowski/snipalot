@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { log } from './logger';
 
-type AppState = 'idle' | 'selecting' | 'recording';
+type AppState = 'idle' | 'selecting' | 'recording' | 'processing';
 
 let tray: Tray | null = null;
 
@@ -65,6 +65,7 @@ export function updateTrayMenu(state: AppState): void {
   const recordLabel =
     state === 'recording' ? 'Stop Recording' :
     state === 'selecting' ? 'Cancel Selection' :
+    state === 'processing' ? 'Processing… (please wait)' :
     'Start Recording';
 
   const template: Electron.MenuItemConstructorOptions[] = [

@@ -8,6 +8,11 @@ interface Window {
     settings: () => Promise<void>;
     toggleMinimize: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;
-    onState: (cb: (state: { appState: 'idle' | 'selecting' | 'recording' }) => void) => void;
+    onState: (
+      cb: (state: {
+        appState: 'idle' | 'selecting' | 'recording' | 'processing';
+        processingStep: string | null;
+      }) => void
+    ) => void;
   };
 }

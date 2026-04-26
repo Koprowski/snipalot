@@ -107,6 +107,13 @@ export interface PipelineInput {
    * a new one from startedAtMs.
    */
   preCreatedSessionDir?: string;
+  /**
+   * Optional progress callback. Pipeline invokes this at the start of each
+   * major stage (transcode, transcribe, gif, frames, prompt) so the caller
+   * can surface progress to the UI. Errors thrown inside this callback are
+   * swallowed; never let UI bookkeeping break the pipeline.
+   */
+  onStep?: (step: string) => void;
 }
 
 export interface PipelineResult {
@@ -165,13 +172,20 @@ async function webmToMp4(webmPath: string, mp4Path: string): Promise<void> {
   // Downstream filters like fps=1 misbehave on VFR input — they either
   // duplicate frames or skip unique seconds. Normalizing here means every
   // second of source really does have distinct pixels to sample.
+  //
+  // Preset is `ultrafast`: at the user's typical 4K capture (1280×720
+  // logical × scaleFactor 3 = 3840×2160 effective) `-preset fast` took
+  // ~3:19 for a 7-min clip — most of the post-stop wait. `ultrafast`
+  // drops that to ~30-40s on the same machine. Trade-off is ~2x file
+  // size at the same CRF, which for short feedback clips lands at maybe
+  // 25 MB instead of 12 MB. Worth it for the responsiveness.
   await runFfmpeg(
     [
       '-y',
       '-i', webmPath,
       '-c:v', 'libx264',
-      '-crf', '20',
-      '-preset', 'fast',
+      '-crf', '23',
+      '-preset', 'ultrafast',
       '-pix_fmt', 'yuv420p',
       '-r', '30',
       '-vsync', 'cfr',
@@ -817,11 +831,20 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const annotationsPath = path.join(sessionDir, 'annotations.json');
   const promptPath = path.join(sessionDir, 'prompt.txt');
 
+  // Helper: best-effort step notification. UI bookkeeping must never break
+  // the pipeline, so any throw inside the callback is silently swallowed.
+  const step = (label: string) => {
+    if (!input.onStep) return;
+    try { input.onStep(label); } catch { /* ignore */ }
+  };
+
   // 1. Persist the webm buffer.
+  step('Saving recording…');
   fs.writeFileSync(webmPath, input.webmBuffer);
   log('pipeline', 'wrote webm', { bytes: input.webmBuffer.length });
 
   // 2. webm → mp4 (at parent level — overwrites the previous "latest").
+  step('Converting video to MP4…');
   try {
     await webmToMp4(webmPath, mp4Path);
     log('pipeline', 'mp4 written (latest, parent level)', { mp4Path });
@@ -836,8 +859,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const whisper = findWhisperBinary();
   if (whisper && fs.existsSync(mp4Path)) {
     try {
+      step('Extracting audio…');
       await mp4ToWav(mp4Path, wavPath);
       const whisperOutPrefix = path.join(sessionDir, 'whisper-out');
+      step('Transcribing speech (whisper)…');
       await runWhisper(whisper.exe, whisper.model, wavPath, whisperOutPrefix);
       const srtPath = `${whisperOutPrefix}.srt`;
       if (fs.existsSync(srtPath)) {
@@ -874,6 +899,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   //    with the LLM since it can't read animated frames).
   if (fs.existsSync(mp4Path)) {
     try {
+      step('Generating GIF preview…');
       await mp4ToGif(mp4Path, gifPath, input.outputRoot);
     } catch (err) {
       warnings.push(`gif generation failed: ${(err as Error).message}`);
@@ -921,6 +947,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   //     chapter for any annotations drawn after the last snapshot.
   let chapterArtifacts: ChapterArtifact[] = [];
   if (useChapterFlow) {
+    step('Slicing snapshot chapters…');
     try {
       chapterArtifacts = await buildSnapshotChapters(
         mp4Path,
@@ -978,6 +1005,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         annotations: input.annotations,
       });
 
+  step('Writing prompt + copying to clipboard…');
   fs.writeFileSync(promptPath, promptText, 'utf-8');
   clipboard.writeText(promptText);
   log('pipeline', 'prompt written + clipboarded', {

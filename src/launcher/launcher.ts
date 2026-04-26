@@ -18,12 +18,23 @@ const btnMinimizeEl = document.getElementById('btn-minimize') as HTMLButtonEleme
 const btnQuitEl = document.getElementById('btn-quit') as HTMLButtonElement;
 const hintEl = document.getElementById('hint')!;
 
-let currentState: 'idle' | 'selecting' | 'recording' = 'idle';
+let currentState: 'idle' | 'selecting' | 'recording' | 'processing' = 'idle';
+let currentProcessingStep: string | null = null;
 
 function renderLauncherImpl(): void {
-  labelEl.textContent = currentState.toUpperCase();
+  // 'processing' is multi-minute background work after Stop. Surface it
+  // explicitly so the user doesn't think the recording vanished while
+  // ffmpeg + whisper grind in the background.
+  if (currentState === 'processing') {
+    labelEl.textContent = 'PROCESSING';
+  } else {
+    labelEl.textContent = currentState.toUpperCase();
+  }
   labelEl.classList.toggle('selecting', currentState === 'selecting');
+  labelEl.classList.toggle('processing', currentState === 'processing');
   btnPrimaryEl.classList.toggle('selecting', currentState === 'selecting');
+  btnPrimaryEl.classList.toggle('processing', currentState === 'processing');
+  btnPrimaryEl.disabled = currentState === 'processing';
 
   if (currentState === 'idle') {
     btnPrimaryLabelEl.textContent = 'Record';
@@ -34,6 +45,13 @@ function renderLauncherImpl(): void {
   } else if (currentState === 'recording') {
     btnPrimaryLabelEl.textContent = 'Recording…';
     hintEl.textContent = 'Use the HUD to pause, annotate, or stop';
+  } else if (currentState === 'processing') {
+    btnPrimaryLabelEl.textContent = 'Processing…';
+    // Show whichever pipeline stage main last reported. Falls back to a
+    // generic message until main pushes a step.
+    hintEl.textContent = currentProcessingStep
+      ? currentProcessingStep
+      : 'Saving recording, transcribing, and generating prompt…';
   }
 }
 
@@ -62,6 +80,7 @@ btnQuitEl.addEventListener('click', () => {
 window.snipalotLauncher.onState((state) => {
   window.snipalotLauncher.log('state', state);
   currentState = state.appState;
+  currentProcessingStep = state.processingStep;
   renderLauncherImpl();
 });
 

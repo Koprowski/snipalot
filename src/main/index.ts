@@ -54,8 +54,15 @@ let recorderWindow: BrowserWindow | null = null;
 let hudWindow: BrowserWindow | null = null;
 let launcherWindow: BrowserWindow | null = null;
 
-type AppState = 'idle' | 'selecting' | 'recording';
+type AppState = 'idle' | 'selecting' | 'recording' | 'processing';
 let appState: AppState = 'idle';
+/**
+ * When appState === 'processing', this carries the current pipeline step
+ * (e.g. "Converting video", "Transcribing audio") so the launcher can show
+ * the user what's happening during the multi-minute background work.
+ * Null in any other state.
+ */
+let processingStep: string | null = null;
 
 let recordingStartedAt: number | null = null;
 let recordingPaused = false;
@@ -120,6 +127,8 @@ function setAppState(next: AppState, why: string): void {
   if (prev === next) return;
   log('state', `${prev} → ${next}`, why);
   appState = next;
+  // processingStep is only meaningful while in 'processing'; clear on exit.
+  if (next !== 'processing') processingStep = null;
 
   // Ctrl+Shift+N is registered ONLY while recording so it never steals
   // the keypress from other apps when Snipalot isn't actively capturing.
@@ -132,6 +141,18 @@ function setAppState(next: AppState, why: string): void {
   broadcastStateToLauncher();
   updateLauncherVisibility();
   updateTrayMenu(next);
+}
+
+/**
+ * Update the substep label while remaining in the 'processing' state.
+ * Triggers a launcher rebroadcast so the user sees the current pipeline
+ * stage (e.g. "Converting video → Transcribing audio → ...").
+ */
+function setProcessingStep(step: string): void {
+  if (appState !== 'processing') return;
+  processingStep = step;
+  log('state', 'processing step', { step });
+  broadcastStateToLauncher();
 }
 
 function registerAnnotationHotkey(): void {
@@ -173,12 +194,13 @@ function handleAnnotationHotkey(): void {
 
 function broadcastStateToLauncher(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  launcherWindow.webContents.send('launcher:state', { appState });
+  launcherWindow.webContents.send('launcher:state', { appState, processingStep });
 }
 
 function updateLauncherVisibility(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
   // Hide the launcher during active recording — the HUD owns that state.
+  // During 'processing' it stays visible so the user can watch progress.
   if (appState === 'recording') {
     if (launcherWindow.isVisible()) launcherWindow.hide();
   } else {
@@ -634,8 +656,13 @@ function stopRecording(reason: string): void {
   if (recorderWindow) recorderWindow.webContents.send('recorder:stop');
 
   // Clear UI IMMEDIATELY so the user doesn't see annotations + HUD frozen
-  // while ffmpeg/whisper grind away in the background.
-  setAppState('idle', `user stop: ${reason}`);
+  // while ffmpeg/whisper grind away in the background. Transition through
+  // 'processing' (not 'idle') so the launcher reflects the multi-minute
+  // background work; the pipeline .then/.catch handler kicks us back to
+  // 'idle' when it's actually done.
+  setAppState('processing', `user stop: ${reason}`);
+  processingStep = 'Saving recording…';
+  broadcastStateToLauncher();
   recordingStartedAt = null;
   recordingPaused = false;
   pausedAt = null;
@@ -768,8 +795,9 @@ ipcMain.handle(
     const fallbackStart = Date.now() - 1000; // arbitrary; used only if snap missing
     const outputRoot = getConfig().outputDir;
 
-    // FIRE AND FORGET: pipeline runs in the background. The UI has already
-    // been cleaned up by stopRecording() so the user isn't blocked by this.
+    // FIRE AND FORGET: pipeline runs in the background. The UI is in
+    // 'processing' state from stopRecording(); the .then/.catch below
+    // returns it to 'idle' when ffmpeg/whisper actually finish.
     runPipeline({
       webmBuffer: buf,
       outputRoot,
@@ -779,6 +807,7 @@ ipcMain.handle(
       annotations: snap?.annotations ?? [],
       preCreatedSessionDir: snap?.preCreatedSessionDir ?? undefined,
       chapters: snap?.chapters ?? [],
+      onStep: (step) => setProcessingStep(step),
     })
       .then((result) => {
         log('recorder', 'pipeline complete', {
@@ -794,11 +823,13 @@ ipcMain.handle(
           'Snipalot',
           `Ready · prompt on clipboard${warningsLine}. Folder: ${result.sessionDir}`
         );
+        setAppState('idle', 'pipeline complete');
       })
       .catch((err) => {
         const msg = (err as Error).message;
         log('recorder', 'pipeline fail', { err: msg });
         showNotification('Snipalot', `Pipeline failed: ${msg}`);
+        setAppState('idle', 'pipeline failed');
       });
 
     // Return immediately so the recorder renderer isn't blocked waiting on

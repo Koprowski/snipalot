@@ -22,7 +22,13 @@
 // ─── schema v2: discriminated shape union ────────────────────────────
 
 type FeedbackType = 'bug' | 'improvement' | 'question' | 'praise';
-type ShapeKind = 'rect' | 'circle' | 'oval' | 'line' | 'arrow' | 'text';
+/**
+ * Drawable shape kinds plus a 'select' pseudo-mode that disables drawing.
+ * In select mode, mousedown on empty canvas does nothing — only clicks on
+ * existing annotations are honored. This gives the user a safe way to
+ * pick/move/delete annotations without accidentally drawing a new one.
+ */
+type ShapeKind = 'rect' | 'circle' | 'oval' | 'line' | 'arrow' | 'text' | 'select';
 
 interface BoundedAnnotation {
   id: string;
@@ -110,6 +116,12 @@ let annotations: Annotation[] = [];
 let nextNumber = 1;
 let recordingStartedAt: number | null = null;
 let currentShape: ShapeKind = 'rect';
+/**
+ * True once the user has dragged the shape picker by its grip. While true,
+ * positionShapePicker() short-circuits so we never yank it back to the
+ * auto-computed position. Reset implicitly by overlay reload (per-recording).
+ */
+let pickerManuallyPositioned = false;
 
 function nowDrawMs(): number {
   return recordingStartedAt ? Date.now() - recordingStartedAt : 0;
@@ -814,8 +826,16 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
-  // 3. Start a new draw (or text placement).
+  // 3. Start a new draw (or text placement) — unless we're in 'select'
+  //    mode, in which case mousedown on empty canvas is a no-op (just
+  //    clears any current selection). This is the "select-only" mode the
+  //    user asked for: a way to manipulate existing annotations without
+  //    risking an accidental new draw.
   deselect();
+  if (currentShape === 'select') {
+    redraw();
+    return;
+  }
   if (currentShape === 'text') {
     startTextInput(mx, my);
     return;
@@ -1043,6 +1063,10 @@ function setCurrentShape(s: ShapeKind): void {
 
 function positionShapePicker(): void {
   if (!recordingRegion) return;
+  // Once the user has dragged the picker manually, never auto-reposition
+  // it — that would yank it back from where they put it and re-trigger
+  // the same hidden-behind-RDP-chrome problem they were avoiding.
+  if (pickerManuallyPositioned) return;
   const pickerH = 44;
   const margin = 8;
   // Center horizontally over the recording region, just below its bottom edge.
@@ -1062,10 +1086,54 @@ function positionShapePicker(): void {
 
 shapePickerEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement;
+  // Clear-all (trash) button: distinct from the shape buttons because it's
+  // an action, not a mode switch.
+  if (target.closest('#btn-clear-all')) {
+    clearAllAnnotations();
+    return;
+  }
   const btn = target.closest('button[data-shape]') as HTMLButtonElement | null;
   if (!btn) return;
   const s = btn.getAttribute('data-shape') as ShapeKind;
   setCurrentShape(s);
+});
+
+// ─── shape picker dragging ───────────────────────────────────────────
+//
+// The picker is auto-positioned (positionShapePicker) below or above the
+// recording region, but on RDP/multi-display setups it can land behind
+// remote desktop chrome and become unreachable. The grip lets the user
+// drag it anywhere on the overlay. Once dragged, we switch to manual
+// positioning and stop running positionShapePicker on resize/region change.
+// (`pickerManuallyPositioned` is declared with the other module state
+// near the top of this file to avoid a TDZ if positionShapePicker fires
+// before this section is reached.)
+let pickerDragOffset: { dx: number; dy: number } | null = null;
+
+const pickerGripEl = document.getElementById('shape-picker-grip')!;
+
+pickerGripEl.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  const rect = shapePickerEl.getBoundingClientRect();
+  pickerDragOffset = { dx: e.clientX - rect.left, dy: e.clientY - rect.top };
+  pickerManuallyPositioned = true;
+  document.body.style.cursor = 'grabbing';
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!pickerDragOffset) return;
+  const left = Math.max(8, Math.min(window.innerWidth - 60, e.clientX - pickerDragOffset.dx));
+  const top = Math.max(8, Math.min(window.innerHeight - 40, e.clientY - pickerDragOffset.dy));
+  shapePickerEl.style.left = `${left}px`;
+  shapePickerEl.style.top = `${top}px`;
+});
+
+window.addEventListener('mouseup', () => {
+  if (pickerDragOffset) {
+    pickerDragOffset = null;
+    document.body.style.cursor = '';
+  }
 });
 
 // ─── keyboard ────────────────────────────────────────────────────────

@@ -24,12 +24,16 @@
 
     <!-- shape picker — visible only in annotation mode -->
     <div id="shape-picker" class="shape-picker region-hidden">
+      <span id="shape-picker-grip" class="shape-picker-grip" title="Drag to move toolbar">⋮⋮</span>
+      <button class="shape-btn" data-shape="select" title="Select (S) — pick existing annotations without drawing">↖</button>
       <button class="shape-btn active" data-shape="rect" title="Rectangle (1)">▭</button>
       <button class="shape-btn" data-shape="circle" title="Circle (2)">◯</button>
       <button class="shape-btn" data-shape="oval" title="Oval (3)">⬭</button>
       <button class="shape-btn" data-shape="line" title="Line (4)">╱</button>
       <button class="shape-btn" data-shape="arrow" title="Arrow (5)">➜</button>
       <button class="shape-btn" data-shape="text" title="Text (6)">T</button>
+      <span class="shape-picker-sep"></span>
+      <button id="btn-clear-all" class="shape-btn shape-btn-danger" title="Clear all annotations (Ctrl+Shift+C)">🗑</button>
     </div>
 
     <!-- text input for text annotations -->

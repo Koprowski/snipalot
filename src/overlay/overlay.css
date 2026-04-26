@@ -176,6 +176,48 @@ body.region-select-mode #canvas {
   color: #fff;
 }
 
+/* Drag handle on the left edge of the picker. The user drags this with
+   the mouse to reposition the toolbar; without it the toolbar gets stuck
+   in whatever auto-position positionShapePicker() computed and can hide
+   behind RDP chrome or other overlays. */
+.shape-picker-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 4px;
+  margin-right: 2px;
+  color: #6b7280;
+  font-size: 14px;
+  cursor: grab;
+  user-select: none;
+  letter-spacing: -2px;
+}
+
+.shape-picker-grip:active {
+  cursor: grabbing;
+  color: #ef4444;
+}
+
+.shape-picker-sep {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  background: #2b2f38;
+  margin: 0 2px;
+}
+
+/* Destructive action — visually distinct so it's not mistaken for a shape. */
+.shape-btn-danger {
+  color: #fca5a5;
+}
+
+.shape-btn-danger:hover {
+  background: #7f1d1d;
+  border-color: #b91c1c;
+  color: #fff;
+}
+
 /* ─── text annotation input ──────────────────────────────────── */
 
 .text-input {

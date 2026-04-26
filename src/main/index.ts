@@ -53,6 +53,17 @@ const overlayWindows = new Map<string, BrowserWindow>();
 let recorderWindow: BrowserWindow | null = null;
 let hudWindow: BrowserWindow | null = null;
 let launcherWindow: BrowserWindow | null = null;
+/**
+ * setInterval handle that re-asserts the HUD on top of the overlay every
+ * second while recording. Both windows live at 'screen-saver' alwaysOnTop
+ * level (the highest Electron exposes), so OS z-order between them isn't
+ * strictly defined and focus changes (clicking into RDP, the underlying
+ * app, etc.) can drop the HUD behind the full-display overlay. When that
+ * happens the user can't click Stop, which is the worst possible failure
+ * mode of a recording app. moveTop() is cheap and harmless when the HUD
+ * is already on top.
+ */
+let hudKeepOnTopInterval: NodeJS.Timeout | null = null;
 
 type AppState = 'idle' | 'selecting' | 'recording' | 'processing';
 let appState: AppState = 'idle';
@@ -675,6 +686,7 @@ function stopRecording(reason: string): void {
   currentChapters = [];
   pendingChapterPngs.clear();
 
+  if (hudKeepOnTopInterval) { clearInterval(hudKeepOnTopInterval); hudKeepOnTopInterval = null; }
   if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
   broadcastOverlay('overlay:recording-stopped');
 }
@@ -692,6 +704,12 @@ ipcMain.handle('overlay:set-interactive', (_evt, displayId: string, interactive:
   if (!win || win.isDestroyed()) return;
   win.setIgnoreMouseEvents(!interactive, { forward: true });
   if (interactive) win.focus();
+  // Focusing the overlay is the most common trigger for the HUD getting
+  // pushed behind it (both at 'screen-saver' level). Re-assert HUD on top
+  // immediately rather than waiting for the next interval tick.
+  if (hudWindow && !hudWindow.isDestroyed() && hudWindow.isVisible()) {
+    hudWindow.moveTop();
+  }
   log('overlay', 'set-interactive', { displayId, interactive });
 });
 
@@ -883,9 +901,18 @@ ipcMain.handle(
       if (!hudWindow) hudWindow = createHudWindow(display);
       hudWindow.once('ready-to-show', () => {
         hudWindow?.show();
+        hudWindow?.moveTop();
         broadcastRecordingState();
       });
       broadcastRecordingState();
+      // Aggressively keep the HUD above the overlay. See hudKeepOnTopInterval
+      // declaration for the rationale (same alwaysOnTop level → racy z-order).
+      if (hudKeepOnTopInterval) clearInterval(hudKeepOnTopInterval);
+      hudKeepOnTopInterval = setInterval(() => {
+        if (hudWindow && !hudWindow.isDestroyed() && hudWindow.isVisible()) {
+          hudWindow.moveTop();
+        }
+      }, 1000);
 
       broadcastOverlay('overlay:recording-started', {
         startedAt: recordingStartedAt,
@@ -923,7 +950,8 @@ ipcMain.handle(
         currentRecordingRegionLocal = null;
         currentChapters = [];
         pendingChapterPngs.clear();
-        if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+        if (hudKeepOnTopInterval) { clearInterval(hudKeepOnTopInterval); hudKeepOnTopInterval = null; }
+  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
         broadcastOverlay('overlay:recording-stopped');
       } else {
         log('recorder', 'stopped confirmed (UI already cleaned)');
@@ -933,7 +961,8 @@ ipcMain.handle(
       pendingRegion = null;
       activeDisplayId = null;
       activeSourceId = null;
-      if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+      if (hudKeepOnTopInterval) { clearInterval(hudKeepOnTopInterval); hudKeepOnTopInterval = null; }
+  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
       broadcastOverlay('overlay:recording-stopped');
       showNotification('Snipalot', `Recording error: ${detail ?? 'unknown'}`);
     }

@@ -20,6 +20,8 @@ interface TrayCallbacks {
   onSettings: () => void;
   onQuit: () => void;
   onShowLauncher: () => void;
+  /** Milestone 1 dev surface: opens the ported annotator standalone. */
+  onOpenAnnotator: () => void;
 }
 
 let _callbacks: TrayCallbacks | null = null;
@@ -77,6 +79,10 @@ export function updateTrayMenu(state: AppState): void {
     {
       label: 'Settings…',
       click: () => _callbacks?.onSettings(),
+    },
+    {
+      label: 'Open Annotator (dev preview)',
+      click: () => _callbacks?.onOpenAnnotator(),
     },
     { type: 'separator' },
     {

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snipalot · Annotator</title>
+<link rel="stylesheet" href="annotator.css">
+</head>
+<body>
+
+<!-- TOOLBAR -->
+<div class="toolbar">
+  <span class="toolbar-title">✏️ Annotator</span>
+  <button id="toolbar-save-icon" onclick="saveSession()" title="Save Session" style="display:none;background:none;border:none;cursor:pointer;padding:2px 4px;font-size:18px;line-height:1;color:var(--accent)" aria-label="Save Session">💾</button>
+  <div class="toolbar-sep"></div>
+
+  <button class="tool-btn active" id="btn-rect" onclick="setTool('rect')">🟨 Highlight</button>
+
+  <div class="toolbar-sep"></div>
+  <span style="font-size:11px;color:var(--muted);white-space:nowrap">Shapes:</span>
+  <button class="tool-btn" id="btn-shape-rect" onclick="setShapeTool('shape-rect')">▭ Rect</button>
+  <button class="tool-btn" id="btn-shape-circle" onclick="setShapeTool('shape-circle')">○ Circle</button>
+  <button class="tool-btn" id="btn-shape-oval" onclick="setShapeTool('shape-oval')">⬭ Oval</button>
+  <button class="tool-btn" id="btn-shape-line" onclick="setShapeTool('shape-line')">╱ Line</button>
+  <button class="tool-btn" id="btn-shape-arrow" onclick="setShapeTool('shape-arrow')">➡ Arrow</button>
+
+  <button class="tool-btn" id="btn-doodle" onclick="setTool('doodle')">✏ Doodle</button>
+  <button class="tool-btn" id="btn-text" onclick="setTool('text')">T Text</button>
+
+  <div class="toolbar-sep"></div>
+  <button class="tool-btn" id="btn-select" onclick="setTool('select')">↖ Select</button>
+
+  <div class="toolbar-sep"></div>
+
+  <div class="color-group" id="color-swatches">
+    <span class="color-swatch active" style="background:#ef4444" data-color="#ef4444" onclick="setColor(this)"></span>
+    <span class="color-swatch" style="background:#f97316" data-color="#f97316" onclick="setColor(this)"></span>
+    <span class="color-swatch" style="background:#eab308" data-color="#eab308" onclick="setColor(this)"></span>
+    <span class="color-swatch" style="background:#22c55e" data-color="#22c55e" onclick="setColor(this)"></span>
+    <span class="color-swatch" style="background:#3b82f6" data-color="#3b82f6" onclick="setColor(this)"></span>
+    <span class="color-swatch" style="background:#a855f7" data-color="#a855f7" onclick="setColor(this)"></span>
+    <span class="color-swatch" style="background:#ec4899" data-color="#ec4899" onclick="setColor(this)"></span>
+  </div>
+
+  <div class="toolbar-sep"></div>
+
+  <span class="opacity-label" id="opacity-label">Fill:</span>
+  <input type="range" class="opacity-slider" id="opacity-slider" min="0" max="60" value="0" oninput="setOpacity(this.value)">
+
+  <span class="opacity-label">Stroke:</span>
+  <input type="range" class="opacity-slider" id="stroke-slider" min="1" max="8" value="2" oninput="setStrokeWidth(this.value)">
+  <span id="stroke-val" style="font-size:11px;color:var(--muted);min-width:16px">2</span>
+
+  <div class="toolbar-sep"></div>
+
+  <button class="tool-btn" onclick="triggerPaste()">📋 Paste Image</button>
+  <button class="tool-btn" id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)" disabled style="opacity:0.4;padding:0 8px">↩</button>
+  <button class="tool-btn" id="btn-redo" onclick="redo()" title="Redo (Ctrl+Y)" disabled style="opacity:0.4;padding:0 8px">↪</button>
+  <button class="tool-btn" id="btn-paste-overlay" onclick="pasteOverlayImage()">🖼 Paste Overlay</button>
+  <button class="tool-btn" id="btn-crop-overlay" onclick="startCropMode()" title="Crop selected overlay image">✂ Crop Overlay</button>
+  <button class="tool-btn danger" onclick="clearAll()">🗑 Clear All</button>
+  <button class="tool-btn" onclick="changeSavePath()" title="Change the hardcoded parent directory used for clipboard path">⚙ Set Path</button>
+  <span id="scale-indicator" style="display:none;font-size:11px;color:var(--muted);white-space:nowrap;margin-left:4px"></span>
+  <div class="toolbar-spacer"></div>
+  <button class="tool-btn save-prominent" id="toolbar-save-btn" onclick="saveSession()" title="Save Session (Ctrl+S)">💾 Save Session</button>
+</div>
+
+<!-- WORKSPACE -->
+<div class="workspace">
+
+  <!-- CANVAS AREA -->
+  <div class="canvas-area" id="canvas-area">
+    <!-- Drop zone shown when no image is loaded -->
+    <div class="drop-zone" id="drop-zone">
+      <div class="drop-zone-inner">
+        <div class="drop-zone-icon">🖼</div>
+        <h2>Paste your screenshot</h2>
+        <p>Press <kbd>Ctrl+V</kbd> anywhere to paste a screenshot from your clipboard.<br><br>Then draw highlights over areas you want to annotate, add notes in the sidebar, and copy the feedback prompt to send back to Claude.</p>
+        <p style="margin-top:16px;font-size:11px;color:#6b7280;line-height:1.7">
+          <strong>Save location:</strong> Files are saved to <kbd>C:\Tools\annotator-screenshots</kbd>.<br>
+          On first save, you'll be asked to select <kbd>C:\Tools</kbd> to grant access — the <kbd>annotator-screenshots</kbd> subfolder is created automatically.<br>
+          <em>Note: <kbd>C:\Tools</kbd> must exist on your system. If it doesn't, create it first or files will download to your Downloads folder instead.</em>
+        </p>
+      </div>
+    </div>
+
+    <!-- Canvas wrap — only visible once image is pasted -->
+    <div class="canvas-wrap" id="canvas-wrap" style="display:none">
+      <canvas id="base-canvas"></canvas>
+      <canvas id="draw-canvas"></canvas>
+      <canvas id="interaction-layer"></canvas>
+    </div>
+  </div>
+
+  <!-- SIDE PANEL -->
+  <div class="side-panel">
+
+    <div class="panel-header">
+      Annotations
+      <span class="annotation-count" id="ann-count">0</span>
+    </div>
+
+    <div class="annotations-list" id="annotations-list">
+      <div class="empty-state" id="empty-state">
+        Paste a screenshot then draw highlights to start annotating.
+      </div>
+    </div>
+
+    <div class="resize-handle" id="rh-ann" title="Drag to resize"></div>
+
+    <!-- CONTEXT -->
+    <div class="context-section" id="context-section" style="min-height:90px;flex:0 0 auto">
+      <label>Context for Claude</label>
+      <textarea class="context-input" id="context-input" placeholder="e.g. This is the DART Score playground. The file is dart-score-playground.html." oninput="updatePrompt()"></textarea>
+    </div>
+
+    <div class="resize-handle" id="rh-ctx" title="Drag to resize"></div>
+
+    <!-- PROMPT OUTPUT -->
+    <div class="prompt-section" id="prompt-section">
+      <div class="prompt-section-header">
+        <h4>Feedback Prompt</h4>
+        <div style="display:flex;gap:6px">
+          <button class="tool-btn" id="prompt-expand-btn" onclick="toggleOverlay(true)" title="Expand to full screen" style="height:22px;padding:0 8px;font-size:10px">&#9974; Expand</button>
+          <button class="tool-btn" id="prompt-reset-btn" onclick="resetPrompt()" title="Regenerate from annotations">&#8635; Reset</button>
+        </div>
+      </div>
+      <div class="prompt-box-wrap">
+        <textarea class="prompt-box" id="prompt-box" oninput="onPromptEdit(this.value)">Add annotations to generate a feedback prompt.</textarea>
+      </div>
+    </div>
+
+    <!-- Sticky bottom action bar — always visible -->
+    <div class="side-actions">
+      <button class="tool-btn primary" style="flex:1" id="copy-btn" onclick="copyPrompt()">Copy Prompt</button>
+      <button class="tool-btn success" id="save-btn" onclick="saveSession()" title="Saves to C:\Tools\annotator-screenshots (auto-created). C:\Tools must exist — if not, files download to Downloads folder instead.">&#128190; Save Session</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- Full-screen feedback prompt overlay -->
+<div class="prompt-overlay" id="prompt-overlay">
+  <div class="prompt-overlay-header">
+    <h3>Feedback Prompt</h3>
+    <div style="display:flex;gap:8px">
+      <button class="tool-btn primary" onclick="copyPromptFromOverlay()">Copy Prompt</button>
+      <button class="tool-btn success" onclick="saveSession()">&#128190; Save Session</button>
+      <button class="tool-btn" onclick="toggleOverlay(false)">&#10005; Close</button>
+    </div>
+  </div>
+  <textarea id="prompt-overlay-textarea" oninput="onOverlayPromptEdit(this.value)"></textarea>
+</div>
+<script src="annotator.js"></script>
+</body>
+</html>

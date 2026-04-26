@@ -513,6 +513,49 @@ let settingsWindow: BrowserWindow | null = null;
 
 // ─── settings window ──────────────────────────────────────────────────
 
+// ─── annotator window (Milestone 1: dev preview only) ────────────────
+//
+// Opens the ported screenshot-annotator in a Snipalot BrowserWindow. For
+// Milestone 1 we wire this up purely as a dev surface — a tray menu entry
+// triggers it so we can verify the canvas, shape tools, and prompt
+// preview survive the port without regressions. Later milestones add the
+// region-select capture flow that actually preloads a captured PNG.
+let annotatorWindow: BrowserWindow | null = null;
+
+function openAnnotator(): void {
+  if (annotatorWindow && !annotatorWindow.isDestroyed()) {
+    annotatorWindow.focus();
+    return;
+  }
+  const primary = screen.getPrimaryDisplay();
+  const w = 1280;
+  const h = 800;
+  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  annotatorWindow = new BrowserWindow({
+    width: w,
+    height: h,
+    x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
+    y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
+    title: 'Snipalot · Annotator',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    backgroundColor: '#0f1117',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'annotator', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  annotatorWindow.removeMenu();
+  annotatorWindow.loadFile(path.join(__dirname, '..', 'annotator', 'annotator.html'));
+  annotatorWindow.once('ready-to-show', () => annotatorWindow?.show());
+  annotatorWindow.on('closed', () => {
+    annotatorWindow = null;
+    log('main', 'annotator closed');
+  });
+  log('main', 'annotator opened (dev preview)');
+}
+
 function openSettings(isFirstRun = false): void {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     // Bring it above the overlays and focus.
@@ -1294,6 +1337,7 @@ app.whenReady().then(() => {
   createTray({
     onStartStop: () => handleToggleHotkey(),
     onSettings: () => openSettings(),
+    onOpenAnnotator: () => openAnnotator(),
     onQuit: () => app.quit(),
     onShowLauncher: () => {
       if (launcherWindow && !launcherWindow.isDestroyed()) {

@@ -82,12 +82,17 @@
 
   // ── INITIAL IMAGE FROM HOST ────────────────────────────────────────────────
   // Snipalot can pre-load an image when the annotator window opens (e.g. via
-  // the upcoming region-select capture flow). The IPC returns null when the
-  // window is opened standalone (dev preview from the tray), and we fall
-  // back to the existing paste-on-Ctrl+V behavior in that case.
+  // the region-select capture flow). The IPC returns null when the window is
+  // opened standalone (dev preview from the tray), and we fall back to the
+  // existing paste-on-Ctrl+V behavior in that case.
+  // The session stamp is held in module scope so saveSession() can pass it
+  // back to main, ensuring the saved folder name matches the capture moment
+  // rather than the click-Save moment.
+  let hostSessionStamp = null;
   if (window.snipalotAnnotator?.getInitialImage) {
     window.snipalotAnnotator.getInitialImage().then((img) => {
       if (!img) return;
+      hostSessionStamp = img.sessionStamp;
       void window.snipalotAnnotator.log('init', 'preloaded image from host', {
         bytes: img.dataUrl.length,
         sessionStamp: img.sessionStamp,
@@ -1601,16 +1606,8 @@
   }
 
   async function saveSession() {
-    // M2 placeholder: logs the click and shows a toast on the save buttons.
-    // M4 wires this to ipcRenderer.invoke('annotator:save', ...) which will:
-    //   1. mkdir {outputDir}/{stamp} screenshot/
-    //   2. write annotated PNG + prompt.md
-    //   3. clipboard.writeText(promptText)
-    //   4. close the annotator window via annotator:close
     if (!image) { alert('Paste a screenshot first before saving.'); return; }
-    if (window.snipalotAnnotator) {
-      void window.snipalotAnnotator.log('save', 'M2 placeholder fired (real save lands in M4)');
-    }
+
     const saveBtns = [document.getElementById('save-btn'), document.getElementById('toolbar-save-btn')].filter(Boolean);
     const setSaveBtnText = (txt) => saveBtns.forEach(b => {
       const orig = b.dataset.origText || b.textContent;
@@ -1620,8 +1617,81 @@
     const restoreSaveBtnText = () => saveBtns.forEach(b => {
       if (b.dataset.origText) b.textContent = b.dataset.origText;
     });
-    setSaveBtnText('⏳ Save lands in M4');
-    setTimeout(restoreSaveBtnText, 2500);
+
+    // ── 1. Build the annotated PNG (base + overlays + draw layer + legend) ──
+    const composite = document.createElement('canvas');
+    composite.width = baseCanvas.width;
+    composite.height = baseCanvas.height;
+    const cx = composite.getContext('2d');
+    cx.drawImage(baseCanvas, 0, 0);
+    overlays.forEach(ov => cx.drawImage(ov.imgObj, ov.x, ov.y, ov.w, ov.h));
+    cx.drawImage(drawCanvas, 0, 0);
+
+    // Stamp numbered legend at bottom-right corner
+    const legendLines = annotations.map((ann, i) => {
+      const label = ann.note ? ann.note.slice(0, 60) + (ann.note.length > 60 ? '…' : '') : '(no note)';
+      return { num: i + 1, color: ann.color, type: ann.type || 'improvement', label };
+    });
+    if (legendLines.length > 0) {
+      const lineH = 20;
+      const padding = 12;
+      const legendH = legendLines.length * lineH + padding * 2;
+      const legendW = Math.min(composite.width, 600);
+      const lx = composite.width - legendW - 12;
+      const ly = composite.height - legendH - 12;
+      cx.fillStyle = 'rgba(0,0,0,0.78)';
+      cx.beginPath();
+      cx.roundRect(lx, ly, legendW, legendH, 8);
+      cx.fill();
+      cx.font = 'bold 12px -apple-system, Arial, sans-serif';
+      legendLines.forEach((item, i) => {
+        const y = ly + padding + i * lineH + 12;
+        cx.fillStyle = item.color;
+        cx.fillText(`#${item.num}`, lx + padding, y);
+        cx.fillStyle = '#e8eaf6';
+        cx.font = '11px -apple-system, Arial, sans-serif';
+        cx.fillText(item.label, lx + padding + 30, y);
+        cx.font = 'bold 12px -apple-system, Arial, sans-serif';
+      });
+    }
+
+    // ── 2. Build the prompt body ────────────────────────────────────────────
+    // Prefer the user-edited prompt-box content (matches what they actually
+    // see in the preview). Fall back to a fresh build if the box is empty
+    // or hasn't been touched.
+    const promptText =
+      (document.getElementById('prompt-box')?.value || '').trim() ||
+      buildPromptText();
+
+    // ── 3. Convert composite to data URL and hand off to main ──────────────
+    setSaveBtnText('⏳ Saving…');
+    const pngDataUrl = composite.toDataURL('image/png');
+    try {
+      const result = await window.snipalotAnnotator.save({
+        pngDataUrl,
+        promptText,
+        sessionStamp: hostSessionStamp ?? undefined,
+      });
+      if (result.ok) {
+        setSaveBtnText('✓ Saved + prompt copied!');
+        void window.snipalotAnnotator.log('save', 'success', {
+          sessionDir: result.sessionDir,
+        });
+        // Main closes the annotator window after this resolves; the toast
+        // is just a brief confirmation in case the close hasn't fired yet.
+        setTimeout(restoreSaveBtnText, 2500);
+      } else {
+        setSaveBtnText('✗ Save failed');
+        void window.snipalotAnnotator.log('save', 'fail', { error: result.error });
+        alert(`Save failed: ${result.error}`);
+        setTimeout(restoreSaveBtnText, 3000);
+      }
+    } catch (err) {
+      setSaveBtnText('✗ Save failed');
+      void window.snipalotAnnotator.log('save', 'exception', { error: String(err) });
+      alert(`Save failed: ${err}`);
+      setTimeout(restoreSaveBtnText, 3000);
+    }
   }
 
   function exportAnnotations() {

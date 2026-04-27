@@ -10,6 +10,7 @@ import {
   Display,
   dialog,
   Menu,
+  clipboard,
 } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -579,6 +580,77 @@ ipcMain.handle('annotator:get-initial-image', () => {
   const img = pendingAnnotatorImage;
   pendingAnnotatorImage = null;
   return img;
+});
+
+/**
+ * IPC: annotator save flow (M4). Renderer hands us the annotated PNG as
+ * a base64 data URL plus the prompt.md text body. We:
+ *   1. Compute / reuse the session stamp (from the queued image's stamp
+ *      so the saved folder matches the capture timestamp, not when the
+ *      user clicked Save).
+ *   2. mkdir {outputDir}/{stamp} screenshot/
+ *   3. Write snapshot.png + prompt.md
+ *   4. clipboard.writeText(promptText)
+ *   5. Close the annotator window so the user lands back on the
+ *      launcher (already at idle since openAnnotator was called from
+ *      the screenshot capture path).
+ *
+ * Returns { ok, sessionDir, pngPath, promptPath } on success or
+ * { ok: false, error } on failure. Renderer surfaces the result to
+ * the user via a save-button toast.
+ */
+ipcMain.handle(
+  'annotator:save',
+  async (
+    _evt,
+    payload: { pngDataUrl: string; promptText: string; sessionStamp?: string }
+  ) => {
+    try {
+      const stamp = payload.sessionStamp ?? formatSessionStamp(new Date());
+      const outRoot = getConfig().outputDir;
+      const sessionDir = path.join(outRoot, `${stamp} screenshot`);
+      if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
+
+      // Strip the data URL prefix and decode base64 to a Buffer.
+      const m = /^data:image\/png;base64,(.+)$/.exec(payload.pngDataUrl);
+      if (!m) return { ok: false as const, error: 'invalid png data url' };
+      const pngBuf = Buffer.from(m[1], 'base64');
+
+      const pngPath = path.join(sessionDir, 'snapshot.png');
+      const promptPath = path.join(sessionDir, 'prompt.md');
+      fs.writeFileSync(pngPath, pngBuf);
+      fs.writeFileSync(promptPath, payload.promptText, 'utf-8');
+
+      clipboard.writeText(payload.promptText);
+
+      log('annotator', 'saved', {
+        sessionDir,
+        pngBytes: pngBuf.length,
+        promptChars: payload.promptText.length,
+      });
+      showNotification('Snipalot', `Saved · prompt on clipboard. Folder: ${sessionDir}`);
+
+      // Close the annotator window — the user's task is done. Launcher is
+      // already at idle (set during the screenshot capture path).
+      if (annotatorWindow && !annotatorWindow.isDestroyed()) annotatorWindow.close();
+
+      return {
+        ok: true as const,
+        sessionDir,
+        pngPath,
+        promptPath,
+      };
+    } catch (err) {
+      const msg = (err as Error).message;
+      log('annotator', 'save fail', { err: msg });
+      return { ok: false as const, error: msg };
+    }
+  }
+);
+
+// IPC: renderer asks main to close the annotator (e.g. user hits Cancel).
+ipcMain.handle('annotator:cancel', () => {
+  if (annotatorWindow && !annotatorWindow.isDestroyed()) annotatorWindow.close();
 });
 
 function openSettings(isFirstRun = false): void {

@@ -15,6 +15,8 @@ const btnPrimaryEl = document.getElementById('btn-primary') as HTMLButtonElement
 const btnPrimaryLabelEl = document.getElementById('btn-label')!;
 const btnScreenshotEl = document.getElementById('btn-screenshot') as HTMLButtonElement;
 const btnScreenshotLabelEl = document.getElementById('btn-screenshot-label')!;
+const btnTradeEl = document.getElementById('btn-trade') as HTMLButtonElement;
+const btnTradeLabelEl = document.getElementById('btn-trade-label')!;
 const btnSettingsEl = document.getElementById('btn-settings') as HTMLButtonElement;
 const btnMinimizeEl = document.getElementById('btn-minimize') as HTMLButtonElement;
 const btnQuitEl = document.getElementById('btn-quit') as HTMLButtonElement;
@@ -24,7 +26,9 @@ let currentState:
   | 'idle'
   | 'selecting'
   | 'selecting-screenshot'
+  | 'selecting-trade'
   | 'recording'
+  | 'trading'
   | 'processing' = 'idle';
 let currentProcessingStep: string | null = null;
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
@@ -32,54 +36,73 @@ let currentProcessingStep: string | null = null;
 let currentStartStopHotkey = 'Ctrl+Shift+S';
 
 function renderLauncherImpl(): void {
-  // State label: "PROCESSING" + "SELECTING SCREENSHOT" get friendlier
-  // capitalization than the raw hyphenated form.
+  // State label: hyphenated states get friendlier capitalization.
   if (currentState === 'processing') {
     labelEl.textContent = 'PROCESSING';
   } else if (currentState === 'selecting-screenshot') {
     labelEl.textContent = 'SCREENSHOT';
+  } else if (currentState === 'selecting-trade') {
+    labelEl.textContent = 'TRADE';
+  } else if (currentState === 'trading') {
+    labelEl.textContent = 'TRADING';
   } else {
     labelEl.textContent = currentState.toUpperCase();
   }
-  // Selecting style applies to whichever button is the active "click to
-  // cancel" target. Processing style only on Record (the long-running
-  // pipeline runs there).
   const isSelectingRecord = currentState === 'selecting';
   const isSelectingScreenshot = currentState === 'selecting-screenshot';
-  labelEl.classList.toggle('selecting', isSelectingRecord || isSelectingScreenshot);
+  const isSelectingTrade = currentState === 'selecting-trade';
+  const isTrading = currentState === 'trading';
+  const isRecording = currentState === 'recording';
+  labelEl.classList.toggle('selecting', isSelectingRecord || isSelectingScreenshot || isSelectingTrade);
   labelEl.classList.toggle('processing', currentState === 'processing');
   btnPrimaryEl.classList.toggle('selecting', isSelectingRecord);
   btnPrimaryEl.classList.toggle('processing', currentState === 'processing');
   btnScreenshotEl.classList.toggle('selecting', isSelectingScreenshot);
+  btnTradeEl.classList.toggle('selecting', isSelectingTrade);
 
-  // Disable the off-action button while one mode is mid-flight, so the
-  // user can't accidentally start a recording while picking a screenshot
-  // region (or vice versa). Re-enabled when state returns to idle.
-  btnPrimaryEl.disabled = currentState === 'processing' || isSelectingScreenshot;
+  // Disable the off-action buttons while another mode is mid-flight so the
+  // user can't accidentally start a different mode partway through.
+  btnPrimaryEl.disabled =
+    currentState === 'processing' || isSelectingScreenshot || isSelectingTrade || isTrading;
   btnScreenshotEl.disabled =
-    currentState === 'processing' || isSelectingRecord || currentState === 'recording';
+    currentState === 'processing' || isSelectingRecord || isSelectingTrade || isRecording || isTrading;
+  btnTradeEl.disabled =
+    currentState === 'processing' || isSelectingRecord || isSelectingScreenshot || isRecording;
 
   if (currentState === 'idle') {
     btnPrimaryLabelEl.textContent = 'Record';
     btnPrimaryEl.title = `Record (${currentStartStopHotkey})`;
     btnScreenshotLabelEl.textContent = 'Screenshot';
     btnScreenshotEl.title = 'Screenshot — capture a region for annotation';
-    hintEl.textContent = `Record a walkthrough or capture a single screen · ${currentStartStopHotkey}`;
+    btnTradeLabelEl.textContent = 'Trade';
+    btnTradeEl.title = 'Trade — record a session for trade-log extraction';
+    hintEl.textContent = `Record / capture / track trades · ${currentStartStopHotkey}`;
   } else if (currentState === 'selecting') {
     btnPrimaryLabelEl.textContent = 'Cancel';
     btnScreenshotLabelEl.textContent = 'Screenshot';
+    btnTradeLabelEl.textContent = 'Trade';
     hintEl.textContent = 'Drag a region on any display · release to record · Esc to cancel';
   } else if (currentState === 'selecting-screenshot') {
     btnPrimaryLabelEl.textContent = 'Record';
     btnScreenshotLabelEl.textContent = 'Cancel';
+    btnTradeLabelEl.textContent = 'Trade';
     hintEl.textContent = 'Drag a region on any display · release to capture · Esc to cancel';
-  } else if (currentState === 'recording') {
-    btnPrimaryLabelEl.textContent = 'Recording…';
+  } else if (currentState === 'selecting-trade') {
+    btnPrimaryLabelEl.textContent = 'Record';
     btnScreenshotLabelEl.textContent = 'Screenshot';
-    hintEl.textContent = 'Use the HUD to pause, annotate, or stop';
+    btnTradeLabelEl.textContent = 'Cancel';
+    hintEl.textContent = 'Drag a region on any display · release to start a trade session · Esc to cancel';
+  } else if (currentState === 'recording' || currentState === 'trading') {
+    btnPrimaryLabelEl.textContent = isRecording ? 'Recording…' : 'Record';
+    btnScreenshotLabelEl.textContent = 'Screenshot';
+    btnTradeLabelEl.textContent = isTrading ? 'Trading…' : 'Trade';
+    hintEl.textContent = isTrading
+      ? 'Trade session live · Ctrl+Shift+T marks a trade · stop via HUD'
+      : 'Use the HUD to pause, annotate, or stop';
   } else if (currentState === 'processing') {
     btnPrimaryLabelEl.textContent = 'Processing…';
     btnScreenshotLabelEl.textContent = 'Screenshot';
+    btnTradeLabelEl.textContent = 'Trade';
     hintEl.textContent = currentProcessingStep
       ? currentProcessingStep
       : 'Saving recording, transcribing, and generating prompt…';
@@ -101,6 +124,15 @@ btnScreenshotEl.addEventListener('click', () => {
   if (currentState === 'idle') {
     window.snipalotLauncher.screenshot();
   } else if (currentState === 'selecting-screenshot') {
+    window.snipalotLauncher.cancel();
+  }
+});
+
+btnTradeEl.addEventListener('click', () => {
+  window.snipalotLauncher.log('click', 'trade', { currentState });
+  if (currentState === 'idle') {
+    window.snipalotLauncher.trade();
+  } else if (currentState === 'selecting-trade') {
     window.snipalotLauncher.cancel();
   }
 });

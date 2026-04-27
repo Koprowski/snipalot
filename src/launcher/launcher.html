@@ -46,6 +46,21 @@
           </svg>
           <span id="btn-screenshot-label">Screenshot</span>
         </button>
+        <button id="btn-trade" class="btn-trade" title="Trade — record a session for trade-log extraction">
+          <!-- Candlestick chart glyph: three vertical wicks of varying
+               height (the bottom of one slightly above the prior, evoking
+               an uptrend), with thicker bodies. currentColor inherits
+               from the button so it re-tints in the selecting state. -->
+          <svg class="btn-glyph" width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
+            <line x1="2.5" y1="1.5" x2="2.5" y2="10.5" stroke="currentColor" stroke-width="1"/>
+            <rect x="1.4" y="3.5" width="2.2" height="4" fill="currentColor"/>
+            <line x1="7" y1="0.5" x2="7" y2="11" stroke="currentColor" stroke-width="1"/>
+            <rect x="5.9" y="2" width="2.2" height="6.5" fill="currentColor"/>
+            <line x1="11.5" y1="2" x2="11.5" y2="9" stroke="currentColor" stroke-width="1"/>
+            <rect x="10.4" y="3" width="2.2" height="3" fill="currentColor"/>
+          </svg>
+          <span id="btn-trade-label">Trade</span>
+        </button>
       </div>
       <div class="hint" id="hint">Click Record to select a region</div>
     </div>

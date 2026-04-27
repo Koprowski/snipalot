@@ -66,7 +66,14 @@ let launcherWindow: BrowserWindow | null = null;
  */
 let hudKeepOnTopInterval: NodeJS.Timeout | null = null;
 
-type AppState = 'idle' | 'selecting' | 'selecting-screenshot' | 'recording' | 'processing';
+type AppState =
+  | 'idle'
+  | 'selecting'
+  | 'selecting-screenshot'
+  | 'selecting-trade'
+  | 'recording'
+  | 'trading'
+  | 'processing';
 let appState: AppState = 'idle';
 /**
  * When appState === 'processing', this carries the current pipeline step
@@ -421,9 +428,9 @@ function createRecorderWindow(): BrowserWindow {
 
 function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
-  // Wider than the original 340px to comfortably fit two primary actions
-  // (Record + Screenshot) side by side without their labels truncating.
-  const w = 380;
+  // Bumped to 480 to fit three primary actions side by side
+  // (Record + Screenshot + Trade) without label truncation.
+  const w = 480;
   // Custom title bar is 28px + content ~112px (header 20, gap 8, controls 32,
   // gap 8, hint 16, padding 20). No need for extra slack.
   const h = 140;
@@ -1552,6 +1559,13 @@ ipcMain.handle('launcher:screenshot', () => {
   log('launcher', 'screenshot click', { appState });
   if (appState === 'idle') enterSelectingScreenshot();
   else if (appState === 'selecting-screenshot') exitSelecting('screenshot toggle');
+});
+
+ipcMain.handle('launcher:trade', () => {
+  // M2 placeholder: log only. enterSelectingTrade() lands in M3 alongside
+  // the recording-flow wiring (region-select → recorder start with mode=trade
+  // → 'trade' suffix folder on stop).
+  log('launcher', 'trade click (M2 placeholder)', { appState });
 });
 
 ipcMain.handle('launcher:quit', () => {

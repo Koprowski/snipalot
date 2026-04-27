@@ -207,6 +207,48 @@ body {
   cursor: not-allowed;
 }
 
+/* Trade button — sibling to Record + Screenshot. Purple/violet accent
+   so the three primary actions read distinctly: red = live recording,
+   blue = one-shot capture, violet = trading session (long-form recording
+   with post-session LLM extraction). */
+.btn-trade {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #7c3aed;
+  border: 1px solid #7c3aed;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 80ms ease;
+}
+
+.btn-trade:hover {
+  background: #8b5cf6;
+  border-color: #8b5cf6;
+}
+
+.btn-trade.selecting {
+  background: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.btn-trade.selecting:hover {
+  background: #fbbf24;
+  border-color: #fbbf24;
+}
+
+.btn-trade:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Disabled-looking blue while the pipeline runs. Click is also blocked
    via the .disabled property in JS to keep keyboard activation off too. */
 .btn-primary.processing {

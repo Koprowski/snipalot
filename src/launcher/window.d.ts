@@ -4,6 +4,7 @@ interface Window {
   snipalotLauncher: {
     record: () => Promise<void>;
     screenshot: () => Promise<void>;
+    trade: () => Promise<void>;
     cancel: () => Promise<void>;
     quit: () => Promise<void>;
     settings: () => Promise<void>;
@@ -15,7 +16,9 @@ interface Window {
           | 'idle'
           | 'selecting'
           | 'selecting-screenshot'
+          | 'selecting-trade'
           | 'recording'
+          | 'trading'
           | 'processing';
         processingStep: string | null;
         startStopHotkey?: string;

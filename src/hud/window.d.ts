@@ -4,6 +4,7 @@ interface Window {
   snipalotHud: {
     pauseResume: () => Promise<void>;
     stop: () => Promise<void>;
+    discard: () => Promise<void>;
     toggleOutline: () => Promise<void>;
     enterAnnotation: () => Promise<void>;
     snap: () => Promise<void>;

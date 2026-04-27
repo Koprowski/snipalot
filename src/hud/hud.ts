@@ -12,6 +12,7 @@ const recLabelEl = document.getElementById('rec-label')!;
 const recTimerEl = document.getElementById('rec-timer')!;
 const btnPauseEl = document.getElementById('btn-pause')! as HTMLButtonElement;
 const btnStopEl = document.getElementById('btn-stop')! as HTMLButtonElement;
+const btnDiscardEl = document.getElementById('btn-discard')! as HTMLButtonElement;
 const btnOutlineEl = document.getElementById('btn-outline')! as HTMLButtonElement;
 const btnAnnotateEl = document.getElementById('btn-annotate')! as HTMLButtonElement;
 const btnSnapEl = document.getElementById('btn-snap')! as HTMLButtonElement;
@@ -59,6 +60,12 @@ function stopTicker(): void {
 
 btnPauseEl.addEventListener('click', () => window.snipalotHud.pauseResume());
 btnStopEl.addEventListener('click', () => window.snipalotHud.stop());
+btnDiscardEl.addEventListener('click', () => {
+  // Disable the button while the confirm dialog is up so a frantic user
+  // can't double-fire it. Re-enabled regardless of confirm/cancel outcome.
+  btnDiscardEl.disabled = true;
+  window.snipalotHud.discard().finally(() => { btnDiscardEl.disabled = false; });
+});
 btnSnapEl.addEventListener('click', () => {
   btnSnapEl.disabled = true;
   window.snipalotHud.snap().finally(() => { btnSnapEl.disabled = false; });

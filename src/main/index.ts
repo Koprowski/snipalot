@@ -131,6 +131,14 @@ interface PendingProcessing {
 // Snapshot of the stopping recording's metadata. The webm buffer arrives
 // async via recorder:save-webm and the pipeline picks up from here.
 let pendingProcessing: PendingProcessing | null = null;
+/**
+ * When true, the next save-webm IPC binning the buffer instead of running
+ * the pipeline. Set by discardRecording() and cleared after the discard
+ * completes. The MediaRecorder always finalizes its blob and fires the
+ * IPC; this flag lets us reuse that path in discard mode without changes
+ * to the recorder renderer.
+ */
+let pendingDiscard = false;
 
 // ─── window constructors ──────────────────────────────────────────────
 
@@ -470,7 +478,10 @@ function createLauncherWindow(): BrowserWindow {
 }
 
 function createHudWindow(onDisplay: Display): BrowserWindow {
-  const w = 280;
+  // Bumped to 320 to accommodate the 6th button (Discard, added alongside
+  // Stop). Each .btn is 28px wide with ~6px gaps, plus the drag region
+  // (REC dot + label + 00:00 timer).
+  const w = 320;
   const h = 44;
   const margin = 16;
   const x = onDisplay.workArea.x + onDisplay.workArea.width - w - margin;
@@ -943,6 +954,86 @@ function exitSelecting(reason: string): void {
   activeSourceId = null;
 }
 
+/**
+ * Discard a recording in progress: stop the MediaRecorder, throw away
+ * the captured webm buffer when it arrives, delete the live session
+ * directory (and any snapshot PNGs already written into it), and skip
+ * the pipeline entirely. Returns the user to idle without producing
+ * any output files or clipboard content.
+ *
+ * Destructive so we always confirm. Confirmation dialog is anchored to
+ * the launcher (or any focused window) so it can't be missed.
+ */
+async function discardRecording(reason: string): Promise<void> {
+  if (appState !== 'recording') {
+    log('state', 'discardRecording ignored', { appState, reason });
+    return;
+  }
+  const parent = launcherWindow && !launcherWindow.isDestroyed() ? launcherWindow : undefined;
+  const result = await dialog.showMessageBox(parent!, {
+    type: 'warning',
+    buttons: ['Discard recording', 'Keep recording'],
+    defaultId: 1,
+    cancelId: 1,
+    title: 'Discard this recording?',
+    message: 'Discard this recording?',
+    detail:
+      'The video, any annotations, and all snapshot PNGs taken during ' +
+      'this session will be permanently deleted. Nothing will be saved ' +
+      'to disk and nothing will land on the clipboard.\n\nThis cannot be undone.',
+    noLink: true,
+  });
+  if (result.response !== 0) {
+    log('main', 'discard cancelled by user');
+    return;
+  }
+  log('main', 'discard initiated', { reason });
+
+  // Mark the in-flight save-webm IPC for disposal. The recorder will fire
+  // it shortly after we send recorder:stop below; the handler checks this
+  // flag and bins the buffer instead of running the pipeline.
+  pendingDiscard = true;
+  // Skip the pendingProcessing snapshot — pipeline never runs in discard
+  // mode, so there's nothing for it to consume.
+  pendingProcessing = null;
+  const sessionDirToDelete = liveSessionDir;
+  liveSessionDir = null;
+
+  // Tell the recorder to finalize (so the MediaRecorder unwinds cleanly
+  // and releases mic/screen streams), even though we'll discard the buffer.
+  if (recorderWindow) recorderWindow.webContents.send('recorder:stop');
+
+  // Drop straight back to idle (no processing state — nothing's processing).
+  setAppState('idle', `discard: ${reason}`);
+  recordingStartedAt = null;
+  recordingPaused = false;
+  pausedAt = null;
+  totalPausedMs = 0;
+  pendingRegion = null;
+  activeDisplayId = null;
+  activeSourceId = null;
+  currentAnnotations = [];
+  currentRecordingRegionLocal = null;
+  currentChapters = [];
+  pendingChapterPngs.clear();
+
+  if (hudKeepOnTopInterval) { clearInterval(hudKeepOnTopInterval); hudKeepOnTopInterval = null; }
+  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+  broadcastOverlay('overlay:recording-stopped');
+
+  // Delete the session dir + any snapshot PNGs already written into it.
+  if (sessionDirToDelete && fs.existsSync(sessionDirToDelete)) {
+    try {
+      fs.rmSync(sessionDirToDelete, { recursive: true, force: true });
+      log('main', 'discard: session dir removed', { sessionDirToDelete });
+    } catch (err) {
+      log('main', 'discard: session dir cleanup failed', { err: (err as Error).message });
+    }
+  }
+
+  showNotification('Snipalot', 'Recording discarded — nothing saved.');
+}
+
 function stopRecording(reason: string): void {
   if (appState !== 'recording') {
     log('state', 'stopRecording ignored', { appState, reason });
@@ -1141,6 +1232,14 @@ ipcMain.handle(
     const buf = Buffer.from(payload.buffer);
     log('recorder', 'save-webm received', { bytes: buf.length });
 
+    // Discard path: user pressed Discard mid-recording. Throw the buffer
+    // away (no pipeline, no clipboard, no files), clear the flag, return.
+    if (pendingDiscard) {
+      pendingDiscard = false;
+      log('recorder', 'save-webm discarded (user requested)', { bytes: buf.length });
+      return { ok: true, discarded: true, bytes: buf.length };
+    }
+
     const snap = pendingProcessing;
     if (!snap) {
       // Recording stopped unexpectedly (track ended, app restart, etc.) and
@@ -1331,6 +1430,7 @@ function togglePause(): void {
 
 ipcMain.handle('hud:pause-resume', () => togglePause());
 ipcMain.handle('hud:stop', () => stopRecording('hud button'));
+ipcMain.handle('hud:discard', () => discardRecording('hud button'));
 ipcMain.handle('hud:toggle-outline', () => {
   if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:toggle-outline');
 });

@@ -121,6 +121,22 @@ body {
   border-color: #f87171;
 }
 
+/* Discard variant — outlined danger so it reads as destructive but
+   secondary to Stop. Filled-red on hover so the user feels the weight
+   of what they're about to do. The action shows a confirm dialog
+   regardless of mis-click. */
+.btn.discard {
+  background: transparent;
+  border: 1px solid #b91c1c;
+  color: #f87171;
+}
+
+.btn.discard:hover {
+  background: #7f1d1d;
+  border-color: #b91c1c;
+  color: #fff;
+}
+
 .btn.active {
   background: #2a3142;
   border-color: #ef4444;

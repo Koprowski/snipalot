@@ -28,6 +28,7 @@ interface Window {
       annotations: unknown[];
       capturedAtMs: number;
     }) => Promise<void>;
+    reportAnnotationMode: (active: boolean) => Promise<void>;
     onEnterAnnotationMode: (cb: () => void) => void;
     onEnterRegionSelect: (cb: () => void) => void;
     onExitRegionSelect: (cb: () => void) => void;

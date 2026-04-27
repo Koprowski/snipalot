@@ -33,10 +33,10 @@ const HOTKEY_LABELS: Record<string, string> = {
 const DEFAULT_HOTKEYS: Record<string, string> = {
   startStop: 'Ctrl+Shift+S',
   annotate: 'Ctrl+Shift+A',
-  snapshot: 'Ctrl+Shift+N',
+  snapshot: 'Ctrl+Shift+P',
   clear: 'Ctrl+Shift+C',
   undo: 'Ctrl+Z',
-  pauseResume: 'Ctrl+Shift+P',
+  pauseResume: 'Ctrl+Shift+B',
   toggleOutline: 'Ctrl+Shift+H',
 };
 

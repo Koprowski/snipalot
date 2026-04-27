@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld('snipalot', {
    */
   reportSnapshotChapter: (payload: { annotations: unknown[]; capturedAtMs: number }) =>
     ipcRenderer.invoke('overlay:report-snapshot-chapter', payload),
+  /**
+   * Report annotation-mode entry/exit so main can light up the HUD's
+   * Annotate button (and any future affordances tied to mode state).
+   */
+  reportAnnotationMode: (active: boolean) =>
+    ipcRenderer.invoke('overlay:annotation-mode-changed', { active }),
   onEnterAnnotationMode: (cb: () => void) =>
     ipcRenderer.on('overlay:enter-annotation-mode', cb),
   onEnterRegionSelect: (cb: () => void) =>

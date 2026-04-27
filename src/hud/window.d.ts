@@ -11,5 +11,6 @@ interface Window {
     onState: (
       cb: (payload: { startedAt: number; paused: boolean; totalPausedMs: number }) => void
     ) => void;
+    onAnnotationState: (cb: (payload: { active: boolean }) => void) => void;
   };
 }

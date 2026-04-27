@@ -614,6 +614,10 @@ async function enterAnnotationMode(): Promise<void> {
   positionShapePicker();
   await setInteractiveIfChanged(false);
   await window.snipalot.focusWindow();
+  // Tell main (and through it the HUD) that annotation mode is now on.
+  // Lets the HUD ✎ button light up so the user has a visual cue that
+  // toggling will turn it OFF.
+  void window.snipalot.reportAnnotationMode(true);
   window.snipalot.log('mode', 'enter annotation');
 }
 
@@ -634,6 +638,9 @@ async function exitAnnotationMode(): Promise<void> {
   // end up with a "stuck" interactive overlay that swallows their clicks
   // even though annotation mode is off.
   await forceClickThrough();
+  // Tell main (and through it the HUD) that annotation mode is now off,
+  // so the HUD ✎ button can drop its highlight.
+  void window.snipalot.reportAnnotationMode(false);
   window.snipalot.log('mode', 'exit annotation');
   redraw();
 }

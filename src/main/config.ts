@@ -61,11 +61,15 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     // 'A' for Annotate (was 'N'). N is taken by "new file/window" in many
     // apps and the conflict was costing Jason muscle memory.
     annotate: 'Ctrl+Shift+A',
-    // 'N' for "next snapshot" — freed up when annotate moved to A.
-    snapshot: 'Ctrl+Shift+N',
+    // 'P' for "Picture" — Snipalot wins the chord at the OS level via
+    // globalShortcut.register, so the browser print-preview default
+    // never fires while a recording is active and the binding is live.
+    snapshot: 'Ctrl+Shift+P',
     clear: 'Ctrl+Shift+C',
     undo: 'Ctrl+Z',
-    pauseResume: 'Ctrl+Shift+P',
+    // Pause/resume moved off Ctrl+Shift+P to make room for snapshot.
+    // 'B' for Break — also free of common app conflicts.
+    pauseResume: 'Ctrl+Shift+B',
     toggleOutline: 'Ctrl+Shift+H',
   },
   annotation: {

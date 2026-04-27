@@ -1431,6 +1431,14 @@ function togglePause(): void {
 ipcMain.handle('hud:pause-resume', () => togglePause());
 ipcMain.handle('hud:stop', () => stopRecording('hud button'));
 ipcMain.handle('hud:discard', () => discardRecording('hud button'));
+
+// Overlay → main → HUD bridge. The overlay emits this whenever annotation
+// mode flips so the HUD's ✎ button can show its active state. Light shim;
+// we don't track the value in main beyond forwarding it.
+ipcMain.handle('overlay:annotation-mode-changed', (_evt, payload: { active: boolean }) => {
+  log('overlay', 'annotation-mode-changed', payload);
+  notifyHud('hud:annotation-state', payload);
+});
 ipcMain.handle('hud:toggle-outline', () => {
   if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:toggle-outline');
 });

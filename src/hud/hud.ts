@@ -86,4 +86,14 @@ window.snipalotHud.onState((payload) => {
   startTicker();
 });
 
+// Highlight the ✎ button when annotation mode is active so the user has
+// a visible toggle cue. Tooltip switches to "Exit annotation" so the
+// affordance reads correctly when the button is already lit.
+window.snipalotHud.onAnnotationState((payload) => {
+  btnAnnotateEl.classList.toggle('active', payload.active);
+  btnAnnotateEl.title = payload.active
+    ? 'Exit annotation (Ctrl+Shift+A)'
+    : 'Annotate (Ctrl+Shift+A)';
+});
+
 render();

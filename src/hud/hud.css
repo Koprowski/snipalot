@@ -29,6 +29,14 @@ body {
   align-items: center;
   padding: 6px 8px;
   gap: 10px;
+  /* Whole HUD chrome is draggable by default. Buttons opt out below via
+     no-drag so clicks still work; everything else (the REC indicator,
+     timer, gaps between buttons, padding) becomes a grab handle so the
+     user can move the HUD anywhere — to a different corner, off-screen
+     edge, or onto a different display — without having to hunt for a
+     specific draggable strip. */
+  -webkit-app-region: drag;
+  cursor: move;
 }
 
 .drag {
@@ -39,6 +47,25 @@ body {
   padding: 4px 6px;
   flex: 1;
   min-width: 0;
+  cursor: move;
+}
+
+/* Visible grip cue at the very left edge of the HUD so the user can see
+   it's movable at a glance. Six dots in a 2-column pattern, low contrast. */
+.drag::before {
+  content: '';
+  width: 8px;
+  height: 16px;
+  margin-right: 2px;
+  flex-shrink: 0;
+  background-image:
+    radial-gradient(circle at 2px 2px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+    radial-gradient(circle at 6px 2px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+    radial-gradient(circle at 2px 8px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+    radial-gradient(circle at 6px 8px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+    radial-gradient(circle at 2px 14px, rgba(255,255,255,0.35) 1px, transparent 1.5px),
+    radial-gradient(circle at 6px 14px, rgba(255,255,255,0.35) 1px, transparent 1.5px);
+  background-repeat: no-repeat;
 }
 
 .rec-dot {

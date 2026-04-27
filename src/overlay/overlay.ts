@@ -145,6 +145,14 @@ let currentRect: Rect | null = null;
 let currentLine: { x1: number; y1: number; x2: number; y2: number } | null = null;
 let annotationMode = false;
 let regionSelectMode = false;
+/**
+ * Last cursor position seen by ANY mousemove (forwarded mousemoves still
+ * fire while the overlay is click-through). Used by enterAnnotationMode
+ * to immediately decide interactive vs click-through + which cursor to
+ * show, instead of waiting on the next mousemove. -1 means "never seen".
+ */
+let lastMouseX = -1;
+let lastMouseY = -1;
 let confirmedRegion: Rect | null = null;
 let recordingRegion: Rect | null = null;
 let outlineVisible = true;
@@ -612,13 +620,32 @@ async function enterAnnotationMode(): Promise<void> {
   overlayStatusEl.classList.remove('status-hidden');
   shapePickerEl.classList.remove('region-hidden');
   positionShapePicker();
-  await setInteractiveIfChanged(false);
+  // Decide interactive + cursor state RIGHT NOW based on the last known
+  // cursor position, instead of waiting for the next mousemove. Without
+  // this, a user who triggers annotation mode (hotkey or button) with the
+  // mouse already parked over the recording region has to nudge the
+  // mouse before the overlay starts capturing clicks — meaning their
+  // first click on the spot they actually wanted to annotate just passes
+  // through to the underlying app. (-1 means we've never seen a
+  // mousemove, in which case fall back to the original "wait for move"
+  // behaviour by starting click-through; the next forwarded mousemove
+  // will flip it correctly.)
+  if (lastMouseX >= 0 && lastMouseY >= 0) {
+    const overPicker = isPointOverShapePicker(lastMouseX, lastMouseY);
+    const inside = isInsideRecordingRegion(lastMouseX, lastMouseY) || overPicker;
+    await setInteractiveIfChanged(inside);
+    updateCursor(lastMouseX, lastMouseY);
+  } else {
+    await setInteractiveIfChanged(false);
+  }
   await window.snipalot.focusWindow();
   // Tell main (and through it the HUD) that annotation mode is now on.
   // Lets the HUD ✎ button light up so the user has a visual cue that
   // toggling will turn it OFF.
   void window.snipalot.reportAnnotationMode(true);
-  window.snipalot.log('mode', 'enter annotation');
+  window.snipalot.log('mode', 'enter annotation', {
+    cursor: lastMouseX >= 0 ? { x: lastMouseX, y: lastMouseY } : 'unknown',
+  });
 }
 
 async function exitAnnotationMode(): Promise<void> {
@@ -669,6 +696,11 @@ function isPointOverTextInput(x: number, y: number): boolean {
 }
 
 window.addEventListener('mousemove', (e) => {
+  // Track cursor continuously (forwarded mousemoves fire even while
+  // click-through is active) so enterAnnotationMode can decide interactive
+  // state without waiting for a fresh move.
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
   refreshAnnotationInteractivity(e.clientX, e.clientY);
 });
 

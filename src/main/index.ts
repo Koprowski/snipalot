@@ -1458,8 +1458,8 @@ ipcMain.handle('hud:enter-annotation', () => {
  * behavior is gated by config.snapshot.clearAnnotationsAfter and threaded
  * to the overlay through the `overlay:snapshot-reset` IPC payload.
  */
-function doSnapshot(): Promise<void> {
-  if (appState !== 'recording' || !recorderWindow || !liveSessionDir) return Promise.resolve();
+async function doSnapshot(): Promise<void> {
+  if (appState !== 'recording' || !recorderWindow || !liveSessionDir) return;
   snapCount++;
   const snapIndex = snapCount;
   const folderName = `snapshot-${snapIndex}`;
@@ -1468,27 +1468,36 @@ function doSnapshot(): Promise<void> {
   const snapPath = path.join(chapterDir, `${folderName}.png`);
   pendingChapterPngs.set(snapIndex, snapPath);
 
-  // Tell the overlay to flush its current annotations as a chapter and
-  // (optionally) reset numbering. Overlay replies via
-  // `overlay:report-snapshot-chapter`. The `clearAnnotations` flag is the
-  // user's "Snapshot behavior" setting: clear-after (default) or keep.
   const clearAnnotations = getConfig().snapshot.clearAnnotationsAfter;
+
+  // ── ORDER MATTERS ──
+  // 1. Capture the frame FIRST while the overlay still has its
+  //    annotations rendered. The recorder's cropCanvas is fed by an
+  //    rAF loop copying from the live display-capture stream, and the
+  //    overlay's annotations are visible on that display. If we sent
+  //    snapshot-reset before the snap, the overlay would clear its
+  //    canvas synchronously, the next display refresh would show no
+  //    annotations, and the next rAF tick would write an empty crop
+  //    into the recorder's canvas before toBlob even fires. The first
+  //    snap might race-win, but later snaps reliably miss annotations.
+  // 2. Only AFTER the buffer is in main do we send snapshot-reset to
+  //    flush the chapter + clear the overlay.
+  const buffer = await new Promise<ArrayBuffer | null>((resolve) => {
+    ipcMain.once('recorder:snap-result', (_evt, buf: ArrayBuffer | null) => resolve(buf));
+    recorderWindow!.webContents.send('recorder:snap');
+  });
+  if (buffer) {
+    fs.writeFileSync(snapPath, Buffer.from(buffer));
+    log('hud', 'snap saved', { snapPath, bytes: buffer.byteLength, snapIndex, clearAnnotations });
+  } else {
+    log('hud', 'snap failed: no buffer from renderer', { snapIndex });
+  }
+
+  // Now safe to flush + (optionally) clear: the PNG is already on disk
+  // with the annotations baked in.
   if (activeDisplayId) {
     targetOverlay(activeDisplayId, 'overlay:snapshot-reset', { clearAnnotations });
   }
-
-  return new Promise<void>((resolve) => {
-    ipcMain.once('recorder:snap-result', (_evt, buffer: ArrayBuffer | null) => {
-      if (buffer) {
-        fs.writeFileSync(snapPath, Buffer.from(buffer));
-        log('hud', 'snap saved', { snapPath, bytes: buffer.byteLength, snapIndex, clearAnnotations });
-      } else {
-        log('hud', 'snap failed: no buffer from renderer', { snapIndex });
-      }
-      resolve();
-    });
-    recorderWindow!.webContents.send('recorder:snap');
-  });
 }
 
 ipcMain.handle('hud:snap', () => doSnapshot());

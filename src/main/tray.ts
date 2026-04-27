@@ -17,7 +17,6 @@ type AppState =
   | 'selecting-screenshot'
   | 'selecting-trade'
   | 'recording'
-  | 'trading'
   | 'processing';
 
 let tray: Tray | null = null;
@@ -73,7 +72,6 @@ export function updateTrayMenu(state: AppState): void {
 
   const recordLabel =
     state === 'recording' ? 'Stop Recording' :
-    state === 'trading' ? 'Stop Trade Session' :
     state === 'selecting' ? 'Cancel Selection' :
     state === 'selecting-screenshot' ? 'Cancel Screenshot' :
     state === 'selecting-trade' ? 'Cancel Trade Setup' :

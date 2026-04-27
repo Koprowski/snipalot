@@ -15,6 +15,9 @@ export interface HotkeyConfig {
   annotate: string;
   /** Mirrors the HUD 📸 button: capture this screen and close the chapter. */
   snapshot: string;
+  /** Trade-mode marker: appends a recording-relative timestamp the LLM
+      extraction prompt uses as an anchor. Recording-only, mode='trade' only. */
+  tradeMarker: string;
   clear: string;
   undo: string;
   pauseResume: string;
@@ -65,6 +68,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     // globalShortcut.register, so the browser print-preview default
     // never fires while a recording is active and the binding is live.
     snapshot: 'Ctrl+Shift+P',
+    // 'T' for Trade — only registered while a trade-mode recording is
+    // live, so it doesn't steal the chord during normal browsing.
+    tradeMarker: 'Ctrl+Shift+T',
     clear: 'Ctrl+Shift+C',
     undo: 'Ctrl+Z',
     // Pause/resume moved off Ctrl+Shift+P to make room for snapshot.

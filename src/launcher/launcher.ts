@@ -28,22 +28,26 @@ let currentState:
   | 'selecting-screenshot'
   | 'selecting-trade'
   | 'recording'
-  | 'trading'
   | 'processing' = 'idle';
 let currentProcessingStep: string | null = null;
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
 // idle hint always reflects the current binding (default: Ctrl+Shift+S).
 let currentStartStopHotkey = 'Ctrl+Shift+S';
+// Tracks whether the active recording is record-mode or trade-mode (both
+// share the 'recording' AppState; only the launcher label/hint differ).
+let currentSessionMode: 'record' | 'trade' = 'record';
 
 function renderLauncherImpl(): void {
-  // State label: hyphenated states get friendlier capitalization.
+  // State label: hyphenated states get friendlier capitalization. While
+  // recording, the label distinguishes record vs trade by sessionMode
+  // (both share the 'recording' AppState).
   if (currentState === 'processing') {
     labelEl.textContent = 'PROCESSING';
   } else if (currentState === 'selecting-screenshot') {
     labelEl.textContent = 'SCREENSHOT';
   } else if (currentState === 'selecting-trade') {
     labelEl.textContent = 'TRADE';
-  } else if (currentState === 'trading') {
+  } else if (currentState === 'recording' && currentSessionMode === 'trade') {
     labelEl.textContent = 'TRADING';
   } else {
     labelEl.textContent = currentState.toUpperCase();
@@ -51,8 +55,8 @@ function renderLauncherImpl(): void {
   const isSelectingRecord = currentState === 'selecting';
   const isSelectingScreenshot = currentState === 'selecting-screenshot';
   const isSelectingTrade = currentState === 'selecting-trade';
-  const isTrading = currentState === 'trading';
   const isRecording = currentState === 'recording';
+  const isTrading = isRecording && currentSessionMode === 'trade';
   labelEl.classList.toggle('selecting', isSelectingRecord || isSelectingScreenshot || isSelectingTrade);
   labelEl.classList.toggle('processing', currentState === 'processing');
   btnPrimaryEl.classList.toggle('selecting', isSelectingRecord);
@@ -65,9 +69,10 @@ function renderLauncherImpl(): void {
   btnPrimaryEl.disabled =
     currentState === 'processing' || isSelectingScreenshot || isSelectingTrade || isTrading;
   btnScreenshotEl.disabled =
-    currentState === 'processing' || isSelectingRecord || isSelectingTrade || isRecording || isTrading;
+    currentState === 'processing' || isSelectingRecord || isSelectingTrade || isRecording;
   btnTradeEl.disabled =
-    currentState === 'processing' || isSelectingRecord || isSelectingScreenshot || isRecording;
+    currentState === 'processing' || isSelectingRecord || isSelectingScreenshot ||
+    (isRecording && !isTrading);
 
   if (currentState === 'idle') {
     btnPrimaryLabelEl.textContent = 'Record';
@@ -92,8 +97,8 @@ function renderLauncherImpl(): void {
     btnScreenshotLabelEl.textContent = 'Screenshot';
     btnTradeLabelEl.textContent = 'Cancel';
     hintEl.textContent = 'Drag a region on any display · release to start a trade session · Esc to cancel';
-  } else if (currentState === 'recording' || currentState === 'trading') {
-    btnPrimaryLabelEl.textContent = isRecording ? 'Recording…' : 'Record';
+  } else if (currentState === 'recording') {
+    btnPrimaryLabelEl.textContent = isTrading ? 'Record' : 'Recording…';
     btnScreenshotLabelEl.textContent = 'Screenshot';
     btnTradeLabelEl.textContent = isTrading ? 'Trading…' : 'Trade';
     hintEl.textContent = isTrading
@@ -154,6 +159,7 @@ window.snipalotLauncher.onState((state) => {
   currentState = state.appState;
   currentProcessingStep = state.processingStep;
   if (state.startStopHotkey) currentStartStopHotkey = state.startStopHotkey;
+  if (state.sessionMode) currentSessionMode = state.sessionMode;
   renderLauncherImpl();
 });
 

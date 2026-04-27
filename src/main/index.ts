@@ -71,8 +71,7 @@ type AppState =
   | 'selecting'
   | 'selecting-screenshot'
   | 'selecting-trade'
-  | 'recording'
-  | 'trading'
+  | 'recording'   // active capture (BOTH record-mode and trade-mode use this)
   | 'processing';
 let appState: AppState = 'idle';
 /**
@@ -127,6 +126,21 @@ let currentChapters: ChapterRecord[] = [];
 // its annotation payload.
 const pendingChapterPngs = new Map<number, string>();
 
+/**
+ * Capture mode of the current/most-recent recording. Decides the session
+ * folder suffix ('feedback' for record, 'trade' for trade) and which
+ * post-recording pipeline path runs. Set when region-confirmed lands,
+ * carried into the pipeline via PendingProcessing.
+ */
+let currentSessionMode: 'record' | 'trade' = 'record';
+/**
+ * Recording-relative ms offsets where the user pressed the Trade marker
+ * hotkey (Ctrl+Shift+T). Empty for non-trade sessions. The trade-pipeline
+ * uses these as anchor tags in the LLM extraction prompt so the model
+ * focuses on the trader-flagged moments.
+ */
+let currentTradeMarkers: number[] = [];
+
 interface PendingProcessing {
   annotations: AnnotationRecord[];
   recordingRegion: { x: number; y: number; w: number; h: number } | null;
@@ -134,6 +148,8 @@ interface PendingProcessing {
   durationMs: number;
   preCreatedSessionDir: string | null;
   chapters: ChapterRecord[];
+  mode: 'record' | 'trade';
+  tradeMarkers: number[];
 }
 // Snapshot of the stopping recording's metadata. The webm buffer arrives
 // async via recorder:save-webm and the pipeline picks up from here.
@@ -157,14 +173,19 @@ function setAppState(next: AppState, why: string): void {
   // processingStep is only meaningful while in 'processing'; clear on exit.
   if (next !== 'processing') processingStep = null;
 
-  // Annotate + snapshot hotkeys are registered ONLY while recording so
-  // they never steal keypresses from other apps when Snipalot is idle.
+  // Annotate + snapshot + trade-marker hotkeys are registered ONLY while
+  // recording so they never steal keypresses from other apps when Snipalot
+  // is idle. Trade-marker is also gated on mode === 'trade' (no point
+  // grabbing the chord during a normal recording — markers are a
+  // trade-mode concept).
   if (next === 'recording' && prev !== 'recording') {
     registerAnnotationHotkey();
     registerSnapshotHotkey();
+    if (currentSessionMode === 'trade') registerTradeMarkerHotkey();
   } else if (prev === 'recording' && next !== 'recording') {
     unregisterAnnotationHotkey();
     unregisterSnapshotHotkey();
+    unregisterTradeMarkerHotkey();
   }
 
   broadcastStateToLauncher();
@@ -231,6 +252,43 @@ function unregisterSnapshotHotkey(): void {
 }
 
 /**
+ * Trade-marker hotkey: only registered while recording AND mode === 'trade'.
+ * Each press appends a recording-relative ms offset to currentTradeMarkers,
+ * which the trade-pipeline uses as anchor tags for the LLM extraction prompt.
+ * No separate recording is started — markers are lightweight metadata only.
+ */
+function registerTradeMarkerHotkey(): void {
+  const accel = toAccelerator(getConfig().hotkeys.tradeMarker);
+  if (globalShortcut.isRegistered(accel)) return;
+  const ok = globalShortcut.register(accel, () => {
+    if (appState !== 'recording' || currentSessionMode !== 'trade' || recordingStartedAt === null) {
+      log('hotkey', `${accel} fired but not in trade-recording state`, { appState, currentSessionMode });
+      return;
+    }
+    const offsetMs = Date.now() - recordingStartedAt - totalPausedMs;
+    currentTradeMarkers.push(offsetMs);
+    log('hotkey', `${accel} trade marker added`, { offsetMs, totalMarkers: currentTradeMarkers.length });
+    showNotification('Snipalot Trade', `Marker #${currentTradeMarkers.length} at ${formatMs(offsetMs)}`);
+  });
+  log('hotkey', `${accel} registered (trade-recording started)`, { ok });
+}
+
+function unregisterTradeMarkerHotkey(): void {
+  const accel = toAccelerator(getConfig().hotkeys.tradeMarker);
+  if (!globalShortcut.isRegistered(accel)) return;
+  globalShortcut.unregister(accel);
+  log('hotkey', `${accel} unregistered (trade-recording ended)`);
+}
+
+/** Format ms offset as "M:SS" for the trade-marker notification. */
+function formatMs(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
  * Wipe all global shortcuts and re-register from current config. Called
  * once at startup and again whenever the settings save mutates hotkeys.
  * The annotation hotkey is intentionally NOT registered here — it lives
@@ -277,6 +335,7 @@ function reloadGlobalHotkeys(): void {
   if (appState === 'recording') {
     registerAnnotationHotkey();
     registerSnapshotHotkey();
+    if (currentSessionMode === 'trade') registerTradeMarkerHotkey();
   }
 }
 
@@ -309,11 +368,14 @@ function broadcastStateToLauncher(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
   // Include the current startStop combo so the launcher hint can stay in
   // sync when the user rebinds it via settings — otherwise the hint text
-  // would lie about the keyboard shortcut.
+  // would lie about the keyboard shortcut. Also include sessionMode so
+  // the launcher can show a "TRADING" label vs "RECORDING" while the
+  // active capture is in trade-mode (both share the 'recording' AppState).
   launcherWindow.webContents.send('launcher:state', {
     appState,
     processingStep,
     startStopHotkey: getConfig().hotkeys.startStop,
+    sessionMode: currentSessionMode,
   });
 }
 
@@ -952,8 +1014,29 @@ function enterSelectingScreenshot(): void {
   broadcastOverlay('overlay:enter-region-select');
 }
 
+/**
+ * Region-select for the Trade flow. Same overlay UI as record-mode
+ * region-select; the post-confirm branch in overlay:region-confirmed
+ * decides whether to start MediaRecorder normally (record), capture a
+ * still PNG (screenshot), or start MediaRecorder with mode='trade'
+ * (which produces a 'trade'-suffix session folder and runs the trade-
+ * pipeline after whisper).
+ */
+function enterSelectingTrade(): void {
+  if (appState !== 'idle') {
+    log('state', 'enterSelectingTrade ignored', { appState });
+    return;
+  }
+  setAppState('selecting-trade', 'trade button from idle');
+  broadcastOverlay('overlay:enter-region-select');
+}
+
 function exitSelecting(reason: string): void {
-  if (appState !== 'selecting' && appState !== 'selecting-screenshot') return;
+  if (
+    appState !== 'selecting' &&
+    appState !== 'selecting-screenshot' &&
+    appState !== 'selecting-trade'
+  ) return;
   setAppState('idle', `exitSelecting: ${reason}`);
   broadcastOverlay('overlay:exit-region-select');
   pendingRegion = null;
@@ -1057,11 +1140,15 @@ function stopRecording(reason: string): void {
       durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
       preCreatedSessionDir: liveSessionDir,
       chapters: [...currentChapters],
+      mode: currentSessionMode,
+      tradeMarkers: [...currentTradeMarkers],
     };
     log('main', 'pendingProcessing snapshotted', {
       annotations: pendingProcessing.annotations.length,
       chapters: pendingProcessing.chapters.length,
       durationMs: pendingProcessing.durationMs,
+      mode: pendingProcessing.mode,
+      tradeMarkers: pendingProcessing.tradeMarkers.length,
     });
   }
   liveSessionDir = null;
@@ -1127,12 +1214,18 @@ ipcMain.handle(
   'overlay:region-confirmed',
   async (_evt, payload: { displayId: string; rect: OverlayRect }) => {
     log('overlay', 'region-confirmed received', payload);
-    if (appState !== 'selecting' && appState !== 'selecting-screenshot') {
+    if (
+      appState !== 'selecting' &&
+      appState !== 'selecting-screenshot' &&
+      appState !== 'selecting-trade'
+    ) {
       log('overlay', 'ignoring region-confirmed (wrong state)', { appState });
       return;
     }
-    const intent: 'record' | 'screenshot' =
-      appState === 'selecting-screenshot' ? 'screenshot' : 'record';
+    const intent: 'record' | 'screenshot' | 'trade' =
+      appState === 'selecting-screenshot' ? 'screenshot' :
+      appState === 'selecting-trade' ? 'trade' :
+      'record';
 
     const display = screen
       .getAllDisplays()
@@ -1189,7 +1282,10 @@ ipcMain.handle(
       return;
     }
 
-    // ── RECORD branch: existing flow. ──
+    // ── RECORD or TRADE branch: both start the MediaRecorder. The only
+    //    difference is the AppState transition (recording vs trading) and
+    //    currentSessionMode, which the pipeline reads at stop time to pick
+    //    the folder suffix + extra trade-pipeline stage.
     const sources = await desktopCapturer.getSources({ types: ['screen'] });
     log('overlay', 'desktopCapturer sources', sources.map((s) => ({
       id: s.id,
@@ -1207,7 +1303,9 @@ ipcMain.handle(
     activeDisplayId = payload.displayId;
     activeSourceId = source.id;
     pendingRegion = region;
-    setAppState('recording', 'region confirmed');
+    currentSessionMode = intent === 'trade' ? 'trade' : 'record';
+    currentTradeMarkers = [];
+    setAppState('recording', `region confirmed (mode=${currentSessionMode})`);
     broadcastOverlay('overlay:exit-region-select');
     // Tell the active display's overlay to draw the region outline + receive annotations.
     targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
@@ -1272,6 +1370,8 @@ ipcMain.handle(
       annotations: snap?.annotations ?? [],
       preCreatedSessionDir: snap?.preCreatedSessionDir ?? undefined,
       chapters: snap?.chapters ?? [],
+      mode: snap?.mode ?? 'record',
+      tradeMarkers: snap?.tradeMarkers ?? [],
       onStep: (step) => setProcessingStep(step),
     })
       .then((result) => {
@@ -1335,12 +1435,16 @@ ipcMain.handle(
       pendingChapterPngs.clear();
 
       // Pre-create the session folder so live snaps have somewhere to land.
+      // Folder suffix reflects the capture mode (`feedback` for record-mode,
+      // `trade` for trade-mode); pipeline.ts reads the same currentSessionMode
+      // via PendingProcessing so its naming matches.
       const outputRoot = getConfig().outputDir;
       if (!fs.existsSync(outputRoot)) fs.mkdirSync(outputRoot, { recursive: true });
       const stamp = formatSessionStamp(new Date(recordingStartedAt));
-      liveSessionDir = path.join(outputRoot, `${stamp} feedback`);
+      const suffix = currentSessionMode === 'trade' ? 'trade' : 'feedback';
+      liveSessionDir = path.join(outputRoot, `${stamp} ${suffix}`);
       if (!fs.existsSync(liveSessionDir)) fs.mkdirSync(liveSessionDir, { recursive: true });
-      log('main', 'liveSessionDir created', { liveSessionDir });
+      log('main', 'liveSessionDir created', { liveSessionDir, mode: currentSessionMode });
 
       const display = screen
         .getAllDisplays()
@@ -1382,6 +1486,8 @@ ipcMain.handle(
             durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
             preCreatedSessionDir: liveSessionDir,
             chapters: [...currentChapters],
+            mode: currentSessionMode,
+            tradeMarkers: [...currentTradeMarkers],
           };
         }
         liveSessionDir = null;
@@ -1562,10 +1668,9 @@ ipcMain.handle('launcher:screenshot', () => {
 });
 
 ipcMain.handle('launcher:trade', () => {
-  // M2 placeholder: log only. enterSelectingTrade() lands in M3 alongside
-  // the recording-flow wiring (region-select → recorder start with mode=trade
-  // → 'trade' suffix folder on stop).
-  log('launcher', 'trade click (M2 placeholder)', { appState });
+  log('launcher', 'trade click', { appState });
+  if (appState === 'idle') enterSelectingTrade();
+  else if (appState === 'selecting-trade') exitSelecting('trade toggle');
 });
 
 ipcMain.handle('launcher:quit', () => {

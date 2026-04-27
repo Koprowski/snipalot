@@ -18,10 +18,10 @@ interface Window {
           | 'selecting-screenshot'
           | 'selecting-trade'
           | 'recording'
-          | 'trading'
           | 'processing';
         processingStep: string | null;
         startStopHotkey?: string;
+        sessionMode?: 'record' | 'trade';
       }) => void
     ) => void;
   };

@@ -18,8 +18,8 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
         | 'selecting-screenshot'
         | 'selecting-trade'
         | 'recording'
-        | 'trading'
         | 'processing';
+      sessionMode?: 'record' | 'trade';
       processingStep: string | null;
       startStopHotkey?: string;
     }) => void

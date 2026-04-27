@@ -839,7 +839,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const warnings: string[] = [];
   const startedAt = new Date(input.startedAtMs);
   const stamp = formatSessionStamp(startedAt);
-  const sessionBasename = `${stamp} feedback`;
+  // Folder suffix mirrors the capture mode: 'feedback' for record-mode (the
+  // legacy default — annotation walkthroughs) and 'trade' for trade-mode
+  // (TradeCall sessions). Pre-created dirs (live snaps) already encode the
+  // right suffix in main; this fallback handles the case where main didn't
+  // pre-create the dir (e.g. unexpected stop with no live snaps).
+  const mode = input.mode ?? 'record';
+  const folderSuffix = mode === 'trade' ? 'trade' : 'feedback';
+  const sessionBasename = `${stamp} ${folderSuffix}`;
   // Use a pre-created dir (for live snaps) if available, otherwise create one.
   const sessionDir = input.preCreatedSessionDir ?? path.join(input.outputRoot, sessionBasename);
   ensureDir(sessionDir);
@@ -1066,7 +1073,28 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     /* leave it if we can't delete */
   }
 
-  log('pipeline', 'session complete', { sessionDir, warnings });
+  // 10. Trade-mode extension: after the legacy pipeline finishes, run the
+  //     trade-pipeline which writes extraction_prompt.md (M4) and once the
+  //     user pastes a response, generates trade_log.csv + .md (M5). This
+  //     is fire-and-forget — the launcher already exited 'processing' so
+  //     trade work happens in the background. M3 scaffold logs only.
+  if (mode === 'trade') {
+    try {
+      const { runTradePipeline } = await import('./trade-pipeline');
+      void runTradePipeline({
+        sessionDir,
+        mp4Path,
+        transcriptSegments,
+        tradeMarkers: input.tradeMarkers ?? [],
+        onStep: input.onStep,
+      });
+    } catch (err) {
+      warnings.push(`trade-pipeline import/launch failed: ${(err as Error).message}`);
+      log('pipeline', 'trade-pipeline launch fail', { err: String(err) });
+    }
+  }
+
+  log('pipeline', 'session complete', { sessionDir, warnings, mode });
 
   return {
     sessionDir,

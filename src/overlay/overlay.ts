@@ -543,6 +543,18 @@ async function setInteractiveIfChanged(interactive: boolean): Promise<void> {
   await window.snipalot.setInteractive(interactive);
 }
 
+/**
+ * Force the overlay back to click-through, bypassing the cache check.
+ * Used on every exit-from-annotation and on recording-stopped so even if
+ * `overlayInteractive` got out of sync (e.g. main and renderer disagree
+ * after a focus race), the user is guaranteed to get clicks through to
+ * the app underneath. The IPC is idempotent — calling it twice is safe.
+ */
+async function forceClickThrough(): Promise<void> {
+  overlayInteractive = false;
+  await window.snipalot.setInteractive(false);
+}
+
 // ─── mode transitions ────────────────────────────────────────────────
 
 async function enterRegionSelectMode(): Promise<void> {
@@ -617,7 +629,11 @@ async function exitAnnotationMode(): Promise<void> {
   document.body.classList.remove('annotation-mode');
   overlayStatusEl.classList.add('status-hidden');
   shapePickerEl.classList.add('region-hidden');
-  await setInteractiveIfChanged(false);
+  // Force-flip to click-through (bypass the cache). If main and renderer
+  // disagree on the current ignore-mouse state, the user could otherwise
+  // end up with a "stuck" interactive overlay that swallows their clicks
+  // even though annotation mode is off.
+  await forceClickThrough();
   window.snipalot.log('mode', 'exit annotation');
   redraw();
 }
@@ -662,8 +678,16 @@ function undoLastAnnotation(): void {
 function clearAllAnnotations(): void {
   deselect();
   annotations = [];
+  nextNumber = 1;
   pushAnnotationSync();
   redraw();
+  // After clearing (whether via the trash button or Ctrl+Shift+C),
+  // also exit annotation mode so the user is returned to the underlying
+  // app for normal mouse/keyboard interaction. The intent of "clear" is
+  // "I'm done with this annotation pass" — staying in annotation mode
+  // would mean the next click on the page is captured by the overlay
+  // instead of going through to the app.
+  if (annotationMode) void exitAnnotationMode();
 }
 
 /**
@@ -1274,6 +1298,12 @@ window.snipalot.onRecordingStopped(() => {
   nextNumber = 1;
   deselect();
   if (annotationMode) { void exitAnnotationMode(); } else { redraw(); }
+  // Belt-and-suspenders: even if annotation mode wasn't on (so
+  // exitAnnotationMode wouldn't have fired its forceClickThrough),
+  // guarantee the overlay drops to click-through after a recording
+  // ends. Otherwise a stale interactive flag from a focus race could
+  // leave the (now-empty) overlay swallowing app clicks.
+  void forceClickThrough();
   window.snipalot.log('recording-stopped');
 });
 

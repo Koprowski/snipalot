@@ -160,9 +160,29 @@ export async function runTradePipeline(
     log('trade-pipeline', 'markers.json fail', { err: String(err) });
   }
 
+  // ── Wait for the trade-context window to close (user submits MockApe
+  //    data or clicks Skip). Main opens the window in stopRecording
+  //    so it's already up and parallel to whisper / mp4 / gif work.
+  //    If autoPromptForTradeData is off, main writes the .skipped
+  //    sentinel directly — wait returns immediately. ──
+  if (onStep) onStep('Waiting for trade-context decision…');
+  await waitForTradeContextDecision(sessionDir);
+
+  // Load the MockApe data NOW (before rendering the prompt) so the
+  // prompt template can embed it as canonical trade context.
+  const mockape = loadMockApeTrades(sessionDir);
+  if (mockape) {
+    log('trade-pipeline', 'mockape data loaded for prompt embed', { trades: mockape.length });
+  }
+
   // ── M4: write the extraction prompt + wait for the user's LLM response ──
   if (onStep) onStep('Writing trade extraction prompt…');
-  const promptText = renderExtractionPrompt(transcriptSegments, tradeMarkers);
+  const promptText = renderExtractionPrompt(
+    transcriptSegments,
+    tradeMarkers,
+    mockape,
+    input.startedAtMs
+  );
   const { promptPath, responsePath } = writeExtractionPrompt(sessionDir, promptText);
 
   if (onStep) onStep('Waiting for extraction_response.json (paste prompt into your LLM)…');
@@ -183,19 +203,26 @@ export async function runTradePipeline(
     };
   }
 
-  // ── MockApe / Padre outcome join (optional) ──
-  // If the user dropped mockape.json into the session folder, enrich each
-  // TradeEvent with actual entry/exit market caps + P&L. Match by
-  // tokenName + timestamp proximity (±10 min). Without this file the CSV
-  // still ships, just with the actual-outcome columns blank.
-  const mockape = loadMockApeTrades(sessionDir);
+  // ── MockApe / Padre outcome enrichment ──
+  // mockape was already loaded earlier (before prompt render). The LLM
+  // received it in the prompt and (ideally) populated mockape_trade_id
+  // for matched trades — joinMockApeById just looks up by ID and copies
+  // PnL fields. If the LLM missed the assignment, fall back to fuzzy
+  // tokenName + timestamp matching for unjoined trades.
   let mockApeJoinStats = { matched: 0, unmatched: 0 };
   if (mockape) {
-    if (onStep) onStep('Joining MockApe trade data…');
-    mockApeJoinStats = joinMockApe(trades, mockape, input.startedAtMs);
-    log('trade-pipeline', 'mockape join applied', mockApeJoinStats);
+    if (onStep) onStep('Joining MockApe outcomes by id…');
+    mockApeJoinStats = joinMockApeById(trades, mockape);
+    // Any trades the LLM didn't tag get a fallback fuzzy attempt.
+    const unjoined = trades.filter((t) => !t.mockape_trade_id);
+    if (unjoined.length > 0) {
+      const fuzzy = joinMockApe(unjoined, mockape, input.startedAtMs);
+      mockApeJoinStats.matched += fuzzy.matched;
+      log('trade-pipeline', 'mockape fuzzy fallback applied', fuzzy);
+    }
+    log('trade-pipeline', 'mockape join total', mockApeJoinStats);
   } else {
-    log('trade-pipeline', 'no mockape.json found — actual P&L columns will be blank');
+    log('trade-pipeline', 'no mockape.json — actual P&L columns will be blank');
   }
 
   // ── M5: generate trade_log.csv + trade_log.md + adherence_report.md ──
@@ -254,9 +281,40 @@ function formatOffset(ms: number): string {
  * markers as focal points but isn't required to find one trade per marker
  * — content alone is enough.
  */
+/**
+ * Wait until either mockape.json or mockape.json.skipped exists in the
+ * session folder. The trade-context window writes one of these when the
+ * user clicks Continue/Skip, OR main writes the .skipped sentinel
+ * directly when autoPromptForTradeData is off. Polls every 1s; max wait
+ * 30 minutes (defensive against the user closing the window without any
+ * action — closed-window-handler in main also writes the sentinel, but
+ * we time out as a final safety net).
+ */
+async function waitForTradeContextDecision(
+  sessionDir: string,
+  timeoutMs: number = 30 * 60 * 1000
+): Promise<void> {
+  const dataPath = path.join(sessionDir, 'mockape.json');
+  const skipPath = path.join(sessionDir, 'mockape.json.skipped');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(dataPath) || fs.existsSync(skipPath)) {
+      log('trade-pipeline', 'trade-context decision detected', {
+        hasData: fs.existsSync(dataPath),
+        skipped: fs.existsSync(skipPath),
+      });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  log('trade-pipeline', 'trade-context wait timed out — proceeding without trade data');
+}
+
 function renderExtractionPrompt(
   transcriptSegments: TranscriptSegment[],
-  tradeMarkers: number[]
+  tradeMarkers: number[],
+  mockape: MockApeTrade[] | null,
+  recordingStartedAtMs: number
 ): string {
   // Build the annotated transcript: a stable line-per-segment dump with
   // marker tags spliced in at the closest segment boundary.
@@ -282,23 +340,82 @@ function renderExtractionPrompt(
     nextMarkerIdx++;
   }
 
+  // If MockApe data is available, build a chronological context block
+  // with each trade's recording-relative offset (computed from absolute
+  // timestamp minus recording start). The LLM uses this as the canonical
+  // trade list and aligns spoken commentary against it.
+  let mockapeBlock = '';
+  if (mockape && mockape.length > 0) {
+    const sorted = [...mockape].sort((a, b) => a.timestamp - b.timestamp);
+    const lines: string[] = [];
+    lines.push('## Actual trades from MockApe / Padre (canonical, chronological)');
+    lines.push('');
+    lines.push('Each trade fired at a real moment in the session. The "fired at"');
+    lines.push('M:SS is computed from the absolute trade timestamp minus the');
+    lines.push('recording start. Use this list as the SOURCE OF TRUTH and find');
+    lines.push('the spoken context (transcript window around that M:SS) that');
+    lines.push('matches each trade.');
+    lines.push('');
+    sorted.forEach((t, i) => {
+      const offsetMs = t.timestamp - recordingStartedAtMs;
+      const offsetLabel = offsetMs >= 0 ? formatOffset(offsetMs) : '(before recording)';
+      const pnlSign = t.pnlSol >= 0 ? '+' : '';
+      lines.push(
+        `${i + 1}. **${t.tokenName}** · entry $${formatMcInline(t.entryMarketCap)} → exit $${formatMcInline(t.exitMarketCap)} · ${pnlSign}${t.pnlSol.toFixed(4)} SOL (${pnlSign}${t.pnlPercentage.toFixed(2)}%) · fired at **${offsetLabel}** in session · trade_id=${t.id}`
+      );
+    });
+    lines.push('');
+    mockapeBlock = lines.join('\n');
+  }
+
+  const hasMockape = mockape && mockape.length > 0;
+
   return `You are analyzing a trader's spoken commentary during a meme coin
-trading session. The transcript below is a chronological narration with
-optional [MARKER N at M:SS] tags indicating moments the trader explicitly
+trading session.${hasMockape ? ' You have ONE additional data source: the trader\'s actual MockApe / Padre trade history (below).' : ''}
+${hasMockape ? `
+
+${mockapeBlock}` : ''}
+
+## Transcript
+
+The transcript below is a chronological narration with optional
+[MARKER N at M:SS] tags indicating moments the trader explicitly
 flagged as significant by pressing a hotkey.
 
-Identify each distinct trade in the session. A "trade" pairs a pre-trade
+\`\`\`
+${annotatedLines.join('\n')}
+\`\`\`
+
+## Task
+
+${hasMockape ? `For EACH actual trade in the MockApe list above, find the matching
+spoken context in the transcript:
+- The trader's commentary RIGHT BEFORE the trade's "fired at" timestamp
+  is the **pre-trade callout** (target market cap range, rationale).
+- The trader's commentary RIGHT AFTER the trade's "fired at" timestamp
+  is the **post-trade callout** (outcome, adherence assessment).
+- If the trader mentions a coin in the transcript but it has no matching
+  MockApe trade (musing only — no actual entry), include it as an
+  EXTRA row at the end with mockape_trade_id=null.
+
+Token-name disambiguation: whisper transcripts mishear meme coin names
+("guy" might be heard as "buy", "FELON" might be heard as "felon" or
+"fell on"). Use the actual MockApe tokenName as canonical and find
+whatever the trader actually said for that trade.` : `Identify each distinct trade in the session. A "trade" pairs a pre-trade
 callout (the trader announces a coin and a target market cap range with
 a rationale) with a post-trade callout (the trader announces the exit
-and how it went). Either side can be missing.
+and how it went). Either side can be missing.`}
 
-Return a JSON array, one object per trade, in chronological order. Use
-this exact schema (use null for any field the transcript doesn't speak to):
+## Output schema
+
+Return a JSON array, one object per trade. Use null for any field the
+transcript / data doesn't speak to:
 
 [
   {
     "trade_id": 1,
     "token_name": "PEPE",
+    "mockape_trade_id": "${hasMockape ? '17773210097418v1srba6s' : 'null'}",
     "pre_call_offset_label": "0:34",
     "pre_call_offset_ms": 34000,
     "post_call_offset_label": "1:12",
@@ -319,26 +436,27 @@ this exact schema (use null for any field the transcript doesn't speak to):
 ]
 
 Rules:
-- Market cap values are integers in dollars. Convert "80k" → 80000, "1.2m" → 1200000.
-- Transcripts are whisper output and may mishear meme coin names. If a token
-  name looks garbled (e.g. "peep" instead of "pepe"), use your best guess and
-  set needs_review=true with a note explaining the uncertainty.
-- pre_call_offset_label / pre_call_offset_ms reflect when in the session the
-  trader spoke the prediction (M:SS from session start, ms is the same value
-  in milliseconds). Use the markers as anchors when present.
-- If a trade callout has no clear post-trade discussion, set the post_* fields
-  to null (don't drop the trade).
+- Market cap values are integers in dollars ("80k" → 80000, "1.2m" → 1200000).
+- ${hasMockape ? 'mockape_trade_id MUST match the trade_id from the MockApe list above for matched trades. Use null for spoken-only musings with no actual trade.' : 'mockape_trade_id should be null (no MockApe data was provided this session).'}
+- pre_call_offset_label / pre_call_offset_ms = where in the recording (M:SS
+  + same value in ms) the trader spoke the prediction.
+- post_call_offset_label / post_call_offset_ms = where the trader spoke
+  about the exit.
+- If a trade has no spoken pre-callout (silent entry), set pre_* fields to
+  null. Same for missing post-callouts.
 - If the trader mentions a coin but doesn't clearly enter a position
-  (musing only), set confidence=low, needs_review=true, and note the
-  ambiguity.
-- Output ONLY the JSON array. No prose before or after, no markdown code
-  fences, no commentary. The receiving tool parses your output directly.
-
-Transcript:
----
-${annotatedLines.join('\n')}
----
+  (musing only), set confidence=low, needs_review=true.
+- **Output ONLY the JSON array.** No prose before or after, no markdown
+  code fences, no commentary. The receiving tool parses your output
+  directly.
 `;
+}
+
+/** Inline market-cap formatter for the prompt context block. */
+function formatMcInline(mc: number): string {
+  if (mc >= 1_000_000) return `${(mc / 1_000_000).toFixed(2)}m`;
+  if (mc >= 1_000) return `${(mc / 1_000).toFixed(1)}k`;
+  return mc.toString();
 }
 
 /**
@@ -531,6 +649,10 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
       post_confidence: confOrNull(e.post_confidence),
       needs_review: typeof e.needs_review === 'boolean' ? e.needs_review : false,
       notes: strOrNull(e.notes),
+      // LLM-provided alignment to the MockApe canonical trade list.
+      // When present, joinMockApeById short-circuits the fuzzy matcher
+      // and just enriches with PnL from the matching trade.
+      mockape_trade_id: strOrNull(e.mockape_trade_id),
     };
   });
 }
@@ -843,6 +965,60 @@ function tokenNameMatches(spoken: string, mockape: string): boolean {
 }
 
 /**
+ * ID-based join: when the LLM has populated mockape_trade_id on a trade,
+ * look up the matching MockApe entry by ID and copy PnL fields.
+ * Cleaner than fuzzy matching since the LLM already did the alignment
+ * with full context. Returns counts of matched + unmatched (no ID).
+ */
+function joinMockApeById(
+  trades: TradeEvent[],
+  mockape: MockApeTrade[]
+): { matched: number; unmatched: number } {
+  const byId = new Map(mockape.map((m) => [m.id, m]));
+  let matched = 0;
+  let unmatched = 0;
+  for (const trade of trades) {
+    if (!trade.mockape_trade_id) {
+      unmatched++;
+      continue;
+    }
+    const m = byId.get(trade.mockape_trade_id);
+    if (!m) {
+      unmatched++;
+      continue;
+    }
+    enrichTradeFromMockape(trade, m, 'high');
+    matched++;
+  }
+  return { matched, unmatched };
+}
+
+/** Apply MockApe PnL fields to a TradeEvent. Shared by id + fuzzy joins. */
+function enrichTradeFromMockape(
+  trade: TradeEvent,
+  m: MockApeTrade,
+  confidence: 'high' | 'medium' | 'low'
+): void {
+  trade.mockape_trade_id = m.id;
+  trade.mockape_join_confidence = confidence;
+  trade.entry_mc_actual = m.entryMarketCap;
+  trade.exit_mc_actual = m.exitMarketCap;
+  trade.sol_invested = m.solInvested;
+  trade.sol_received = m.solReceived;
+  trade.pnl_sol = m.pnlSol;
+  trade.pnl_percentage = m.pnlPercentage;
+  if (trade.target_low_mc !== null && trade.target_high_mc !== null) {
+    const exit = m.exitMarketCap;
+    trade.target_hit_low = exit >= trade.target_low_mc;
+    trade.target_hit_high = exit >= trade.target_high_mc;
+    trade.exit_scenario =
+      exit < trade.target_low_mc ? 'early' :
+      exit > trade.target_high_mc ? 'overshoot' :
+      'in_range';
+  }
+}
+
+/**
  * For each TradeEvent, find the closest matching MockApe trade by token
  * name + timestamp proximity, and enrich the event with actual entry/exit
  * market caps + P&L. Match confidence depends on token exactness and
@@ -904,31 +1080,11 @@ function joinMockApe(
 
     const m = remaining[bestIdx];
     remaining.splice(bestIdx, 1); // consume
-
-    trade.mockape_trade_id = m.id;
-    trade.mockape_join_confidence =
+    const conf: 'high' | 'medium' | 'low' =
       bestExactToken && bestDelta < 120_000 ? 'high' :
       bestExactToken ? 'medium' :
       'low';
-    trade.entry_mc_actual = m.entryMarketCap;
-    trade.exit_mc_actual = m.exitMarketCap;
-    trade.sol_invested = m.solInvested;
-    trade.sol_received = m.solReceived;
-    trade.pnl_sol = m.pnlSol;
-    trade.pnl_percentage = m.pnlPercentage;
-
-    // Compute target_hit_low / target_hit_high / exit_scenario from the
-    // ACTUAL exit (not the spoken estimate) when both target bounds + the
-    // actual exit are known.
-    if (trade.target_low_mc !== null && trade.target_high_mc !== null) {
-      const exit = m.exitMarketCap;
-      trade.target_hit_low = exit >= trade.target_low_mc;
-      trade.target_hit_high = exit >= trade.target_high_mc;
-      trade.exit_scenario =
-        exit < trade.target_low_mc ? 'early' :
-        exit > trade.target_high_mc ? 'overshoot' :
-        'in_range';
-    }
+    enrichTradeFromMockape(trade, m, conf);
     matched++;
   }
 

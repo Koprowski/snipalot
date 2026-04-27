@@ -626,6 +626,28 @@ let annotatorWindow: BrowserWindow | null = null;
  */
 let pendingAnnotatorImage: { dataUrl: string; sessionStamp: string } | null = null;
 
+// ─── trade-context window (TradeCall trade-data input) ───────────────
+//
+// Opens automatically after a Trade-mode recording stops (unless the user
+// has set config.trade.autoPromptForTradeData = false). Collects a
+// MockApe / Padre trade export from the user (paste JSON or CSV, or browse
+// for a file). Writes the parsed data to mockape.json in the session dir
+// before the trade-pipeline renders the LLM extraction prompt — so the
+// prompt can embed the actual trades as context for the LLM to align
+// against the spoken transcript.
+
+let tradeContextWindow: BrowserWindow | null = null;
+/**
+ * Session info handed to the trade-context window on boot via the
+ * trade-context:get-session-info IPC. Set by openTradeContextWindow();
+ * cleared when the window submits or skips.
+ */
+let pendingTradeContext: {
+  sessionDir: string;
+  recordingStartedAtMs: number;
+  durationMs: number;
+} | null = null;
+
 function openAnnotator(): void {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) {
     annotatorWindow.focus();
@@ -745,6 +767,140 @@ ipcMain.handle(
 // IPC: renderer asks main to close the annotator (e.g. user hits Cancel).
 ipcMain.handle('annotator:cancel', () => {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) annotatorWindow.close();
+});
+
+/**
+ * Open the trade-context window for an in-flight trade-mode session.
+ * The window collects MockApe trade data from the user and writes it
+ * (or a sentinel) to the session folder. Trade-pipeline polls for the
+ * file before rendering the LLM extraction prompt.
+ *
+ * Pre-creates the trade-context state so the window can fetch session
+ * info on boot. Window auto-closes when user submits or skips.
+ */
+function openTradeContextWindow(
+  sessionDir: string,
+  recordingStartedAtMs: number,
+  durationMs: number
+): void {
+  if (tradeContextWindow && !tradeContextWindow.isDestroyed()) {
+    tradeContextWindow.focus();
+    return;
+  }
+  pendingTradeContext = { sessionDir, recordingStartedAtMs, durationMs };
+  const primary = screen.getPrimaryDisplay();
+  const w = 640;
+  const h = 560;
+  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  tradeContextWindow = new BrowserWindow({
+    width: w,
+    height: h,
+    x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
+    y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
+    title: 'Snipalot Trade · Add trade data',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    backgroundColor: '#0f1117',
+    show: false,
+    alwaysOnTop: true,
+    minimizable: false,
+    maximizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'trade-context', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  tradeContextWindow.removeMenu();
+  tradeContextWindow.loadFile(path.join(__dirname, '..', 'trade-context', 'trade-context.html'));
+  tradeContextWindow.once('ready-to-show', () => tradeContextWindow?.show());
+  tradeContextWindow.on('closed', () => {
+    // If the user dismissed the window without submit/skip (e.g. clicked
+    // the X), treat as a skip so trade-pipeline can proceed. Write the
+    // sentinel only if neither has already happened (the IPC handlers
+    // below also write it; this is the fallback).
+    if (pendingTradeContext) {
+      const skipPath = path.join(pendingTradeContext.sessionDir, 'mockape.json.skipped');
+      try {
+        if (!fs.existsSync(skipPath) &&
+            !fs.existsSync(path.join(pendingTradeContext.sessionDir, 'mockape.json'))) {
+          fs.writeFileSync(skipPath, '', 'utf-8');
+          log('trade-context', 'window dismissed without submit/skip → wrote .skipped sentinel');
+        }
+      } catch (err) {
+        log('trade-context', 'sentinel write fail on close', { err: (err as Error).message });
+      }
+      pendingTradeContext = null;
+    }
+    tradeContextWindow = null;
+  });
+  log('trade-context', 'opened', { sessionDir, recordingStartedAtMs, durationMs });
+}
+
+ipcMain.handle('trade-context:get-session-info', () => {
+  return pendingTradeContext ?? { sessionDir: '', recordingStartedAtMs: 0, durationMs: 0 };
+});
+
+ipcMain.handle(
+  'trade-context:submit',
+  (_evt, payload: { trades: unknown[]; dontAskAgain: boolean }) => {
+    if (!pendingTradeContext) return;
+    const { sessionDir } = pendingTradeContext;
+    const mockApePath = path.join(sessionDir, 'mockape.json');
+    try {
+      fs.writeFileSync(mockApePath, JSON.stringify(payload.trades, null, 2), 'utf-8');
+      log('trade-context', 'mockape.json written via submit', {
+        mockApePath,
+        trades: payload.trades.length,
+      });
+    } catch (err) {
+      log('trade-context', 'mockape.json write fail', { err: (err as Error).message });
+    }
+    if (payload.dontAskAgain) {
+      saveConfig({ trade: { autoPromptForTradeData: false } } as never);
+      log('trade-context', 'autoPromptForTradeData disabled by user');
+    }
+    pendingTradeContext = null;
+    if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
+  }
+);
+
+ipcMain.handle('trade-context:skip', (_evt, payload: { dontAskAgain: boolean }) => {
+  if (!pendingTradeContext) return;
+  const { sessionDir } = pendingTradeContext;
+  const skipPath = path.join(sessionDir, 'mockape.json.skipped');
+  try {
+    fs.writeFileSync(skipPath, '', 'utf-8');
+    log('trade-context', 'skip sentinel written', { skipPath });
+  } catch (err) {
+    log('trade-context', 'skip sentinel fail', { err: (err as Error).message });
+  }
+  if (payload.dontAskAgain) {
+    saveConfig({ trade: { autoPromptForTradeData: false } } as never);
+    log('trade-context', 'autoPromptForTradeData disabled by user');
+  }
+  pendingTradeContext = null;
+  if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
+});
+
+ipcMain.handle('trade-context:browse', async () => {
+  if (!tradeContextWindow || tradeContextWindow.isDestroyed()) return null;
+  const result = await dialog.showOpenDialog(tradeContextWindow, {
+    title: 'Choose trade export file',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Trade exports', extensions: ['json', 'csv'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const filepath = result.filePaths[0];
+  try {
+    const contents = fs.readFileSync(filepath, 'utf-8');
+    return { contents, filename: path.basename(filepath) };
+  } catch (err) {
+    log('trade-context', 'browse read fail', { err: (err as Error).message });
+    return null;
+  }
 });
 
 function openSettings(isFirstRun = false): void {
@@ -1164,6 +1320,32 @@ function stopRecording(reason: string): void {
       mode: pendingProcessing.mode,
       tradeMarkers: pendingProcessing.tradeMarkers.length,
     });
+
+    // For trade-mode sessions, immediately open the trade-context window
+    // (parallel to the pipeline's mp4/whisper work) so the user can paste
+    // their MockApe export while ffmpeg + whisper are running. Trade-
+    // pipeline won't render the LLM extraction prompt until either
+    // mockape.json or mockape.json.skipped exists in the session folder.
+    if (
+      currentSessionMode === 'trade' &&
+      liveSessionDir !== null &&
+      getConfig().trade.autoPromptForTradeData
+    ) {
+      openTradeContextWindow(
+        liveSessionDir,
+        recordingStartedAt,
+        pendingProcessing.durationMs
+      );
+    } else if (currentSessionMode === 'trade' && liveSessionDir !== null) {
+      // User opted out of the prompt — write the .skipped sentinel so
+      // trade-pipeline doesn't wait.
+      try {
+        fs.writeFileSync(path.join(liveSessionDir, 'mockape.json.skipped'), '', 'utf-8');
+        log('trade-context', 'auto-skipped (autoPromptForTradeData=false)');
+      } catch {
+        /* ignore */
+      }
+    }
   }
   liveSessionDir = null;
 

@@ -45,6 +45,17 @@ export interface SnipalotConfig {
      */
     clearAnnotationsAfter: boolean;
   };
+  trade: {
+    /**
+     * After a Trade-mode recording stops, should Snipalot pop the
+     * trade-context window asking the user to paste their MockApe /
+     * Padre export? When true (default), the window opens automatically.
+     * When false, trade-pipeline proceeds straight to extraction without
+     * the actual-trade context (LLM has only the transcript). User can
+     * toggle from inside the window via "Don't ask again".
+     */
+    autoPromptForTradeData: boolean;
+  };
   /** true until the user completes first-run onboarding. */
   firstRun: boolean;
 }
@@ -91,6 +102,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   snapshot: {
     clearAnnotationsAfter: true,
+  },
+  trade: {
+    autoPromptForTradeData: true,
   },
   firstRun: true,
 };

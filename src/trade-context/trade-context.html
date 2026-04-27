@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Snipalot Trade · Trade Data</title>
+    <link rel="stylesheet" href="trade-context.css" />
+  </head>
+  <body>
+    <div class="header">
+      <div class="title">📊 Add your trade data</div>
+      <div class="subtitle" id="subtitle">Optional — paste MockApe / Padre export so the LLM can align spoken callouts to actual trades.</div>
+    </div>
+
+    <div class="content">
+      <p class="instructions">
+        Paste your trade export below as <strong>JSON</strong> or <strong>CSV</strong>.
+        The first column header (CSV) or property name (JSON) should include
+        <code>tokenName</code>, <code>timestamp</code>, <code>entryMarketCap</code>,
+        <code>exitMarketCap</code>, <code>pnlSol</code>, <code>pnlPercentage</code>.
+      </p>
+
+      <textarea
+        id="paste-area"
+        spellcheck="false"
+        placeholder='Paste here, e.g.:&#10;[&#10;  { "tokenName": "LUCY", "timestamp": 1777321009741, "entryMarketCap": 17670, "exitMarketCap": 10610, "pnlSol": -0.2, "pnlPercentage": -39.95, ... },&#10;  ...&#10;]'></textarea>
+
+      <div class="status-row">
+        <span class="status" id="status">No data pasted yet</span>
+        <button class="btn btn-secondary" id="btn-browse">Browse for file…</button>
+      </div>
+
+      <div class="hint">
+        <span class="hint-label">Auto-aligned to the recording timeline:</span>
+        each trade's <code>timestamp</code> (unix epoch ms) is converted to a
+        <strong>M:SS offset</strong> within the recording, then the LLM matches
+        spoken context around that offset to the actual trade. Whisper mishears
+        of token names get resolved against the actual <code>tokenName</code>.
+      </div>
+    </div>
+
+    <div class="footer">
+      <label class="footer-toggle">
+        <input type="checkbox" id="dont-ask-again" />
+        <span>Don't ask again — skip this dialog for future trade sessions</span>
+      </label>
+      <div class="footer-buttons">
+        <button class="btn btn-ghost" id="btn-skip">Skip (no trade data)</button>
+        <button class="btn btn-primary" id="btn-continue" disabled>Continue with trade data</button>
+      </div>
+    </div>
+
+    <script src="trade-context.js"></script>
+  </body>
+</html>

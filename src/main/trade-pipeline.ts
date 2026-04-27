@@ -14,9 +14,10 @@
  * land in M5.
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { log } from './logger';
 import { TranscriptSegment } from './pipeline';
-// fs + path imports land in M4 when writeExtractionPrompt() is implemented.
 
 export interface TradePipelineInput {
   /** Session directory where outputs land. */
@@ -57,17 +58,34 @@ export async function runTradePipeline(
   const { sessionDir, transcriptSegments, tradeMarkers, onStep } = input;
   const warnings: string[] = [];
 
-  log('trade-pipeline', 'invoked (M1 scaffold)', {
+  log('trade-pipeline', 'invoked', {
     sessionDir,
     transcriptSegments: transcriptSegments.length,
     tradeMarkers: tradeMarkers.length,
   });
-  // The onStep + warnings + sessionDir refs below are no-ops in M1, kept
-  // here so TypeScript's no-unused-locals doesn't complain. Real call sites
-  // land in M4 (writeExtractionPrompt) and M5 (CSV/MD generators).
-  if (onStep) onStep('Trade-mode extraction skipped (M1 scaffold)');
-  void sessionDir;
 
+  // Write markers.json (also useful for the M4 extraction prompt, which
+  // formats markers as [MARKER N at M:SS] anchor tags). Always written
+  // even if empty so downstream tooling can rely on the file existing.
+  if (onStep) onStep('Writing trade markers…');
+  const markersPath = path.join(sessionDir, 'markers.json');
+  try {
+    const payload = {
+      markers: tradeMarkers.map((offsetMs, i) => ({
+        index: i + 1,
+        offsetMs,
+        offsetLabel: formatOffset(offsetMs),
+      })),
+    };
+    fs.writeFileSync(markersPath, JSON.stringify(payload, null, 2), 'utf-8');
+    log('trade-pipeline', 'markers.json written', { count: tradeMarkers.length, markersPath });
+  } catch (err) {
+    warnings.push(`markers.json write failed: ${(err as Error).message}`);
+    log('trade-pipeline', 'markers.json fail', { err: String(err) });
+  }
+
+  // M4 lands writeExtractionPrompt() and the extraction_response.json watcher.
+  // M5 lands buildTradeLogCsv() + buildTradeLogMd() + adherence_report.md.
   return {
     extractionPromptPath: null,
     extractionResponsePath: null,
@@ -76,5 +94,13 @@ export async function runTradePipeline(
     adherenceReportPath: null,
     warnings,
   };
+}
+
+/** Format ms offset as "M:SS" for the markers payload + future extraction prompt. */
+function formatOffset(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 

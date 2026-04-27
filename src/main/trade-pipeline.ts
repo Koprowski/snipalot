@@ -16,7 +16,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { clipboard, Notification } from 'electron';
+import { clipboard, Notification, shell } from 'electron';
 import { stringify as csvStringify } from 'csv-stringify/sync';
 import { log } from './logger';
 import { TranscriptSegment } from './pipeline';
@@ -354,18 +354,91 @@ function writeExtractionPrompt(
   const responsePath = path.join(sessionDir, 'extraction_response.json');
   fs.writeFileSync(promptPath, promptText, 'utf-8');
   clipboard.writeText(promptText);
-  log('trade-pipeline', 'extraction_prompt.md written + clipboarded', {
+
+  // Drop a clear NEXT_STEPS.md into the folder so anyone browsing it
+  // can immediately see the manual-paste workflow without reading a
+  // notification or hunting through the codebase.
+  const nextStepsPath = path.join(sessionDir, 'NEXT_STEPS.md');
+  const nextSteps = `# Next steps for this Trade session
+
+Snipalot has finished recording, transcribing, and packaging your session.
+Now it needs YOU to do two things, then it'll automatically generate the
+final \`trade_log.csv\` + \`trade_log.md\` + \`adherence_report.md\`.
+
+## 1. Generate the structured trade JSON via your LLM
+
+The extraction prompt is currently on your **clipboard**. It contains:
+- Detailed instructions for the LLM
+- Your full transcript with marker tags
+- The exact JSON schema to return
+
+Paste that prompt into one of these and let it think:
+- **Claude Code** (Jason)
+- **Gemini CLI** / **Cursor** / **OpenRouter free tier** (son)
+- Or any other LLM you have access to (ChatGPT, etc.)
+
+The LLM will return a JSON array of trade events. **Save that JSON
+into this folder as \`extraction_response.json\`** (exact filename).
+
+If the file is missing or you forgot to copy the prompt: open
+\`extraction_prompt.md\` in this folder — the same prompt is there.
+
+## 2. (Optional but recommended) Drop your MockApe trade export
+
+If you exported trades from MockApe / Padre, save the JSON array into
+this folder as \`mockape.json\` (exact filename). Snipalot will:
+- Match each spoken trade to its actual MockApe entry by token name +
+  timestamp
+- Add real entry/exit market caps, P&L SOL, P&L %, win/loss columns
+  to \`trade_log.csv\`
+- Surface aggregate P&L stats in \`adherence_report.md\`
+
+If you skip this, the trade log still ships — just without the actual
+P&L columns.
+
+## 3. Wait
+
+Snipalot is polling this folder every 2 seconds. As soon as
+\`extraction_response.json\` shows up and validates, it generates:
+- \`trade_log.csv\` — analysis-ready, one row per trade
+- \`trade_log.md\` — human-readable per-trade view
+- \`adherence_report.md\` — aggregate stats
+
+The polling timeout is 60 minutes from the moment the recording stopped.
+
+## Files in this folder right now
+
+- \`recording.mp4\` — the raw recording (lives in the parent folder)
+- \`transcript.txt\` — whisper-generated transcript
+- \`markers.json\` — your Ctrl+Shift+M marker timestamps
+- \`extraction_prompt.md\` — paste-ready LLM prompt (also on clipboard)
+- \`NEXT_STEPS.md\` — this file
+- _(after you save extraction_response.json:)_
+  - \`extraction_response.json\` — your LLM's JSON answer
+  - \`mockape.json\` — your Padre export (optional)
+  - \`trade_log.csv\`, \`trade_log.md\`, \`adherence_report.md\` — the deliverables
+`;
+  fs.writeFileSync(nextStepsPath, nextSteps, 'utf-8');
+
+  log('trade-pipeline', 'extraction prompt + NEXT_STEPS written + clipboarded', {
     promptPath,
+    nextStepsPath,
     chars: promptText.length,
   });
+
+  // Open the session folder in Explorer so the user actually sees the
+  // files and the workflow is impossible to miss.
+  void shell.openPath(sessionDir);
+
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Snipalot Trade · prompt ready (clipboard)',
+      title: 'Snipalot Trade · prompt ready (on clipboard)',
       body:
-        `Paste into Claude Code / Gemini / Cursor. Save the JSON reply as ` +
-        `extraction_response.json in this folder:\n${sessionDir}\n\n` +
-        `Tip: drop your MockApe trade export here as mockape.json BEFORE ` +
-        `saving the extraction reply for a richer log with actual P&L.`,
+        `Step 1: paste the prompt into Claude Code / Gemini / Cursor.\n` +
+        `Step 2: save the LLM's JSON reply as extraction_response.json ` +
+        `in the folder that just opened.\n` +
+        `Step 3 (optional): drop your MockApe export as mockape.json.\n\n` +
+        `Read NEXT_STEPS.md in the session folder for full instructions.`,
       silent: false,
     }).show();
   }

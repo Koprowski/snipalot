@@ -328,6 +328,20 @@ function reloadGlobalHotkeys(): void {
   reg(hk.clear, () => {
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-clear');
   });
+  // Always-on Trade-session toggle hotkey. Mirrors the launcher's violet
+  // Trade button: idle → enterSelectingTrade, active trade-recording →
+  // stopRecording. Available globally so the user can start a session
+  // without finding the launcher first.
+  reg(hk.startTrade, () => {
+    log('hotkey', 'startTrade fired', { appState, currentSessionMode });
+    if (appState === 'idle') {
+      enterSelectingTrade();
+    } else if (appState === 'recording' && currentSessionMode === 'trade') {
+      stopRecording('trade hotkey');
+    } else if (appState === 'selecting-trade') {
+      exitSelecting('trade hotkey toggle');
+    }
+  });
 
   // Re-arm the recording-only annotate + snapshot hotkeys at their new
   // combos if we're mid-session. unregisterAll() above already cleared

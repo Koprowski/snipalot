@@ -39,9 +39,22 @@ const dontAskEl = document.getElementById('dont-ask-again') as HTMLInputElement;
 const btnBrowse = document.getElementById('btn-browse') as HTMLButtonElement;
 const btnSkip = document.getElementById('btn-skip') as HTMLButtonElement;
 const btnContinue = document.getElementById('btn-continue') as HTMLButtonElement;
+const filterPanelEl = document.getElementById('filter-panel') as HTMLDivElement;
+const filterSummaryEl = document.getElementById('filter-summary')!;
+const filterWindowEl = document.getElementById('filter-window')!;
+const filterListEl = document.getElementById('filter-list') as HTMLUListElement;
+const includeAllEl = document.getElementById('include-all') as HTMLInputElement;
 
 let parsedTrades: MockApeTrade[] | null = null;
 let sessionInfo: { sessionDir: string; recordingStartedAtMs: number; durationMs: number } | null = null;
+
+/**
+ * Buffer on each side of the recording window when filtering MockApe
+ * trades. Captures trades fired right before recording started (user
+ * hit the Trade hotkey then executed) or right after it stopped (user
+ * exited then stopped recording).
+ */
+const SESSION_BUFFER_MS = 60_000;
 
 // ── boot ──────────────────────────────────────────────────────────────
 
@@ -52,6 +65,9 @@ api.getSessionInfo().then((info) => {
   subtitleEl.textContent =
     `Optional — paste MockApe / Padre export so the LLM can align spoken ` +
     `callouts to actual trades. (Session was ${durationMin} min.)`;
+  // Re-render the filter panel in case the user pasted before
+  // session info arrived.
+  if (parsedTrades) renderFilterPanel();
 });
 
 // ── paste / browse / parse ────────────────────────────────────────────
@@ -86,12 +102,107 @@ function tryParse(text: string): void {
     }
     parsedTrades = trades;
     setStatus(`✓ Parsed ${trades.length} trade${trades.length === 1 ? '' : 's'} (${isJson ? 'JSON' : 'CSV'})`, 'ok');
-    btnContinue.disabled = false;
+    renderFilterPanel();
   } catch (err) {
     parsedTrades = null;
+    filterPanelEl.style.display = 'none';
     setStatus(`✗ ${(err as Error).message}`, 'err');
     btnContinue.disabled = true;
   }
+}
+
+/**
+ * Compute which pasted trades fall inside the current recording's time
+ * window (with SESSION_BUFFER_MS on each side), render the breakdown,
+ * and gate Continue based on whether anything is in-window OR the user
+ * has overridden the filter.
+ */
+function renderFilterPanel(): void {
+  if (!parsedTrades || !sessionInfo) {
+    filterPanelEl.style.display = 'none';
+    return;
+  }
+  const start = sessionInfo.recordingStartedAtMs - SESSION_BUFFER_MS;
+  const end = sessionInfo.recordingStartedAtMs + sessionInfo.durationMs + SESSION_BUFFER_MS;
+  const inWindow = parsedTrades.filter((t) => t.timestamp >= start && t.timestamp <= end);
+  const outOfWindow = parsedTrades.length - inWindow.length;
+
+  // Update summary line + window range
+  const startLabel = formatDateTime(sessionInfo.recordingStartedAtMs);
+  const endLabel = formatDateTime(sessionInfo.recordingStartedAtMs + sessionInfo.durationMs);
+  filterWindowEl.textContent = `Session window: ${startLabel} → ${endLabel}`;
+
+  if (inWindow.length === 0) {
+    filterPanelEl.classList.remove('warn');
+    filterPanelEl.classList.add('err');
+    filterSummaryEl.innerHTML = `<strong>None of your ${parsedTrades.length} pasted trades fall within this session.</strong> Either the export is from a different day, or you can check "Include all" below to use the full list anyway.`;
+    filterListEl.innerHTML = '';
+    btnContinue.disabled = !includeAllEl.checked;
+  } else if (outOfWindow > 0) {
+    filterPanelEl.classList.remove('err');
+    filterPanelEl.classList.add('warn');
+    filterSummaryEl.innerHTML = `<strong>${inWindow.length} of ${parsedTrades.length} trades fall within this session</strong> · ${outOfWindow} outside the window will be filtered out.`;
+    filterListEl.innerHTML = inWindow
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((t) => {
+        const offsetMs = t.timestamp - sessionInfo!.recordingStartedAtMs;
+        const offsetLabel = formatOffset(offsetMs);
+        const pnlSign = t.pnlSol >= 0 ? '+' : '';
+        return `<li>${escapeHtml(t.tokenName)} · ${pnlSign}${t.pnlSol.toFixed(4)} SOL · at ${offsetLabel}</li>`;
+      })
+      .join('');
+    btnContinue.disabled = false;
+  } else {
+    filterPanelEl.classList.remove('warn');
+    filterPanelEl.classList.remove('err');
+    filterSummaryEl.innerHTML = `<strong>All ${parsedTrades.length} trades fall within this session.</strong>`;
+    filterListEl.innerHTML = inWindow
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map((t) => {
+        const offsetMs = t.timestamp - sessionInfo!.recordingStartedAtMs;
+        const offsetLabel = formatOffset(offsetMs);
+        const pnlSign = t.pnlSol >= 0 ? '+' : '';
+        return `<li>${escapeHtml(t.tokenName)} · ${pnlSign}${t.pnlSol.toFixed(4)} SOL · at ${offsetLabel}</li>`;
+      })
+      .join('');
+    btnContinue.disabled = false;
+  }
+  filterPanelEl.style.display = 'flex';
+}
+
+includeAllEl.addEventListener('change', renderFilterPanel);
+
+function formatOffset(ms: number): string {
+  const negative = ms < 0;
+  const total = Math.floor(Math.abs(ms) / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${negative ? '-' : ''}${m}:${String(s).padStart(2, '0')}`;
+}
+
+function formatDateTime(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Compute the trades to actually send to main on Continue. Default:
+ * only in-window trades. Override: full pasted list when "Include all"
+ * is checked. (The override exists for edge cases where the user
+ * explicitly wants the full export — e.g. if the recording started a
+ * few seconds late and a trade fired just before the buffer window.)
+ */
+function computeSubmitTrades(): MockApeTrade[] {
+  if (!parsedTrades || !sessionInfo) return [];
+  if (includeAllEl.checked) return parsedTrades;
+  const start = sessionInfo.recordingStartedAtMs - SESSION_BUFFER_MS;
+  const end = sessionInfo.recordingStartedAtMs + sessionInfo.durationMs + SESSION_BUFFER_MS;
+  return parsedTrades.filter((t) => t.timestamp >= start && t.timestamp <= end);
 }
 
 function parseJson(text: string): MockApeTrade[] {
@@ -193,8 +304,19 @@ function setStatus(msg: string, kind: 'neutral' | 'ok' | 'err'): void {
 
 btnContinue.addEventListener('click', async () => {
   if (!parsedTrades) return;
+  const toSubmit = computeSubmitTrades();
+  if (toSubmit.length === 0) {
+    // Shouldn't happen — Continue is disabled in this case — but defend.
+    setStatus('No trades to submit.', 'err');
+    return;
+  }
   btnContinue.disabled = true;
-  await api.submit({ trades: parsedTrades, dontAskAgain: dontAskEl.checked });
+  void api.log('submit', 'submitting trades', {
+    pasted: parsedTrades.length,
+    submitted: toSubmit.length,
+    overrideAll: includeAllEl.checked,
+  });
+  await api.submit({ trades: toSubmit, dontAskAgain: dontAskEl.checked });
   // Main closes the window after writing mockape.json.
 });
 

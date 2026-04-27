@@ -29,12 +29,36 @@
         <button class="btn btn-secondary" id="btn-browse">Browse for file…</button>
       </div>
 
+      <!-- Session-window filter panel: shown after a successful paste. Tells
+           the user which of their pasted trades fall inside THIS recording's
+           time window vs which will be filtered out, since MockApe exports
+           are typically whole-day and a session is a small slice of that. -->
+      <div class="filter-panel" id="filter-panel" style="display:none">
+        <div class="filter-header">
+          <span class="filter-icon">⏱</span>
+          <div class="filter-text">
+            <div id="filter-summary"></div>
+            <div class="filter-window" id="filter-window"></div>
+          </div>
+        </div>
+        <ul class="filter-list" id="filter-list"></ul>
+        <label class="filter-override">
+          <input type="checkbox" id="include-all" />
+          <span>Include all pasted trades (override session-window filter)</span>
+        </label>
+      </div>
+
       <div class="hint">
         <span class="hint-label">Auto-aligned to the recording timeline:</span>
         each trade's <code>timestamp</code> (unix epoch ms) is converted to a
         <strong>M:SS offset</strong> within the recording, then the LLM matches
         spoken context around that offset to the actual trade. Whisper mishears
         of token names get resolved against the actual <code>tokenName</code>.
+        <br><br>
+        Trades outside this session's time window (with a 60-second buffer on
+        each side) are filtered out by default — your MockApe export is
+        whole-day, but the trade log should only reflect what happened during
+        this recording.
       </div>
     </div>
 

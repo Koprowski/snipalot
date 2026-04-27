@@ -24,6 +24,7 @@
     "typescript": "^5.4.0"
   },
   "dependencies": {
+    "csv-stringify": "^6.7.0",
     "ffmpeg-static": "^5.2.0"
   }
 }

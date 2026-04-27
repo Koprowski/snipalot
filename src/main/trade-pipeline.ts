@@ -16,8 +16,40 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { clipboard, Notification } from 'electron';
+import { stringify as csvStringify } from 'csv-stringify/sync';
 import { log } from './logger';
 import { TranscriptSegment } from './pipeline';
+
+/**
+ * Schema for a single extracted trade event. Matches the JSON shape the
+ * LLM is asked to return; downstream CSV/MD generators (M5) consume this.
+ *
+ * Numeric market cap fields are normalized to whole dollars (e.g. "80k"
+ * in the transcript becomes 80000 in target_low_mc). Null fields are
+ * acceptable for any post-trade field if the trader never closed the
+ * position or didn't speak about the exit.
+ */
+export interface TradeEvent {
+  trade_id: number;
+  token_name: string;
+  pre_call_offset_ms: number | null;
+  pre_call_offset_label: string | null;
+  post_call_offset_ms: number | null;
+  post_call_offset_label: string | null;
+  target_low_mc: number | null;
+  target_high_mc: number | null;
+  rationale: string | null;
+  pre_transcript_excerpt: string | null;
+  post_transcript_excerpt: string | null;
+  exit_mc_estimate: number | null;
+  outcome_summary: string | null;
+  adherence_self_assessment: string | null;
+  pre_confidence: 'low' | 'medium' | 'high' | null;
+  post_confidence: 'low' | 'medium' | 'high' | null;
+  needs_review: boolean;
+  notes: string | null;
+}
 
 export interface TradePipelineInput {
   /** Session directory where outputs land. */
@@ -84,23 +116,461 @@ export async function runTradePipeline(
     log('trade-pipeline', 'markers.json fail', { err: String(err) });
   }
 
-  // M4 lands writeExtractionPrompt() and the extraction_response.json watcher.
-  // M5 lands buildTradeLogCsv() + buildTradeLogMd() + adherence_report.md.
+  // ── M4: write the extraction prompt + wait for the user's LLM response ──
+  if (onStep) onStep('Writing trade extraction prompt…');
+  const promptText = renderExtractionPrompt(transcriptSegments, tradeMarkers);
+  const { promptPath, responsePath } = writeExtractionPrompt(sessionDir, promptText);
+
+  if (onStep) onStep('Waiting for extraction_response.json (paste prompt into your LLM)…');
+  const trades = await waitForExtractionResponse(responsePath);
+
+  if (!trades) {
+    warnings.push(
+      'extraction_response.json did not appear within 60 minutes; trade log not generated. ' +
+        'Drop the file in the session folder later and re-trigger via "Process Trade Session" (CLI command coming).'
+    );
+    return {
+      extractionPromptPath: promptPath,
+      extractionResponsePath: null,
+      tradeLogCsvPath: null,
+      tradeLogMdPath: null,
+      adherenceReportPath: null,
+      warnings,
+    };
+  }
+
+  // ── M5: generate trade_log.csv + trade_log.md + adherence_report.md ──
+  if (onStep) onStep('Generating trade log + adherence report…');
+  let csvPath: string | null = null;
+  let mdPath: string | null = null;
+  let reportPath: string | null = null;
+  try {
+    csvPath = writeTradeLogCsv(sessionDir, trades);
+    mdPath = writeTradeLogMd(sessionDir, trades);
+    reportPath = writeAdherenceReport(sessionDir, trades);
+  } catch (err) {
+    warnings.push(`trade output generators failed: ${(err as Error).message}`);
+    log('trade-pipeline', 'output gen fail', { err: String(err) });
+  }
+
+  log('trade-pipeline', 'session complete', {
+    trades: trades.length,
+    csvPath,
+    mdPath,
+    reportPath,
+  });
+  if (Notification.isSupported()) {
+    new Notification({
+      title: 'Snipalot Trade · log ready',
+      body: `${trades.length} trade${trades.length === 1 ? '' : 's'} logged. trade_log.csv + .md in:\n${sessionDir}`,
+      silent: false,
+    }).show();
+  }
+
   return {
-    extractionPromptPath: null,
-    extractionResponsePath: null,
-    tradeLogCsvPath: null,
-    tradeLogMdPath: null,
-    adherenceReportPath: null,
+    extractionPromptPath: promptPath,
+    extractionResponsePath: responsePath,
+    tradeLogCsvPath: csvPath,
+    tradeLogMdPath: mdPath,
+    adherenceReportPath: reportPath,
     warnings,
   };
 }
 
-/** Format ms offset as "M:SS" for the markers payload + future extraction prompt. */
+/** Format ms offset as "M:SS" for the markers payload + extraction prompt. */
 function formatOffset(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * Render the extraction prompt for the LLM. Inlined as a string template
+ * for now; can move to an editable file under ~/.snipalot/prompts/ in a
+ * later polish milestone if the user wants to tune it without recompile.
+ *
+ * The trader's transcript is included with [MARKER N at M:SS] anchor tags
+ * inserted at the offsets the user pressed Ctrl+Shift+T. The model uses
+ * markers as focal points but isn't required to find one trade per marker
+ * — content alone is enough.
+ */
+function renderExtractionPrompt(
+  transcriptSegments: TranscriptSegment[],
+  tradeMarkers: number[]
+): string {
+  // Build the annotated transcript: a stable line-per-segment dump with
+  // marker tags spliced in at the closest segment boundary.
+  const sortedMarkers = [...tradeMarkers].sort((a, b) => a - b);
+  let nextMarkerIdx = 0;
+  const annotatedLines: string[] = [];
+  for (const seg of transcriptSegments) {
+    while (
+      nextMarkerIdx < sortedMarkers.length &&
+      sortedMarkers[nextMarkerIdx] <= seg.startSec * 1000
+    ) {
+      annotatedLines.push(
+        `[MARKER ${nextMarkerIdx + 1} at ${formatOffset(sortedMarkers[nextMarkerIdx])}]`
+      );
+      nextMarkerIdx++;
+    }
+    annotatedLines.push(seg.text);
+  }
+  while (nextMarkerIdx < sortedMarkers.length) {
+    annotatedLines.push(
+      `[MARKER ${nextMarkerIdx + 1} at ${formatOffset(sortedMarkers[nextMarkerIdx])}]`
+    );
+    nextMarkerIdx++;
+  }
+
+  return `You are analyzing a trader's spoken commentary during a meme coin
+trading session. The transcript below is a chronological narration with
+optional [MARKER N at M:SS] tags indicating moments the trader explicitly
+flagged as significant by pressing a hotkey.
+
+Identify each distinct trade in the session. A "trade" pairs a pre-trade
+callout (the trader announces a coin and a target market cap range with
+a rationale) with a post-trade callout (the trader announces the exit
+and how it went). Either side can be missing.
+
+Return a JSON array, one object per trade, in chronological order. Use
+this exact schema (use null for any field the transcript doesn't speak to):
+
+[
+  {
+    "trade_id": 1,
+    "token_name": "PEPE",
+    "pre_call_offset_label": "0:34",
+    "pre_call_offset_ms": 34000,
+    "post_call_offset_label": "1:12",
+    "post_call_offset_ms": 72000,
+    "target_low_mc": 80000,
+    "target_high_mc": 100000,
+    "rationale": "Top holders look clean, volume picking up",
+    "pre_transcript_excerpt": "Pepe, I think this can hit 80 to 100k market cap...",
+    "post_transcript_excerpt": "Got out at 70k, didn't hit my range...",
+    "exit_mc_estimate": 70000,
+    "outcome_summary": "Exited below target range; took the chop",
+    "adherence_self_assessment": "Exited early due to holders bailing; not strict adherence",
+    "pre_confidence": "high",
+    "post_confidence": "medium",
+    "needs_review": false,
+    "notes": null
+  }
+]
+
+Rules:
+- Market cap values are integers in dollars. Convert "80k" → 80000, "1.2m" → 1200000.
+- Transcripts are whisper output and may mishear meme coin names. If a token
+  name looks garbled (e.g. "peep" instead of "pepe"), use your best guess and
+  set needs_review=true with a note explaining the uncertainty.
+- pre_call_offset_label / pre_call_offset_ms reflect when in the session the
+  trader spoke the prediction (M:SS from session start, ms is the same value
+  in milliseconds). Use the markers as anchors when present.
+- If a trade callout has no clear post-trade discussion, set the post_* fields
+  to null (don't drop the trade).
+- If the trader mentions a coin but doesn't clearly enter a position
+  (musing only), set confidence=low, needs_review=true, and note the
+  ambiguity.
+- Output ONLY the JSON array. No prose before or after, no markdown code
+  fences, no commentary. The receiving tool parses your output directly.
+
+Transcript:
+---
+${annotatedLines.join('\n')}
+---
+`;
+}
+
+/**
+ * Write extraction_prompt.md to the session folder + put the prompt text
+ * on the clipboard so the user can paste it directly into their LLM
+ * without opening the file. Notification surfaces the next step.
+ */
+function writeExtractionPrompt(
+  sessionDir: string,
+  promptText: string
+): { promptPath: string; responsePath: string } {
+  const promptPath = path.join(sessionDir, 'extraction_prompt.md');
+  const responsePath = path.join(sessionDir, 'extraction_response.json');
+  fs.writeFileSync(promptPath, promptText, 'utf-8');
+  clipboard.writeText(promptText);
+  log('trade-pipeline', 'extraction_prompt.md written + clipboarded', {
+    promptPath,
+    chars: promptText.length,
+  });
+  if (Notification.isSupported()) {
+    new Notification({
+      title: 'Snipalot Trade · prompt ready',
+      body: `Paste into Claude Code / Gemini / Cursor. Save the JSON reply as extraction_response.json in:\n${sessionDir}`,
+      silent: false,
+    }).show();
+  }
+  return { promptPath, responsePath };
+}
+
+/**
+ * Poll for extraction_response.json in the session folder. Resolves with
+ * the parsed TradeEvent[] when the file appears and validates, or null if
+ * the timeout (default 60 minutes) elapses first. fs.watch is unreliable
+ * cross-platform, so we poll every 2s — overhead is negligible.
+ */
+async function waitForExtractionResponse(
+  responsePath: string,
+  timeoutMs: number = 60 * 60 * 1000
+): Promise<TradeEvent[] | null> {
+  const deadline = Date.now() + timeoutMs;
+  const pollInterval = 2000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(responsePath)) {
+      try {
+        const raw = fs.readFileSync(responsePath, 'utf-8');
+        const parsed = parseAndValidateResponse(raw);
+        log('trade-pipeline', 'extraction_response.json parsed', { trades: parsed.length });
+        return parsed;
+      } catch (err) {
+        log('trade-pipeline', 'extraction_response.json parse error', {
+          err: (err as Error).message,
+        });
+        if (Notification.isSupported()) {
+          new Notification({
+            title: 'Snipalot Trade · response invalid',
+            body: `extraction_response.json couldn't be parsed: ${(err as Error).message}. Fix and re-save.`,
+            silent: false,
+          }).show();
+        }
+        // Move the bad file aside so the next poll picks up a fresh attempt.
+        try {
+          fs.renameSync(responsePath, responsePath + '.invalid-' + Date.now());
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+  log('trade-pipeline', 'extraction_response.json timeout', { responsePath });
+  return null;
+}
+
+/**
+ * Parse the LLM's JSON response. Tolerates markdown code fences (some
+ * LLMs add them despite the prompt asking for raw JSON) by stripping
+ * them first. Validates that each entry has the required minimum fields.
+ */
+function parseAndValidateResponse(raw: string): TradeEvent[] {
+  // Strip ```json ... ``` fences if present.
+  let cleaned = raw.trim();
+  const fenceMatch = cleaned.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/);
+  if (fenceMatch) cleaned = fenceMatch[1].trim();
+
+  const arr = JSON.parse(cleaned);
+  if (!Array.isArray(arr)) {
+    throw new Error('Response root must be an array of trade events.');
+  }
+  return arr.map((entry, i): TradeEvent => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`Entry ${i + 1} is not an object`);
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e.token_name !== 'string') {
+      throw new Error(`Entry ${i + 1} is missing required token_name (string)`);
+    }
+    return {
+      trade_id: typeof e.trade_id === 'number' ? e.trade_id : i + 1,
+      token_name: e.token_name,
+      pre_call_offset_ms: numOrNull(e.pre_call_offset_ms),
+      pre_call_offset_label: strOrNull(e.pre_call_offset_label),
+      post_call_offset_ms: numOrNull(e.post_call_offset_ms),
+      post_call_offset_label: strOrNull(e.post_call_offset_label),
+      target_low_mc: numOrNull(e.target_low_mc),
+      target_high_mc: numOrNull(e.target_high_mc),
+      rationale: strOrNull(e.rationale),
+      pre_transcript_excerpt: strOrNull(e.pre_transcript_excerpt),
+      post_transcript_excerpt: strOrNull(e.post_transcript_excerpt),
+      exit_mc_estimate: numOrNull(e.exit_mc_estimate),
+      outcome_summary: strOrNull(e.outcome_summary),
+      adherence_self_assessment: strOrNull(e.adherence_self_assessment),
+      pre_confidence: confOrNull(e.pre_confidence),
+      post_confidence: confOrNull(e.post_confidence),
+      needs_review: typeof e.needs_review === 'boolean' ? e.needs_review : false,
+      notes: strOrNull(e.notes),
+    };
+  });
+}
+
+function numOrNull(v: unknown): number | null {
+  return typeof v === 'number' && !Number.isNaN(v) ? v : null;
+}
+function strOrNull(v: unknown): string | null {
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+function confOrNull(v: unknown): 'low' | 'medium' | 'high' | null {
+  if (v === 'low' || v === 'medium' || v === 'high') return v;
+  return null;
+}
+
+// ─── M5: trade_log.csv + trade_log.md + adherence_report.md ──────────
+
+/**
+ * Write trade_log.csv to the session folder. Column order matches the
+ * PRD schema. Pre/post fields are emitted as separate columns; null
+ * becomes empty string for clean Excel parsing.
+ */
+function writeTradeLogCsv(sessionDir: string, trades: TradeEvent[]): string {
+  const csvPath = path.join(sessionDir, 'trade_log.csv');
+  const rows = trades.map((t) => {
+    const targetMid =
+      t.target_low_mc !== null && t.target_high_mc !== null
+        ? Math.round((t.target_low_mc + t.target_high_mc) / 2)
+        : '';
+    const timeInTradeSec =
+      t.pre_call_offset_ms !== null && t.post_call_offset_ms !== null
+        ? Math.round((t.post_call_offset_ms - t.pre_call_offset_ms) / 1000)
+        : '';
+    return {
+      trade_id: t.trade_id,
+      token_name: t.token_name,
+      pre_call_timestamp: t.pre_call_offset_label ?? '',
+      post_call_timestamp: t.post_call_offset_label ?? '',
+      target_low_mc: t.target_low_mc ?? '',
+      target_high_mc: t.target_high_mc ?? '',
+      target_midpoint_mc: targetMid,
+      rationale: t.rationale ?? '',
+      pre_transcript_excerpt: t.pre_transcript_excerpt ?? '',
+      post_transcript_excerpt: t.post_transcript_excerpt ?? '',
+      exit_mc_estimate: t.exit_mc_estimate ?? '',
+      outcome_summary: t.outcome_summary ?? '',
+      adherence_self_assessment: t.adherence_self_assessment ?? '',
+      time_in_trade_seconds: timeInTradeSec,
+      pre_extraction_confidence: t.pre_confidence ?? '',
+      post_extraction_confidence: t.post_confidence ?? '',
+      needs_review: t.needs_review ? 'true' : 'false',
+      notes: t.notes ?? '',
+    };
+  });
+  const csv = csvStringify(rows, { header: true });
+  fs.writeFileSync(csvPath, csv, 'utf-8');
+  log('trade-pipeline', 'trade_log.csv written', { csvPath, rows: rows.length });
+  return csvPath;
+}
+
+/**
+ * Write trade_log.md — human-readable view of the same data, one section
+ * per trade with the key fields formatted for easy review.
+ */
+function writeTradeLogMd(sessionDir: string, trades: TradeEvent[]): string {
+  const mdPath = path.join(sessionDir, 'trade_log.md');
+  const lines: string[] = [];
+  lines.push('# Trade Log');
+  lines.push('');
+  lines.push(`Generated by Snipalot Trade-mode · ${new Date().toLocaleString()}`);
+  lines.push(`Total trades: ${trades.length}`);
+  lines.push('');
+  if (trades.length === 0) {
+    lines.push('_No trades extracted from this session._');
+  }
+  for (const t of trades) {
+    const targetRange =
+      t.target_low_mc !== null && t.target_high_mc !== null
+        ? `$${formatMc(t.target_low_mc)} – $${formatMc(t.target_high_mc)}`
+        : '_(no target)_';
+    const exit = t.exit_mc_estimate !== null ? `$${formatMc(t.exit_mc_estimate)}` : '_(no exit)_';
+    const flag = t.needs_review ? ' ⚠️ needs review' : '';
+    lines.push('---');
+    lines.push('');
+    lines.push(`## #${t.trade_id} · ${t.token_name}${flag}`);
+    lines.push('');
+    lines.push(`- **Pre-call:** ${t.pre_call_offset_label ?? '_(unknown)_'} · target ${targetRange}`);
+    lines.push(`- **Post-call:** ${t.post_call_offset_label ?? '_(unknown)_'} · exit ${exit}`);
+    if (t.rationale) lines.push(`- **Rationale:** ${t.rationale}`);
+    if (t.outcome_summary) lines.push(`- **Outcome:** ${t.outcome_summary}`);
+    if (t.adherence_self_assessment) lines.push(`- **Adherence:** ${t.adherence_self_assessment}`);
+    if (t.pre_confidence || t.post_confidence) {
+      lines.push(`- **Extraction confidence:** pre=${t.pre_confidence ?? '?'} / post=${t.post_confidence ?? '?'}`);
+    }
+    if (t.pre_transcript_excerpt) {
+      lines.push('');
+      lines.push(`> _Pre:_ ${t.pre_transcript_excerpt}`);
+    }
+    if (t.post_transcript_excerpt) {
+      lines.push(`> _Post:_ ${t.post_transcript_excerpt}`);
+    }
+    if (t.notes) {
+      lines.push('');
+      lines.push(`**Notes:** ${t.notes}`);
+    }
+    lines.push('');
+  }
+  fs.writeFileSync(mdPath, lines.join('\n'), 'utf-8');
+  log('trade-pipeline', 'trade_log.md written', { mdPath });
+  return mdPath;
+}
+
+/**
+ * Write adherence_report.md — aggregate stats across all trades. PnL
+ * fields land in M7 (Padre join); for M5 we report only what extraction
+ * gives us: target ranges, exit-vs-target, confidence, review flags.
+ */
+function writeAdherenceReport(sessionDir: string, trades: TradeEvent[]): string {
+  const reportPath = path.join(sessionDir, 'adherence_report.md');
+  const total = trades.length;
+  const withTarget = trades.filter((t) => t.target_low_mc !== null && t.target_high_mc !== null);
+  const withExit = trades.filter((t) => t.exit_mc_estimate !== null);
+  const both = trades.filter(
+    (t) => t.target_low_mc !== null && t.target_high_mc !== null && t.exit_mc_estimate !== null
+  );
+
+  let inRange = 0;
+  let early = 0;
+  let overshoot = 0;
+  for (const t of both) {
+    const exit = t.exit_mc_estimate!;
+    if (exit < t.target_low_mc!) early++;
+    else if (exit > t.target_high_mc!) overshoot++;
+    else inRange++;
+  }
+  const needsReview = trades.filter((t) => t.needs_review).length;
+
+  const pct = (n: number, d: number): string => (d === 0 ? '–' : `${Math.round((n / d) * 100)}%`);
+
+  const lines: string[] = [];
+  lines.push('# Adherence Report');
+  lines.push('');
+  lines.push(`Generated by Snipalot Trade-mode · ${new Date().toLocaleString()}`);
+  lines.push('');
+  lines.push('## Summary');
+  lines.push('');
+  lines.push(`- **Total trades:** ${total}`);
+  lines.push(`- **Pre-trade callouts with target range:** ${withTarget.length} (${pct(withTarget.length, total)})`);
+  lines.push(`- **Post-trade callouts with exit estimate:** ${withExit.length} (${pct(withExit.length, total)})`);
+  lines.push(`- **Trades with both pre + post:** ${both.length} (${pct(both.length, total)})`);
+  lines.push(`- **Flagged for review:** ${needsReview} (${pct(needsReview, total)})`);
+  lines.push('');
+  lines.push('## Exit-vs-target (pre + post available)');
+  lines.push('');
+  if (both.length === 0) {
+    lines.push('_No trades had both a target range and an exit estimate to compare._');
+  } else {
+    lines.push(`- **In range:** ${inRange} (${pct(inRange, both.length)})`);
+    lines.push(`- **Early exit (below low target):** ${early} (${pct(early, both.length)})`);
+    lines.push(`- **Overshoot (above high target):** ${overshoot} (${pct(overshoot, both.length)})`);
+  }
+  lines.push('');
+  lines.push('## Notes');
+  lines.push('');
+  lines.push('- PnL fields (entry/exit market cap actuals, P&L SOL, P&L %) come from a Padre trade-export join, which lands in M7. Until then this report uses only what the LLM extracted from spoken commentary.');
+  lines.push('- "In range" means the trader\'s spoken exit_mc_estimate fell between the spoken target_low_mc and target_high_mc. It does not yet reflect the actual fill price from Padre.');
+  lines.push('');
+  fs.writeFileSync(reportPath, lines.join('\n'), 'utf-8');
+  log('trade-pipeline', 'adherence_report.md written', { reportPath });
+  return reportPath;
+}
+
+/** Format market cap for human display ("80.0k", "1.20m", "500"). */
+function formatMc(mc: number): string {
+  if (mc >= 1_000_000) return `${(mc / 1_000_000).toFixed(2)}m`;
+  if (mc >= 1_000) return `${(mc / 1_000).toFixed(1)}k`;
+  return mc.toString();
 }
 

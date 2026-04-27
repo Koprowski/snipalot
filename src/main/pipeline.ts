@@ -1047,16 +1047,42 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         annotations: input.annotations,
       });
 
-  step('Writing prompt + copying to clipboard…');
-  fs.writeFileSync(promptPath, promptText, 'utf-8');
-  clipboard.writeText(promptText);
-  log('pipeline', 'prompt written + clipboarded', {
-    length: promptText.length,
-    mode: useChapterFlow ? 'chapters' : 'legacy',
-    chapters: chapterArtifacts.length,
-    annotationFrames: annotationFrames.length,
-    snapFrames: snapFrames.length,
-  });
+  // In trade-mode, the trade-pipeline (below) owns the clipboard — it
+  // writes the extraction prompt the user pastes into their LLM. If we
+  // wrote the legacy walkthrough prompt + clipboarded it here, the user
+  // could paste in the ~30s gap before the trade-pipeline catches up
+  // and get the wrong prompt. Skip the legacy clipboard write entirely
+  // for trade sessions; still write a stub prompt.txt pointing at the
+  // trade artifacts so the file isn't missing.
+  if (mode === 'trade') {
+    const stub = [
+      'This is a trade-mode session. The Snipalot prompt for your LLM is in:',
+      '  extraction_prompt.md',
+      '',
+      'Paste that into Claude Code / Gemini / Cursor, then save the JSON',
+      'reply as extraction_response.json in this folder. Snipalot will',
+      'pick it up and generate trade_log.csv + trade_log.md.',
+      '',
+      'For richer reporting, also drop your MockApe trade export into',
+      'this folder as mockape.json — the trade-pipeline will join it to',
+      'your spoken trades by token name + timestamp and enrich the log',
+      'with actual entry/exit market caps + P&L per trade.',
+      '',
+    ].join('\n');
+    fs.writeFileSync(promptPath, stub, 'utf-8');
+    log('pipeline', 'trade-mode stub prompt.txt written (trade-pipeline owns clipboard)');
+  } else {
+    step('Writing prompt + copying to clipboard…');
+    fs.writeFileSync(promptPath, promptText, 'utf-8');
+    clipboard.writeText(promptText);
+    log('pipeline', 'prompt written + clipboarded', {
+      length: promptText.length,
+      mode: useChapterFlow ? 'chapters' : 'legacy',
+      chapters: chapterArtifacts.length,
+      annotationFrames: annotationFrames.length,
+      snapFrames: snapFrames.length,
+    });
+  }
 
   // The user's clipboard is now populated — they can act on it. The gif
   // may still be encoding in the background; await it so the cleanup of
@@ -1086,6 +1112,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         mp4Path,
         transcriptSegments,
         tradeMarkers: input.tradeMarkers ?? [],
+        startedAtMs: input.startedAtMs,
         onStep: input.onStep,
       });
     } catch (err) {

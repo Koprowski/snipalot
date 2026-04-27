@@ -49,6 +49,22 @@ export interface TradeEvent {
   post_confidence: 'low' | 'medium' | 'high' | null;
   needs_review: boolean;
   notes: string | null;
+  // ── Optional Padre/MockApe outcome fields (filled by joinMockApe) ──
+  /** Matched MockApe trade id for traceability. */
+  mockape_trade_id?: string | null;
+  /** Confidence of the mockape join: 'high' = exact token + tight time match,
+   *  'medium' = token match but loose time, 'low' = fuzzy token. */
+  mockape_join_confidence?: 'high' | 'medium' | 'low' | null;
+  entry_mc_actual?: number | null;
+  exit_mc_actual?: number | null;
+  sol_invested?: number | null;
+  sol_received?: number | null;
+  pnl_sol?: number | null;
+  pnl_percentage?: number | null;
+  /** Did the actual exit reach into the spoken target range? */
+  target_hit_low?: boolean | null;
+  target_hit_high?: boolean | null;
+  exit_scenario?: 'early' | 'in_range' | 'overshoot' | null;
 }
 
 export interface TradePipelineInput {
@@ -60,8 +76,36 @@ export interface TradePipelineInput {
   transcriptSegments: TranscriptSegment[];
   /** User-pressed trade marker offsets, ms relative to recording start. */
   tradeMarkers: number[];
+  /**
+   * Recording start time (Date.now()-style ms epoch). Combined with
+   * pre/post call offsets, lets the MockApe join convert recording-
+   * relative timestamps into absolute clock times for matching against
+   * the MockApe export's unix-epoch timestamp field.
+   */
+  startedAtMs: number;
   /** Step callback for launcher UI (mirrors PipelineInput.onStep). */
   onStep?: (step: string) => void;
+}
+
+/**
+ * Schema for the MockApe / Padre trade export. The user pastes their
+ * exported JSON into mockape.json in the session folder; the trade-
+ * pipeline parses, joins by tokenName + timestamp, and enriches the
+ * trade_log.csv with actual entry/exit market caps + P&L.
+ */
+export interface MockApeTrade {
+  chain: string;
+  entryMarketCap: number;
+  exitMarketCap: number;
+  id: string;
+  platform: string;
+  pnlPercentage: number;
+  pnlSol: number;
+  solInvested: number;
+  solReceived: number;
+  /** Unix epoch ms — matches Date.now() output. */
+  timestamp: number;
+  tokenName: string;
 }
 
 export interface TradePipelineResult {
@@ -137,6 +181,21 @@ export async function runTradePipeline(
       adherenceReportPath: null,
       warnings,
     };
+  }
+
+  // ── MockApe / Padre outcome join (optional) ──
+  // If the user dropped mockape.json into the session folder, enrich each
+  // TradeEvent with actual entry/exit market caps + P&L. Match by
+  // tokenName + timestamp proximity (±10 min). Without this file the CSV
+  // still ships, just with the actual-outcome columns blank.
+  const mockape = loadMockApeTrades(sessionDir);
+  let mockApeJoinStats = { matched: 0, unmatched: 0 };
+  if (mockape) {
+    if (onStep) onStep('Joining MockApe trade data…');
+    mockApeJoinStats = joinMockApe(trades, mockape, input.startedAtMs);
+    log('trade-pipeline', 'mockape join applied', mockApeJoinStats);
+  } else {
+    log('trade-pipeline', 'no mockape.json found — actual P&L columns will be blank');
   }
 
   // ── M5: generate trade_log.csv + trade_log.md + adherence_report.md ──
@@ -301,8 +360,12 @@ function writeExtractionPrompt(
   });
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Snipalot Trade · prompt ready',
-      body: `Paste into Claude Code / Gemini / Cursor. Save the JSON reply as extraction_response.json in:\n${sessionDir}`,
+      title: 'Snipalot Trade · prompt ready (clipboard)',
+      body:
+        `Paste into Claude Code / Gemini / Cursor. Save the JSON reply as ` +
+        `extraction_response.json in this folder:\n${sessionDir}\n\n` +
+        `Tip: drop your MockApe trade export here as mockape.json BEFORE ` +
+        `saving the extraction reply for a richer log with actual P&L.`,
       silent: false,
     }).show();
   }
@@ -443,6 +506,19 @@ function writeTradeLogCsv(sessionDir: string, trades: TradeEvent[]): string {
       outcome_summary: t.outcome_summary ?? '',
       adherence_self_assessment: t.adherence_self_assessment ?? '',
       time_in_trade_seconds: timeInTradeSec,
+      // Filled from mockape.json join when present (else blank)
+      entry_mc_actual: t.entry_mc_actual ?? '',
+      exit_mc_actual: t.exit_mc_actual ?? '',
+      sol_invested: t.sol_invested ?? '',
+      sol_received: t.sol_received ?? '',
+      pnl_sol: t.pnl_sol ?? '',
+      pnl_percentage: t.pnl_percentage ?? '',
+      target_hit_low: t.target_hit_low === null || t.target_hit_low === undefined ? '' : (t.target_hit_low ? 'true' : 'false'),
+      target_hit_high: t.target_hit_high === null || t.target_hit_high === undefined ? '' : (t.target_hit_high ? 'true' : 'false'),
+      exit_scenario: t.exit_scenario ?? '',
+      mockape_trade_id: t.mockape_trade_id ?? '',
+      mockape_join_confidence: t.mockape_join_confidence ?? '',
+      // Extraction quality
       pre_extraction_confidence: t.pre_confidence ?? '',
       post_extraction_confidence: t.post_confidence ?? '',
       needs_review: t.needs_review ? 'true' : 'false',
@@ -482,9 +558,25 @@ function writeTradeLogMd(sessionDir: string, trades: TradeEvent[]): string {
     lines.push(`## #${t.trade_id} · ${t.token_name}${flag}`);
     lines.push('');
     lines.push(`- **Pre-call:** ${t.pre_call_offset_label ?? '_(unknown)_'} · target ${targetRange}`);
-    lines.push(`- **Post-call:** ${t.post_call_offset_label ?? '_(unknown)_'} · exit ${exit}`);
+    lines.push(`- **Post-call:** ${t.post_call_offset_label ?? '_(unknown)_'} · spoken exit ${exit}`);
+    // MockApe / Padre actuals (only present if mockape.json was joined)
+    if (t.entry_mc_actual !== null && t.entry_mc_actual !== undefined) {
+      const pnlSol = t.pnl_sol !== null && t.pnl_sol !== undefined ? t.pnl_sol : 0;
+      const pnlPct = t.pnl_percentage !== null && t.pnl_percentage !== undefined ? t.pnl_percentage : 0;
+      const pnlSign = pnlSol >= 0 ? '+' : '';
+      const pnlEmoji = pnlSol > 0 ? '🟢' : pnlSol < 0 ? '🔴' : '⚪';
+      lines.push(
+        `- **Padre actuals:** entry $${formatMc(t.entry_mc_actual!)} → exit $${formatMc(t.exit_mc_actual ?? 0)} · ${pnlEmoji} ${pnlSign}${pnlSol.toFixed(4)} SOL (${pnlSign}${pnlPct.toFixed(2)}%)`
+      );
+      if (t.exit_scenario) {
+        lines.push(`- **Exit vs target:** ${t.exit_scenario}${t.target_hit_low ? ' · hit low' : ''}${t.target_hit_high ? ' · hit high' : ''}`);
+      }
+      if (t.mockape_join_confidence) {
+        lines.push(`- **Padre match confidence:** ${t.mockape_join_confidence}`);
+      }
+    }
     if (t.rationale) lines.push(`- **Rationale:** ${t.rationale}`);
-    if (t.outcome_summary) lines.push(`- **Outcome:** ${t.outcome_summary}`);
+    if (t.outcome_summary) lines.push(`- **Spoken outcome:** ${t.outcome_summary}`);
     if (t.adherence_self_assessment) lines.push(`- **Adherence:** ${t.adherence_self_assessment}`);
     if (t.pre_confidence || t.post_confidence) {
       lines.push(`- **Extraction confidence:** pre=${t.pre_confidence ?? '?'} / post=${t.post_confidence ?? '?'}`);
@@ -532,6 +624,17 @@ function writeAdherenceReport(sessionDir: string, trades: TradeEvent[]): string 
   }
   const needsReview = trades.filter((t) => t.needs_review).length;
 
+  // Padre/MockApe-derived actuals (when mockape.json was joined)
+  const matched = trades.filter((t) => t.mockape_trade_id != null);
+  const pnlTotalSol = matched.reduce((sum, t) => sum + (t.pnl_sol ?? 0), 0);
+  const wins = matched.filter((t) => (t.pnl_sol ?? 0) > 0);
+  const losses = matched.filter((t) => (t.pnl_sol ?? 0) < 0);
+  const breakeven = matched.filter((t) => (t.pnl_sol ?? 0) === 0);
+  const winRate = matched.length === 0 ? 0 : wins.length / matched.length;
+  const actualInRange = matched.filter((t) => t.exit_scenario === 'in_range').length;
+  const actualEarly = matched.filter((t) => t.exit_scenario === 'early').length;
+  const actualOvershoot = matched.filter((t) => t.exit_scenario === 'overshoot').length;
+
   const pct = (n: number, d: number): string => (d === 0 ? '–' : `${Math.round((n / d) * 100)}%`);
 
   const lines: string[] = [];
@@ -559,9 +662,36 @@ function writeAdherenceReport(sessionDir: string, trades: TradeEvent[]): string 
   lines.push('');
   lines.push('## Notes');
   lines.push('');
-  lines.push('- PnL fields (entry/exit market cap actuals, P&L SOL, P&L %) come from a Padre trade-export join, which lands in M7. Until then this report uses only what the LLM extracted from spoken commentary.');
-  lines.push('- "In range" means the trader\'s spoken exit_mc_estimate fell between the spoken target_low_mc and target_high_mc. It does not yet reflect the actual fill price from Padre.');
+  lines.push('- "In range" (above) uses the trader\'s spoken exit_mc_estimate vs spoken targets. Padre actuals (below) use the real exit price.');
   lines.push('');
+
+  // ── Padre / MockApe actuals (only present when mockape.json was joined) ──
+  if (matched.length > 0) {
+    lines.push('## Padre / MockApe actuals');
+    lines.push('');
+    lines.push(`- **Trades matched to MockApe export:** ${matched.length} of ${total} (${pct(matched.length, total)})`);
+    lines.push(`- **Total P&L:** ${pnlTotalSol >= 0 ? '+' : ''}${pnlTotalSol.toFixed(4)} SOL`);
+    lines.push(`- **Wins / losses / breakeven:** ${wins.length} / ${losses.length} / ${breakeven.length}`);
+    lines.push(`- **Win rate:** ${(winRate * 100).toFixed(1)}%`);
+    lines.push('');
+    lines.push('### Actual exit vs spoken target');
+    lines.push('');
+    if (matched.filter((t) => t.exit_scenario != null).length === 0) {
+      lines.push('_None of the matched trades had both target bounds + an actual exit to compare._');
+    } else {
+      const actualScored = matched.filter((t) => t.exit_scenario != null);
+      lines.push(`- **In range:** ${actualInRange} (${pct(actualInRange, actualScored.length)})`);
+      lines.push(`- **Early (sold below low target):** ${actualEarly} (${pct(actualEarly, actualScored.length)})`);
+      lines.push(`- **Overshoot (rode past high target):** ${actualOvershoot} (${pct(actualOvershoot, actualScored.length)})`);
+    }
+    lines.push('');
+  } else {
+    lines.push('## Padre / MockApe actuals');
+    lines.push('');
+    lines.push('_No `mockape.json` found in this session folder, or no trades matched. Drop your MockApe export here as `mockape.json` and re-run extraction to get actual entry/exit market caps + P&L per trade._');
+    lines.push('');
+  }
+
   fs.writeFileSync(reportPath, lines.join('\n'), 'utf-8');
   log('trade-pipeline', 'adherence_report.md written', { reportPath });
   return reportPath;
@@ -572,5 +702,168 @@ function formatMc(mc: number): string {
   if (mc >= 1_000_000) return `${(mc / 1_000_000).toFixed(2)}m`;
   if (mc >= 1_000) return `${(mc / 1_000).toFixed(1)}k`;
   return mc.toString();
+}
+
+// ─── MockApe / Padre outcome join ─────────────────────────────────────
+
+/**
+ * If the user dropped a mockape.json into the session folder, parse it
+ * as MockApeTrade[] and return. Returns null if the file isn't there or
+ * fails to parse — joining is optional, the trade log just lacks the
+ * actual P&L columns when no MockApe data is available.
+ */
+function loadMockApeTrades(sessionDir: string): MockApeTrade[] | null {
+  const mockApePath = path.join(sessionDir, 'mockape.json');
+  if (!fs.existsSync(mockApePath)) return null;
+  try {
+    const raw = fs.readFileSync(mockApePath, 'utf-8');
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) {
+      log('trade-pipeline', 'mockape.json not an array, skipping join');
+      return null;
+    }
+    // Best-effort schema validation; skip entries missing required fields.
+    const trades: MockApeTrade[] = [];
+    for (const e of arr) {
+      if (
+        typeof e?.tokenName === 'string' &&
+        typeof e?.timestamp === 'number' &&
+        typeof e?.entryMarketCap === 'number' &&
+        typeof e?.exitMarketCap === 'number'
+      ) {
+        trades.push({
+          chain: typeof e.chain === 'string' ? e.chain : '',
+          entryMarketCap: e.entryMarketCap,
+          exitMarketCap: e.exitMarketCap,
+          id: typeof e.id === 'string' ? e.id : '',
+          platform: typeof e.platform === 'string' ? e.platform : '',
+          pnlPercentage: typeof e.pnlPercentage === 'number' ? e.pnlPercentage : 0,
+          pnlSol: typeof e.pnlSol === 'number' ? e.pnlSol : 0,
+          solInvested: typeof e.solInvested === 'number' ? e.solInvested : 0,
+          solReceived: typeof e.solReceived === 'number' ? e.solReceived : 0,
+          timestamp: e.timestamp,
+          tokenName: e.tokenName,
+        });
+      }
+    }
+    log('trade-pipeline', 'mockape.json loaded', { entries: trades.length });
+    return trades;
+  } catch (err) {
+    log('trade-pipeline', 'mockape.json parse fail', { err: (err as Error).message });
+    return null;
+  }
+}
+
+/**
+ * Loose token-name match: case-insensitive, alphanumerics-only. Tolerates
+ * whisper mishears like "peep" → "pepe" by checking if either string is
+ * a prefix of the other (after normalization). Returns true on match.
+ */
+function tokenNameMatches(spoken: string, mockape: string): boolean {
+  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const a = norm(spoken);
+  const b = norm(mockape);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // Prefix-tolerance for whisper truncations (e.g. "guy" matches "guytoken")
+  return a.startsWith(b) || b.startsWith(a);
+}
+
+/**
+ * For each TradeEvent, find the closest matching MockApe trade by token
+ * name + timestamp proximity, and enrich the event with actual entry/exit
+ * market caps + P&L. Match confidence depends on token exactness and
+ * timestamp closeness.
+ *
+ * The match window is ±10 minutes from the post_call moment (or pre_call
+ * if post is missing). MockApe trades match at most one TradeEvent — once
+ * matched, removed from the candidate pool so a single mockape entry isn't
+ * double-counted.
+ */
+function joinMockApe(
+  trades: TradeEvent[],
+  mockape: MockApeTrade[],
+  recordingStartedAtMs: number
+): { matched: number; unmatched: number } {
+  const matchWindowMs = 10 * 60 * 1000; // ±10 minutes
+  const remaining = [...mockape];
+  let matched = 0;
+  let unmatched = 0;
+
+  for (const trade of trades) {
+    // Anchor: prefer post_call (closer to actual exit time), fall back to pre_call.
+    const offsetMs = trade.post_call_offset_ms ?? trade.pre_call_offset_ms;
+    if (offsetMs === null) {
+      unmatched++;
+      continue;
+    }
+    const tradeAbsMs = recordingStartedAtMs + offsetMs;
+
+    // Find the closest mockape entry with a matching token name.
+    let bestIdx = -1;
+    let bestDelta = Number.POSITIVE_INFINITY;
+    let bestExactToken = false;
+    for (let i = 0; i < remaining.length; i++) {
+      const m = remaining[i];
+      if (!tokenNameMatches(trade.token_name, m.tokenName)) continue;
+      const delta = Math.abs(m.timestamp - tradeAbsMs);
+      // Prefer exact-token matches even at slightly larger time deltas.
+      const exact = m.tokenName.toLowerCase() === trade.token_name.toLowerCase();
+      if (
+        (exact && !bestExactToken) ||
+        ((exact === bestExactToken) && delta < bestDelta)
+      ) {
+        bestIdx = i;
+        bestDelta = delta;
+        bestExactToken = exact;
+      }
+    }
+
+    if (bestIdx === -1 || bestDelta > matchWindowMs) {
+      // No match within window. Leave fields null + flag for review.
+      trade.mockape_join_confidence = null;
+      trade.needs_review = trade.needs_review || true;
+      trade.notes = (trade.notes ? trade.notes + ' · ' : '') +
+        'No matching MockApe trade within ±10min window';
+      unmatched++;
+      continue;
+    }
+
+    const m = remaining[bestIdx];
+    remaining.splice(bestIdx, 1); // consume
+
+    trade.mockape_trade_id = m.id;
+    trade.mockape_join_confidence =
+      bestExactToken && bestDelta < 120_000 ? 'high' :
+      bestExactToken ? 'medium' :
+      'low';
+    trade.entry_mc_actual = m.entryMarketCap;
+    trade.exit_mc_actual = m.exitMarketCap;
+    trade.sol_invested = m.solInvested;
+    trade.sol_received = m.solReceived;
+    trade.pnl_sol = m.pnlSol;
+    trade.pnl_percentage = m.pnlPercentage;
+
+    // Compute target_hit_low / target_hit_high / exit_scenario from the
+    // ACTUAL exit (not the spoken estimate) when both target bounds + the
+    // actual exit are known.
+    if (trade.target_low_mc !== null && trade.target_high_mc !== null) {
+      const exit = m.exitMarketCap;
+      trade.target_hit_low = exit >= trade.target_low_mc;
+      trade.target_hit_high = exit >= trade.target_high_mc;
+      trade.exit_scenario =
+        exit < trade.target_low_mc ? 'early' :
+        exit > trade.target_high_mc ? 'overshoot' :
+        'in_range';
+    }
+    matched++;
+  }
+
+  log('trade-pipeline', 'mockape join complete', {
+    matched,
+    unmatched,
+    leftoverMockape: remaining.length,
+  });
+  return { matched, unmatched };
 }
 

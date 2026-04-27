@@ -114,6 +114,21 @@ export interface PipelineInput {
    * swallowed; never let UI bookkeeping break the pipeline.
    */
   onStep?: (step: string) => void;
+  /**
+   * Capture mode that produced this recording. Determines downstream output
+   * shape and folder-name suffix.
+   *  - 'record' (default): existing feedback-walkthrough flow → `{stamp} feedback/`
+   *  - 'trade':            TradeCall flow → `{stamp} trade/`, runs trade-pipeline
+   *                        for LLM extraction + CSV/MD log after whisper.
+   */
+  mode?: 'record' | 'trade';
+  /**
+   * Trade-mode hotkey markers (recording-relative ms). Empty / undefined when
+   * mode === 'record' or when the user never pressed Ctrl+Shift+T during a
+   * trade session. Markers are anchor points for the LLM extraction prompt;
+   * extraction works without them, just less precisely.
+   */
+  tradeMarkers?: number[];
 }
 
 export interface PipelineResult {
@@ -353,7 +368,7 @@ function findWhisperBinary(): { exe: string; model: string } | null {
   return null;
 }
 
-interface TranscriptSegment {
+export interface TranscriptSegment {
   /** Formatted line: "[M:SS - M:SS] text" */
   text: string;
   /** Segment start in whole seconds from recording start. */

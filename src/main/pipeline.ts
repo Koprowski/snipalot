@@ -741,13 +741,12 @@ async function buildSnapshotChapters(
  */
 function buildCombinedSnapshotPrompt(args: {
   sessionDir: string;
-  mp4Path: string;
   gifPath: string;
   transcriptPath: string | null;
   chapters: ChapterArtifact[];
   durationMs: number;
 }): string {
-  const { sessionDir, mp4Path, gifPath, transcriptPath, chapters, durationMs } = args;
+  const { sessionDir, gifPath, transcriptPath, chapters, durationMs } = args;
   const screenCount = chapters.length;
   const durationLabel = formatMsAsMinSec(durationMs);
 
@@ -757,8 +756,10 @@ function buildCombinedSnapshotPrompt(args: {
   );
   lines.push('');
   lines.push(`Session folder: ${sessionDir}`);
-  lines.push(`Recording: ${mp4Path}`);
-  lines.push(`GIF (for visual reference, not for Claude): ${gifPath}`);
+  // MP4 intentionally omitted — LLMs can't decode video, AND only the
+  // most recent recording.mp4 is kept on disk (overwritten each session
+  // at parent level), so a stale prompt would point at the wrong file.
+  lines.push(`GIF preview (LLMs see the FIRST FRAME only — opening shot): ${gifPath}`);
   if (transcriptPath) lines.push(`Full transcript: ${transcriptPath}`);
   lines.push('');
   lines.push('Per-screen deliverables (each prompt.md has its own screenshot + transcript slice + numbered annotations):');
@@ -780,25 +781,31 @@ function buildPromptText(args: {
   annotationFrames: Array<{ number: number; path: string; drawnAtMs: number }>;
   snapFrames: Array<{ path: string; name: string }>;
   annotations: AnnotationRecord[];
-  /** Absolute path to the finalized MP4. */
-  mp4Path: string;
-  /** Absolute path to the GIF preview. */
+  /**
+   * Absolute path to the GIF preview. Included in the prompt so the LLM
+   * (or whatever client opens the prompt) has a still-image reference
+   * for the opening shot of the recording. The MP4 is intentionally NOT
+   * passed in: LLMs can't decode video, AND only the most recent
+   * recording.mp4 is kept on disk (overwritten each session at parent
+   * level), so a stale prompt would point at the wrong file anyway.
+   */
   gifPath: string;
 }): string {
-  const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations, mp4Path, gifPath } = args;
+  const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations, gifPath } = args;
 
-  // Always lead with the source-files block so the LLM can locate the
-  // recording itself. The previous version skipped this entirely and the
-  // user pointed out (correctly) that on transcript-only sessions the
-  // prompt was useless: it said "I have a recording" but never told the
-  // LLM where the recording lived.
+  // Source files block — only the LLM-readable artifacts. The MP4
+  // is intentionally NOT listed: (1) most LLMs can't decode video and
+  // (2) Snipalot keeps only the most recent recording.mp4 at parent
+  // level (overwritten each run), so by the time a stale prompt gets
+  // pasted, the path may point to a different recording.
   const sourceBlock = [
     'Source files (all paths absolute):',
-    `- Video recording (MP4, full audio + video): ${mp4Path}`,
     `- GIF preview (12x speedup with timecode burned in): ${gifPath}`,
-    '  ↑ Most LLMs can read at least the first frame of the GIF as a still',
-    '    image. Attach or open it directly if your client supports image',
-    '    inputs — it gives you immediate visual context for the transcript.',
+    "  ↑ Multimodal LLMs (Claude, GPT-4o, Gemini) decode GIFs as still",
+    '    images and read the FIRST FRAME — i.e. T=0 of the recording.',
+    '    Useful for "what app/screen was I on" but NOT for mid-session',
+    '    moments. For specific moments, see the annotation/snapshot',
+    '    frames below (if any) — those are PNGs captured at exact times.',
     transcriptPath
       ? `- Transcript (timestamped): ${transcriptPath}`
       : '- Transcript unavailable (whisper.cpp not installed — run `npm run fetch-resources`)',
@@ -848,7 +855,7 @@ function buildPromptText(args: {
       ].join('\n')
     : [
         '',
-        'This was a transcript-only walkthrough — I described things verbally without drawing rectangles. To understand the visual context, open the GIF as an image (single frame is enough for most observations) or open the MP4 directly if you need to scrub to a specific timestamp the transcript mentions.',
+        "This was a transcript-only walkthrough — I described things verbally without drawing rectangles. The GIF (first frame) gives you the opening shot of the session for context; for mid-session moments, rely on the transcript's timestamps and the verbal cues there (the GIF's timecode is burned in, so if you need to reason about what was likely visible at minute X, mention it and I can confirm).",
       ].join('\n');
 
   return [
@@ -862,7 +869,7 @@ function buildPromptText(args: {
     'Work through each observation in the transcript in order. For each item:',
     hasVisualEvidence
       ? '- Open the corresponding frame PNG (or the GIF first frame) to confirm visually what I meant'
-      : '- Open the GIF or MP4 to confirm visually what I meant',
+      : '- Open the GIF (first frame) for the opening visual context; rely on transcript timestamps for mid-session moments',
     '- Identify which file(s) need to change',
     '- Make the change',
     '- Note the timestamp from the transcript so I can verify',
@@ -1071,7 +1078,6 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const promptText = useChapterFlow
     ? buildCombinedSnapshotPrompt({
         sessionDir,
-        mp4Path,
         gifPath,
         transcriptPath: finalTranscriptPath,
         chapters: chapterArtifacts,
@@ -1083,7 +1089,6 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         annotationFrames,
         snapFrames,
         annotations: input.annotations,
-        mp4Path,
         gifPath,
       });
 

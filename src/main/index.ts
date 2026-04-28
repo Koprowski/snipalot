@@ -1972,6 +1972,92 @@ ipcMain.handle('launcher:get-pin-state', () => {
   return launcherWindow.isAlwaysOnTop();
 });
 
+/**
+ * Find the most recent session folder under outputDir and re-copy its
+ * prompt to the clipboard. Useful when the auto-copy on session
+ * completion got overwritten by something the user copied in the
+ * intervening minutes.
+ *
+ * Session-kind detection from folder suffix:
+ *   "{stamp} feedback"   → record (uses prompt.txt)
+ *   "{stamp} trade"      → trade  (uses extraction_prompt.md, falls back to prompt.txt stub)
+ *   "{stamp} screenshot" → screenshot (uses prompt.md)
+ *
+ * Sorted by mtime so we always grab the newest regardless of session type.
+ */
+ipcMain.handle('launcher:copy-last-prompt', () => {
+  const outputDir = getConfig().outputDir;
+  if (!fs.existsSync(outputDir)) {
+    return { ok: false as const, error: 'Output folder does not exist' };
+  }
+  let entries: { name: string; mtimeMs: number }[];
+  try {
+    entries = fs
+      .readdirSync(outputDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => {
+        const stat = fs.statSync(path.join(outputDir, e.name));
+        return { name: e.name, mtimeMs: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  } catch (err) {
+    log('launcher', 'copy-last: outputDir read fail', { err: (err as Error).message });
+    return { ok: false as const, error: 'Could not read output folder' };
+  }
+
+  // Walk from newest to oldest; skip folders without a recognizable prompt.
+  for (const entry of entries) {
+    const dir = path.join(outputDir, entry.name);
+    const kind: 'record' | 'trade' | 'screenshot' =
+      entry.name.endsWith(' trade') ? 'trade' :
+      entry.name.endsWith(' screenshot') ? 'screenshot' :
+      entry.name.endsWith(' feedback') ? 'record' :
+      // Unknown suffix — try anyway, kind will default to 'record'
+      'record';
+    // Candidate filenames per session kind. Trade folders contain a
+    // prompt.txt stub that's just a pointer ("see extraction_prompt.md")
+    // — we deliberately do NOT fall back to it. If extraction_prompt.md
+    // isn't there yet (e.g. user clicked Copy before the trade-context
+    // window was submitted), walk to the previous session that has a
+    // real prompt instead.
+    const candidates = kind === 'trade'
+      ? ['extraction_prompt.md']
+      : kind === 'screenshot'
+      ? ['prompt.md']
+      : ['prompt.txt'];
+    for (const candidate of candidates) {
+      const filePath = path.join(dir, candidate);
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        const text = fs.readFileSync(filePath, 'utf-8');
+        clipboard.writeText(text);
+        log('launcher', 'copy-last: prompt re-clipboarded', {
+          sessionName: entry.name,
+          kind,
+          file: candidate,
+          chars: text.length,
+        });
+        return {
+          ok: true as const,
+          kind,
+          sessionName: entry.name,
+          chars: text.length,
+        };
+      } catch (err) {
+        log('launcher', 'copy-last: read fail', {
+          filePath,
+          err: (err as Error).message,
+        });
+        // Try the next candidate / next session.
+      }
+    }
+  }
+  return {
+    ok: false as const,
+    error: 'No prompt file found in any session folder',
+  };
+});
+
 ipcMain.handle('launcher:close-to-tray', () => {
   log('launcher', 'close-to-tray click');
   if (launcherWindow && !launcherWindow.isDestroyed()) {

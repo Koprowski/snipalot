@@ -321,6 +321,20 @@ body {
   border-radius: 4px;
 }
 
+/* Brief 2s confirmation flash on the copy-last button after a successful
+   copy. Green border + tint so peripheral vision picks it up even when
+   the user's eyes are elsewhere. .err uses red for failures. */
+.btn-icon.copied {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: #22c55e;
+  color: #4ade80;
+}
+.btn-icon.err {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: #ef4444;
+  color: #f87171;
+}
+
 .hint {
   color: #8b92a0;
   font-size: 11px;

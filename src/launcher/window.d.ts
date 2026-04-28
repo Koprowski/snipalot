@@ -10,6 +10,10 @@ interface Window {
     closeToTray: () => Promise<void>;
     togglePin: () => Promise<boolean>;
     getPinState: () => Promise<boolean>;
+    copyLastPrompt: () => Promise<
+      | { ok: true; kind: 'record' | 'trade' | 'screenshot'; sessionName: string; chars: number }
+      | { ok: false; error: string }
+    >;
     settings: () => Promise<void>;
     toggleMinimize: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;

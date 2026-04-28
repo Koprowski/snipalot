@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
   togglePin: (): Promise<boolean> => ipcRenderer.invoke('launcher:toggle-pin'),
   /** Read the current pin state on boot so the button starts in sync. */
   getPinState: (): Promise<boolean> => ipcRenderer.invoke('launcher:get-pin-state'),
+  /** Copy the most recent session's prompt back to the clipboard. Useful
+      when the user pasted something else over the auto-copied prompt. */
+  copyLastPrompt: (): Promise<
+    | { ok: true; kind: 'record' | 'trade' | 'screenshot'; sessionName: string; chars: number }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('launcher:copy-last-prompt'),
   settings: () => ipcRenderer.invoke('launcher:settings'),
   toggleMinimize: () => ipcRenderer.invoke('launcher:toggle-minimize'),
   log: (scope: string, ...args: unknown[]) =>

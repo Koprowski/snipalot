@@ -157,6 +157,42 @@ btnQuitEl.addEventListener('click', () => {
   window.snipalotLauncher.closeToTray();
 });
 
+// ── Copy last prompt ─────────────────────────────────────────────────
+const btnCopyLastEl = document.getElementById('btn-copy-last') as HTMLButtonElement;
+
+btnCopyLastEl.addEventListener('click', async () => {
+  btnCopyLastEl.disabled = true;
+  const prevTitle = btnCopyLastEl.title;
+  try {
+    const result = await window.snipalotLauncher.copyLastPrompt();
+    if (result.ok) {
+      // Brief visual confirmation. Color flash + tooltip update so even
+      // if the user is looking elsewhere they can hover later to verify.
+      btnCopyLastEl.classList.add('copied');
+      btnCopyLastEl.title = `✓ Copied ${result.kind} prompt (${result.sessionName}, ${result.chars} chars)`;
+      window.snipalotLauncher.log('copy-last', 'success', {
+        kind: result.kind,
+        sessionName: result.sessionName,
+        chars: result.chars,
+      });
+      setTimeout(() => {
+        btnCopyLastEl.classList.remove('copied');
+        btnCopyLastEl.title = prevTitle;
+      }, 2000);
+    } else {
+      btnCopyLastEl.classList.add('err');
+      btnCopyLastEl.title = `✗ ${result.error}`;
+      window.snipalotLauncher.log('copy-last', 'fail', { error: result.error });
+      setTimeout(() => {
+        btnCopyLastEl.classList.remove('err');
+        btnCopyLastEl.title = prevTitle;
+      }, 3000);
+    }
+  } finally {
+    btnCopyLastEl.disabled = false;
+  }
+});
+
 // ── Pin (alwaysOnTop) toggle ─────────────────────────────────────────
 const btnPinEl = document.getElementById('btn-pin') as HTMLButtonElement;
 

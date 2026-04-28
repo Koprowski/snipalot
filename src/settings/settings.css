@@ -146,6 +146,27 @@ body {
   border-color: var(--accent);
 }
 
+.select {
+  flex: 1;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.select:focus {
+  border-color: var(--accent);
+}
+
+.radio-row.dim {
+  opacity: 0.55;
+}
+
 .btn {
   background: var(--btn-bg);
   border: 1px solid var(--border);

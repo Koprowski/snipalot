@@ -45,6 +45,48 @@
         <button class="btn btn-link" id="btn-reset-hotkeys">Reset to defaults</button>
       </div>
 
+      <!-- capture mode -->
+      <div class="section">
+        <div class="section-title">Capture Mode</div>
+        <p class="info">When you press the Record / Trade hotkey or click the launcher buttons,
+          how should the recording region be chosen?</p>
+        <div class="radio-group">
+          <label class="radio-row">
+            <input type="radio" name="capture-mode" value="region" id="capture-region" />
+            <div>
+              <div class="radio-title">Drag to select <span class="muted">(default)</span></div>
+              <div class="radio-info">Pick a custom region by dragging on any display. The current behavior.</div>
+            </div>
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="capture-mode" value="fullscreen" id="capture-fullscreen" />
+            <div>
+              <div class="radio-title">Full screen</div>
+              <div class="radio-info">Skip the drag step entirely. Captures the whole display the cursor is currently on. Fastest workflow when you don't need a custom region.</div>
+            </div>
+          </label>
+          <label class="radio-row dim">
+            <input type="radio" name="capture-mode" value="window" id="capture-window" disabled />
+            <div>
+              <div class="radio-title">Specific app window <span class="muted">(coming soon)</span></div>
+              <div class="radio-info">Pick an app window via a picker; bounds match that window. Window mode UI is in progress — falls back to "Drag to select" for now.</div>
+            </div>
+          </label>
+        </div>
+        <div class="field" style="margin-top: 12px">
+          <label for="countdown-sec">Countdown before recording starts</label>
+          <div class="input-row" style="max-width: 200px">
+            <select id="countdown-sec" class="select">
+              <option value="0">0 (instant)</option>
+              <option value="3">3 seconds (default)</option>
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+            </select>
+          </div>
+          <p class="info" style="margin-top: 6px; font-size: 11px">After the region is selected (or immediately in fullscreen mode), a 3-2-1 countdown gives you time to switch focus before the recording starts. Esc cancels.</p>
+        </div>
+      </div>
+
       <!-- snapshot behavior -->
       <div class="section">
         <div class="section-title">Snapshot Behavior</div>

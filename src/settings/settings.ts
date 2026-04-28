@@ -49,6 +49,9 @@ const editedHotkeys: Record<string, string> = {};
 // Working copy of the snapshot behavior. Mutates as the user clicks the
 // radio; flushed on Save.
 let editedSnapClearAfter = true;
+// Working copy of the capture mode + countdown duration.
+let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
+let editedCountdownSec = 3;
 
 async function init(): Promise<void> {
   const config = await api.getConfig();
@@ -78,6 +81,24 @@ async function init(): Promise<void> {
   if (editedSnapClearAfter) radioClear.checked = true; else radioKeep.checked = true;
   radioClear.addEventListener('change', () => { if (radioClear.checked) editedSnapClearAfter = true; });
   radioKeep.addEventListener('change', () => { if (radioKeep.checked) editedSnapClearAfter = false; });
+
+  // Capture mode + countdown.
+  const cfgCap = (config as unknown as { capture?: { mode?: 'region' | 'fullscreen' | 'window'; countdownSec?: number } }).capture;
+  editedCaptureMode = cfgCap?.mode ?? 'region';
+  editedCountdownSec = cfgCap?.countdownSec ?? 3;
+  const capRegion = document.getElementById('capture-region') as HTMLInputElement;
+  const capFullscreen = document.getElementById('capture-fullscreen') as HTMLInputElement;
+  const capWindow = document.getElementById('capture-window') as HTMLInputElement;
+  if (editedCaptureMode === 'fullscreen') capFullscreen.checked = true;
+  else if (editedCaptureMode === 'window') capWindow.checked = true;
+  else capRegion.checked = true;
+  capRegion.addEventListener('change', () => { if (capRegion.checked) editedCaptureMode = 'region'; });
+  capFullscreen.addEventListener('change', () => { if (capFullscreen.checked) editedCaptureMode = 'fullscreen'; });
+  capWindow.addEventListener('change', () => { if (capWindow.checked) editedCaptureMode = 'window'; });
+
+  const countdownEl = document.getElementById('countdown-sec') as HTMLSelectElement;
+  countdownEl.value = String(editedCountdownSec);
+  countdownEl.addEventListener('change', () => { editedCountdownSec = Number(countdownEl.value); });
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────
@@ -244,6 +265,7 @@ btnSave.addEventListener('click', async () => {
       firstRun: false,
       hotkeys: editedHotkeys as never,
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
+      capture: { mode: editedCaptureMode, countdownSec: editedCountdownSec } as never,
     });
     firstRunBanner.style.display = 'none';
     // Close immediately — no need for user to also hit X.

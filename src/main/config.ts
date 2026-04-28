@@ -56,6 +56,25 @@ export interface SnipalotConfig {
      */
     autoPromptForTradeData: boolean;
   };
+  capture: {
+    /**
+     * Default capture mode for Record + Trade hotkeys / buttons.
+     *  - 'region':     drag to select a custom region (default, current behavior)
+     *  - 'fullscreen': skip region-select, capture the whole display the
+     *                  cursor is on (or primary). Fastest workflow.
+     *  - 'window':     pick a specific app window via a picker UI. Bounds
+     *                  match the window's current size. (UI deferred — falls
+     *                  back to 'region' for now if selected.)
+     */
+    mode: 'region' | 'fullscreen' | 'window';
+    /**
+     * Seconds to count down after a region is selected (or immediately
+     * after a hotkey press in fullscreen / window mode) before recording
+     * starts. 0 disables the countdown (recording starts instantly).
+     * Default 3.
+     */
+    countdownSec: number;
+  };
   /** true until the user completes first-run onboarding. */
   firstRun: boolean;
 }
@@ -105,6 +124,10 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   trade: {
     autoPromptForTradeData: true,
+  },
+  capture: {
+    mode: 'region',
+    countdownSec: 3,
   },
   firstRun: true,
 };

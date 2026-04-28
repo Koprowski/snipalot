@@ -1159,13 +1159,45 @@ async function captureStillFrame(
 
 // ─── shared state-machine actions ────────────────────────────────────
 
+/**
+ * Detects which display the cursor is currently on. Used by fullscreen
+ * capture mode to decide which display's overlay should start its
+ * fullscreen countdown.
+ */
+function getCursorDisplayId(): string {
+  const cursor = screen.getCursorScreenPoint();
+  return String(screen.getDisplayNearestPoint(cursor).id);
+}
+
+/**
+ * Send the region-select / fullscreen-countdown IPC to either every
+ * overlay (region mode — user picks which display by dragging on it)
+ * or just the cursor's overlay (fullscreen mode — no drag needed).
+ * Returns true if a fullscreen short-circuit was used.
+ */
+function dispatchRegionEntry(captureMode: 'region' | 'fullscreen' | 'window', countdownSec: number): void {
+  if (captureMode === 'fullscreen') {
+    const targetId = getCursorDisplayId();
+    targetOverlay(targetId, 'overlay:enter-region-select', {
+      countdownSec,
+      mode: 'fullscreen',
+    });
+    log('state', 'dispatchRegionEntry: fullscreen mode', { targetId, countdownSec });
+  } else {
+    // 'region' (and 'window' fallback for now) → the existing drag-to-select
+    // flow, broadcast to all overlays.
+    broadcastOverlay('overlay:enter-region-select', { countdownSec, mode: 'region' });
+  }
+}
+
 function enterSelecting(): void {
   if (appState !== 'idle') {
     log('state', 'enterSelecting ignored', { appState });
     return;
   }
   setAppState('selecting', 'user toggle from idle');
-  broadcastOverlay('overlay:enter-region-select');
+  const cfg = getConfig().capture;
+  dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
 /**
@@ -1181,7 +1213,8 @@ function enterSelectingScreenshot(): void {
     return;
   }
   setAppState('selecting-screenshot', 'screenshot button from idle');
-  broadcastOverlay('overlay:enter-region-select');
+  const cfg = getConfig().capture;
+  dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
 /**
@@ -1198,7 +1231,8 @@ function enterSelectingTrade(): void {
     return;
   }
   setAppState('selecting-trade', 'trade button from idle');
-  broadcastOverlay('overlay:enter-region-select');
+  const cfg = getConfig().capture;
+  dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
 function exitSelecting(reason: string): void {

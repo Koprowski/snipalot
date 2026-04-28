@@ -30,7 +30,9 @@ interface Window {
     }) => Promise<void>;
     reportAnnotationMode: (active: boolean) => Promise<void>;
     onEnterAnnotationMode: (cb: () => void) => void;
-    onEnterRegionSelect: (cb: () => void) => void;
+    onEnterRegionSelect: (
+      cb: (payload?: { countdownSec?: number; mode?: 'region' | 'fullscreen' }) => void
+    ) => void;
     onExitRegionSelect: (cb: () => void) => void;
     onOwnsRecording: (cb: (payload: { rect: OverlayRect }) => void) => void;
     onRecordingStarted: (

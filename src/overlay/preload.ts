@@ -44,8 +44,9 @@ contextBridge.exposeInMainWorld('snipalot', {
     ipcRenderer.invoke('overlay:annotation-mode-changed', { active }),
   onEnterAnnotationMode: (cb: () => void) =>
     ipcRenderer.on('overlay:enter-annotation-mode', cb),
-  onEnterRegionSelect: (cb: () => void) =>
-    ipcRenderer.on('overlay:enter-region-select', cb),
+  onEnterRegionSelect: (
+    cb: (payload?: { countdownSec?: number; mode?: 'region' | 'fullscreen' }) => void
+  ) => ipcRenderer.on('overlay:enter-region-select', (_evt, payload) => cb(payload)),
   onExitRegionSelect: (cb: () => void) =>
     ipcRenderer.on('overlay:exit-region-select', cb),
   onOwnsRecording: (cb: (payload: { rect: OverlayRect }) => void) =>

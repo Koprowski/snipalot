@@ -74,16 +74,33 @@
           </label>
         </div>
         <div class="field" style="margin-top: 12px">
-          <label for="countdown-sec">Countdown before recording starts</label>
-          <div class="input-row" style="max-width: 200px">
-            <select id="countdown-sec" class="select">
-              <option value="0">0 (instant)</option>
-              <option value="3">3 seconds (default)</option>
-              <option value="5">5 seconds</option>
-              <option value="10">10 seconds</option>
-            </select>
+          <label for="countdown-slider">Countdown before recording starts</label>
+          <!-- Slider 0..10 with a live readout + a custom-number input that
+               accepts anything ≥0 (e.g. 15, 30) for users who want longer than
+               the slider's default range. The two stay in sync — drag the
+               slider, the number updates; type a number, the slider clamps. -->
+          <div class="slider-row">
+            <input
+              type="range"
+              id="countdown-slider"
+              class="slider"
+              min="0"
+              max="10"
+              step="1"
+              value="3"
+            />
+            <input
+              type="number"
+              id="countdown-custom"
+              class="slider-number"
+              min="0"
+              step="1"
+              value="3"
+              aria-label="Countdown seconds (custom input)"
+            />
+            <span class="slider-unit">sec</span>
           </div>
-          <p class="info" style="margin-top: 6px; font-size: 11px">After the region is selected (or immediately in fullscreen mode), a 3-2-1 countdown gives you time to switch focus before the recording starts. Esc cancels.</p>
+          <p class="info" style="margin-top: 6px; font-size: 11px">After the region is selected (or immediately in fullscreen mode), a 3-2-1 countdown gives you time to switch focus before the recording starts. Esc cancels. Default 3. Set 0 for instant; type a custom number above 10 if you want a longer pre-roll.</p>
         </div>
       </div>
 

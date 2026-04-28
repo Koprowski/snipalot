@@ -96,9 +96,28 @@ async function init(): Promise<void> {
   capFullscreen.addEventListener('change', () => { if (capFullscreen.checked) editedCaptureMode = 'fullscreen'; });
   capWindow.addEventListener('change', () => { if (capWindow.checked) editedCaptureMode = 'window'; });
 
-  const countdownEl = document.getElementById('countdown-sec') as HTMLSelectElement;
-  countdownEl.value = String(editedCountdownSec);
-  countdownEl.addEventListener('change', () => { editedCountdownSec = Number(countdownEl.value); });
+  // Countdown control: slider (0..10) + custom number input. The two
+  // stay in sync — drag the slider, the number updates; type a number,
+  // the slider clamps to its 0..10 range but the actual stored value
+  // can be anything ≥0 (e.g. 30s) so power users aren't capped at 10.
+  const countdownSlider = document.getElementById('countdown-slider') as HTMLInputElement;
+  const countdownCustom = document.getElementById('countdown-custom') as HTMLInputElement;
+  countdownSlider.value = String(Math.min(10, Math.max(0, editedCountdownSec)));
+  countdownCustom.value = String(editedCountdownSec);
+  countdownSlider.addEventListener('input', () => {
+    const v = Number(countdownSlider.value);
+    editedCountdownSec = v;
+    countdownCustom.value = String(v);
+  });
+  countdownCustom.addEventListener('input', () => {
+    const raw = Number(countdownCustom.value);
+    if (Number.isFinite(raw) && raw >= 0) {
+      editedCountdownSec = Math.floor(raw);
+      // Slider clamps visually to its 0..10 range; the stored value
+      // (editedCountdownSec) keeps the full custom number.
+      countdownSlider.value = String(Math.min(10, Math.max(0, editedCountdownSec)));
+    }
+  });
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────

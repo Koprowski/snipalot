@@ -780,51 +780,89 @@ function buildPromptText(args: {
   annotationFrames: Array<{ number: number; path: string; drawnAtMs: number }>;
   snapFrames: Array<{ path: string; name: string }>;
   annotations: AnnotationRecord[];
+  /** Absolute path to the finalized MP4. */
+  mp4Path: string;
+  /** Absolute path to the GIF preview. */
+  gifPath: string;
 }): string {
-  const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations } = args;
+  const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations, mp4Path, gifPath } = args;
 
-  const transcriptLine = transcriptPath
-    ? `1. Read the transcript: ${transcriptPath}`
-    : `1. (Transcript unavailable — whisper.cpp not installed; see annotations.json for the visual context only.)`;
+  // Always lead with the source-files block so the LLM can locate the
+  // recording itself. The previous version skipped this entirely and the
+  // user pointed out (correctly) that on transcript-only sessions the
+  // prompt was useless: it said "I have a recording" but never told the
+  // LLM where the recording lived.
+  const sourceBlock = [
+    'Source files (all paths absolute):',
+    `- Video recording (MP4, full audio + video): ${mp4Path}`,
+    `- GIF preview (12x speedup with timecode burned in): ${gifPath}`,
+    '  ↑ Most LLMs can read at least the first frame of the GIF as a still',
+    '    image. Attach or open it directly if your client supports image',
+    '    inputs — it gives you immediate visual context for the transcript.',
+    transcriptPath
+      ? `- Transcript (timestamped): ${transcriptPath}`
+      : '- Transcript unavailable (whisper.cpp not installed — run `npm run fetch-resources`)',
+    `- Structured metadata (annotations, region, durations): ${annotationsPath}`,
+  ].join('\n');
 
-  // Annotation frames: captured at the exact ms the user drew each numbered rectangle.
-  const annotationFrameListing =
-    annotationFrames.length === 0
-      ? '(No annotation frames — no numbered rectangles were drawn this session.)'
-      : annotationFrames
-          .map((f) => `   #${f.number} (${formatMsAsMinSec(f.drawnAtMs)}): ${f.path}`)
-          .join('\n');
+  const hasAnnotations = annotations.length > 0;
+  const hasSnaps = snapFrames.length > 0;
+  const hasVisualEvidence = annotationFrames.length > 0 || hasSnaps;
 
-  // Snap frames: captured by the user pressing the HUD 📷 button.
-  const snapFrameListing =
-    snapFrames.length === 0
-      ? '(No manual snaps this session.)'
-      : snapFrames.map((f) => `   ${f.name}: ${f.path}`).join('\n');
+  // Annotation evidence section — shown only when there's actually
+  // visual evidence to reference. Skips the empty "(no annotation
+  // frames)" / "(no manual snaps)" lines that previously cluttered
+  // transcript-only prompts.
+  const annotationFrameListing = annotationFrames
+    .map((f) => `  #${f.number} (${formatMsAsMinSec(f.drawnAtMs)}): ${f.path}`)
+    .join('\n');
+  const snapFrameListing = snapFrames.map((f) => `  ${f.name}: ${f.path}`).join('\n');
+  const visualEvidenceBlock = hasVisualEvidence
+    ? [
+        '',
+        'Visual evidence:',
+        annotationFrames.length > 0 ? '- Frames captured at the moment each annotation was drawn:' : null,
+        annotationFrames.length > 0 ? annotationFrameListing : null,
+        snapFrames.length > 0 ? '- Manual snap frames captured during the recording:' : null,
+        snapFrames.length > 0 ? snapFrameListing : null,
+      ].filter(Boolean).join('\n')
+    : '';
 
-  const annotationSummary =
-    annotations.length === 0
-      ? 'No annotations were drawn during this recording.'
-      : annotations
+  // Annotation summary — only when annotations exist.
+  const annotationSummaryBlock = hasAnnotations
+    ? [
+        '',
+        'Annotation summary (timestamps are M:SS since recording start):',
+        annotations
           .map((a) => `#${a.number} at ${formatMsAsMinSec(a.drawnAtMs)} (region ${a.x},${a.y} ${a.w}×${a.h})`)
-          .join('\n');
+          .join('\n'),
+      ].join('\n')
+    : '';
+
+  // Workflow guidance — adapts based on whether we have annotation
+  // evidence or it's a transcript-only walkthrough.
+  const workflowBlock = hasVisualEvidence
+    ? [
+        '',
+        'The transcript references my annotations by number ("#1", "the first box", etc.). For each numbered comment, open the matching frame PNG to see what was on screen at that moment; the red numbered rectangle in the frame shows exactly what I was pointing at. annotations.json lists the region coordinates if you need pixel-level precision.',
+      ].join('\n')
+    : [
+        '',
+        'This was a transcript-only walkthrough — I described things verbally without drawing rectangles. To understand the visual context, open the GIF as an image (single frame is enough for most observations) or open the MP4 directly if you need to scrub to a specific timestamp the transcript mentions.',
+      ].join('\n');
 
   return [
     'I have a screen-recorded walkthrough with spoken feedback about my app. Please review and apply all changes.',
     '',
-    transcriptLine,
-    `2. Annotations (numbered rectangles I drew while recording): ${annotationsPath}`,
-    '3. Frames captured at the moment each annotation was drawn (read these images directly):',
-    annotationFrameListing,
-    '4. Manual snap frames captured via the 📷 button (read these images directly):',
-    snapFrameListing,
-    '',
-    'The transcript references my annotations by number ("#1", "the first box", etc.). For each numbered comment, open the matching frame-N.png to see what was on screen at that moment; the red numbered rectangle in the frame shows exactly what I was pointing at. annotations.json lists the region coordinates if you need pixel-level precision.',
-    '',
-    'Annotation summary (timestamps are M:SS since recording start):',
-    annotationSummary,
+    sourceBlock,
+    visualEvidenceBlock,
+    annotationSummaryBlock,
+    workflowBlock,
     '',
     'Work through each observation in the transcript in order. For each item:',
-    '- Open the corresponding frame PNG to confirm visually what I meant',
+    hasVisualEvidence
+      ? '- Open the corresponding frame PNG (or the GIF first frame) to confirm visually what I meant'
+      : '- Open the GIF or MP4 to confirm visually what I meant',
     '- Identify which file(s) need to change',
     '- Make the change',
     '- Note the timestamp from the transcript so I can verify',
@@ -1045,6 +1083,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         annotationFrames,
         snapFrames,
         annotations: input.annotations,
+        mp4Path,
+        gifPath,
       });
 
   // In trade-mode, the trade-pipeline (below) owns the clipboard — it

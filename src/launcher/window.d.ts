@@ -7,6 +7,7 @@ interface Window {
     trade: () => Promise<void>;
     cancel: () => Promise<void>;
     quit: () => Promise<void>;
+    closeToTray: () => Promise<void>;
     settings: () => Promise<void>;
     toggleMinimize: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;

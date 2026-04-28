@@ -151,7 +151,10 @@ btnMinimizeEl.addEventListener('click', () => {
 });
 
 btnQuitEl.addEventListener('click', () => {
-  window.snipalotLauncher.quit();
+  // X = hide to tray, NOT quit. Snipalot stays running in the background
+  // so hotkeys (Ctrl+Shift+S, Ctrl+Shift+T, etc.) keep firing globally.
+  // To fully exit, use the tray menu's "Quit Snipalot" option.
+  window.snipalotLauncher.closeToTray();
 });
 
 window.snipalotLauncher.onState((state) => {

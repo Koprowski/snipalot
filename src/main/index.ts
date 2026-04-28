@@ -1908,6 +1908,28 @@ ipcMain.handle('launcher:quit', () => {
   app.quit();
 });
 
+/**
+ * Hide the launcher to tray. App keeps running (so global hotkeys keep
+ * firing). One-time notification per session tells the user how to bring
+ * the launcher back + how to actually quit if that's what they wanted.
+ */
+let hideToTrayNotificationShown = false;
+ipcMain.handle('launcher:close-to-tray', () => {
+  log('launcher', 'close-to-tray click');
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    launcherWindow.hide();
+  }
+  if (!hideToTrayNotificationShown) {
+    hideToTrayNotificationShown = true;
+    showNotification(
+      'Snipalot is still running',
+      'Hotkeys (Ctrl+Shift+S record, Ctrl+Shift+T trade) stay active. ' +
+        'Click the tray icon to bring the launcher back, or right-click ' +
+        'the tray → Quit Snipalot to fully exit.'
+    );
+  }
+});
+
 ipcMain.handle('launcher:settings', () => {
   log('launcher', 'settings click');
   openSettings();

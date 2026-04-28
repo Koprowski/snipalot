@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
         | 'recording'
         | 'processing';
       sessionMode?: 'record' | 'trade';
+      processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;
       processingStep: string | null;
       startStopHotkey?: string;
     }) => void

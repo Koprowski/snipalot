@@ -30,6 +30,9 @@ let currentState:
   | 'recording'
   | 'processing' = 'idle';
 let currentProcessingStep: string | null = null;
+let currentProcessingProgress:
+  | { pct: number; etaSec: number; elapsedSec: number }
+  | null = null;
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
 // idle hint always reflects the current binding (default: Ctrl+Shift+S).
 let currentStartStopHotkey = 'Ctrl+Shift+S';
@@ -112,6 +115,36 @@ function renderLauncherImpl(): void {
       ? currentProcessingStep
       : 'Saving recording, transcribing, and generating prompt…';
   }
+
+  // Progress bar visibility + fill: shown only during 'processing' state
+  // when main has sent us a progress estimate. The 'transition: width' on
+  // .progress-fill smooths the 250ms tick into a gentle slide.
+  const block = document.getElementById('progress-block') as HTMLDivElement;
+  const fill = document.getElementById('progress-fill') as HTMLDivElement;
+  const elapsedEl = document.getElementById('progress-elapsed')!;
+  const etaEl = document.getElementById('progress-eta')!;
+  if (currentState === 'processing' && currentProcessingProgress) {
+    block.style.display = 'flex';
+    fill.style.width = `${currentProcessingProgress.pct.toFixed(1)}%`;
+    elapsedEl.textContent = formatProgressTime(currentProcessingProgress.elapsedSec);
+    // ETA hidden once we're in the cap-at-95% tail; the bar sits there
+    // while waiting on slow steps so a rolling ETA would just count down
+    // forever. Show "wrapping up…" instead.
+    if (currentProcessingProgress.etaSec <= 0 || currentProcessingProgress.pct >= 95) {
+      etaEl.textContent = 'wrapping up…';
+    } else {
+      etaEl.textContent = `~${formatProgressTime(currentProcessingProgress.etaSec)} remaining`;
+    }
+  } else {
+    block.style.display = 'none';
+  }
+}
+
+function formatProgressTime(sec: number): string {
+  const total = Math.max(0, Math.round(sec));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 btnPrimaryEl.addEventListener('click', () => {
@@ -218,6 +251,7 @@ window.snipalotLauncher.onState((state) => {
   currentProcessingStep = state.processingStep;
   if (state.startStopHotkey) currentStartStopHotkey = state.startStopHotkey;
   if (state.sessionMode) currentSessionMode = state.sessionMode;
+  currentProcessingProgress = state.processingProgress ?? null;
   renderLauncherImpl();
 });
 

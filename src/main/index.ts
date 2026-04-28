@@ -81,6 +81,19 @@ let appState: AppState = 'idle';
  * Null in any other state.
  */
 let processingStep: string | null = null;
+/**
+ * Wall-clock progress estimate for the current pipeline run. Set when
+ * stopRecording fires, cleared when state returns to 'idle'. Lets the
+ * launcher render a progress bar + ETA under the step label so a long
+ * (e.g. 1-hour) recording's processing doesn't look stuck at "Saving
+ * recording…" for 5 seconds and then "Transcribing…" for 14 minutes
+ * with no visible progression.
+ */
+let processingStartedAtMs: number | null = null;
+let processingEstimatedTotalSec: number | null = null;
+/** 250ms tick that re-broadcasts state so the launcher's progress bar
+ *  animates smoothly while the pipeline runs. */
+let processingTickInterval: NodeJS.Timeout | null = null;
 
 let recordingStartedAt: number | null = null;
 let recordingPaused = false;
@@ -171,7 +184,10 @@ function setAppState(next: AppState, why: string): void {
   log('state', `${prev} → ${next}`, why);
   appState = next;
   // processingStep is only meaningful while in 'processing'; clear on exit.
-  if (next !== 'processing') processingStep = null;
+  if (next !== 'processing') {
+    processingStep = null;
+    stopProcessingProgressTick();
+  }
 
   // Annotate + snapshot + trade-marker hotkeys are registered ONLY while
   // recording so they never steal keypresses from other apps when Snipalot
@@ -198,6 +214,66 @@ function setAppState(next: AppState, why: string): void {
  * Triggers a launcher rebroadcast so the user sees the current pipeline
  * stage (e.g. "Converting video → Transcribing audio → ...").
  */
+/**
+ * Estimate total post-recording processing wall-clock seconds.
+ *
+ * The pipeline runs audio (whisper, the long pole) and video (mp4
+ * transcode + gif) in parallel after a brief sequential setup. Whisper
+ * is ~25% of recording duration on the bundled base.en model + this
+ * machine's CPU; mp4 transcode at ultrafast preset is ~10%. Plus a
+ * ~5s overhead for save/chapters/prompt write/etc. Trade mode adds a
+ * small baseline for the trade-context window setup.
+ *
+ * These coefficients are approximate; a real run can land within ±25%.
+ * The progress bar caps at 95% until the pipeline actually completes,
+ * so a slow run just sits at 95% rather than overshooting visually.
+ */
+function estimateProcessingSec(recordingDurationMs: number, mode: 'record' | 'trade'): number {
+  const recordingSec = Math.max(1, recordingDurationMs / 1000);
+  // Audio + video branches run in parallel; max() reflects wall clock.
+  const audioBranchSec = 1 + 0.25 * recordingSec;   // wav extract + whisper
+  const videoBranchSec = 0.10 * recordingSec;       // ultrafast libx264
+  const gifTailSec = 0.05 * recordingSec;           // sequential after mp4
+  const overheadSec = 5;                            // save webm + chapters + prompt + cleanup
+  const tradeExtraSec = mode === 'trade' ? 5 : 0;   // small visible baseline
+  return Math.ceil(
+    overheadSec + Math.max(audioBranchSec, videoBranchSec) + gifTailSec + tradeExtraSec
+  );
+}
+
+function startProcessingProgressTick(estimatedTotalSec: number): void {
+  processingStartedAtMs = Date.now();
+  processingEstimatedTotalSec = estimatedTotalSec;
+  if (processingTickInterval) clearInterval(processingTickInterval);
+  processingTickInterval = setInterval(() => {
+    // Just rebroadcast — the launcher reads the current progress fields
+    // and recomputes pct/eta on every tick.
+    if (appState === 'processing') broadcastStateToLauncher();
+  }, 250);
+  log('processing', 'progress tick started', { estimatedTotalSec });
+}
+
+function stopProcessingProgressTick(): void {
+  if (processingTickInterval) {
+    clearInterval(processingTickInterval);
+    processingTickInterval = null;
+  }
+  processingStartedAtMs = null;
+  processingEstimatedTotalSec = null;
+}
+
+function computeProcessingProgress(): { pct: number; etaSec: number; elapsedSec: number } | null {
+  if (processingStartedAtMs === null || processingEstimatedTotalSec === null) return null;
+  const elapsedSec = (Date.now() - processingStartedAtMs) / 1000;
+  // Cap the visible bar at 95% so we never claim "done" before the
+  // pipeline actually fires its 'idle' transition. The final 5% jump
+  // on completion is fine — better than a premature 100%.
+  const rawPct = (elapsedSec / processingEstimatedTotalSec) * 100;
+  const pct = Math.min(95, Math.max(0, rawPct));
+  const etaSec = Math.max(0, processingEstimatedTotalSec - elapsedSec);
+  return { pct, etaSec, elapsedSec };
+}
+
 function setProcessingStep(step: string): void {
   if (appState !== 'processing') return;
   processingStep = step;
@@ -380,16 +456,12 @@ function handleAnnotationHotkey(): void {
 
 function broadcastStateToLauncher(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  // Include the current startStop combo so the launcher hint can stay in
-  // sync when the user rebinds it via settings — otherwise the hint text
-  // would lie about the keyboard shortcut. Also include sessionMode so
-  // the launcher can show a "TRADING" label vs "RECORDING" while the
-  // active capture is in trade-mode (both share the 'recording' AppState).
   launcherWindow.webContents.send('launcher:state', {
     appState,
     processingStep,
     startStopHotkey: getConfig().hotkeys.startStop,
     sessionMode: currentSessionMode,
+    processingProgress: computeProcessingProgress(),
   });
 }
 
@@ -507,9 +579,11 @@ function createLauncherWindow(): BrowserWindow {
   // Bumped to 480 to fit three primary actions side by side
   // (Record + Screenshot + Trade) without label truncation.
   const w = 480;
-  // Custom title bar is 28px + content ~112px (header 20, gap 8, controls 32,
-  // gap 8, hint 16, padding 20). No need for extra slack.
-  const h = 140;
+  // Custom title bar 28px + content ~140px. The extra ~30px (vs the prior
+  // 140 total) makes room for the progress bar block under the hint that
+  // shows during the 'processing' state. Hidden during idle but reserves
+  // the layout space so transitions don't cause window-size jumps.
+  const h = 170;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;
@@ -1438,6 +1512,15 @@ function stopRecording(reason: string): void {
   // 'idle' when it's actually done.
   setAppState('processing', `user stop: ${reason}`);
   processingStep = 'Saving recording…';
+  // Kick off the wall-clock progress estimator. The 250ms tick keeps the
+  // launcher's progress bar animating smoothly until pipeline completion
+  // toggles state back to 'idle' (which also stops the tick via the
+  // setAppState side-effect below).
+  if (pendingProcessing) {
+    startProcessingProgressTick(
+      estimateProcessingSec(pendingProcessing.durationMs, pendingProcessing.mode)
+    );
+  }
   broadcastStateToLauncher();
   recordingStartedAt = null;
   recordingPaused = false;

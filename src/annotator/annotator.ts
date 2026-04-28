@@ -176,6 +176,132 @@
     bCtx.drawImage(image, 0, 0, baseCanvas.width, baseCanvas.height);
   }
 
+  // ── ROTATE BASE IMAGE 90° (left or right) ─────────────────────────────────
+  //
+  // Rotates the base image AND any existing annotations as a unit so the
+  // user can fix sideways screenshots without losing annotation work. The
+  // image is replaced with a new in-memory copy at the rotated orientation;
+  // annotation coordinates are transformed via the standard 90° rotation:
+  //   CW (right): (x, y) → (oldH - y, x)        — width/height swap
+  //   CCW (left): (x, y) → (y, oldW - x)        — width/height swap
+  // Same transform applies whether we use canvas dims or image dims, since
+  // both scale by the same displayScale factor — so we use the canvas dims
+  // (which match the annotation coordinate space directly).
+  function rotateImage(direction) {
+    if (!image) return;
+    if (!direction || (direction !== 'left' && direction !== 'right')) return;
+
+    const oldW = baseCanvas.width;
+    const oldH = baseCanvas.height;
+
+    // Step 1: produce a new Image containing the rotated pixels. Render
+    // to a fresh offscreen canvas at the ORIGINAL (un-display-scaled)
+    // image resolution so we don't lose detail through the rotation.
+    const off = document.createElement('canvas');
+    off.width = image.height;
+    off.height = image.width;
+    const oCtx = off.getContext('2d');
+    if (!oCtx) return;
+    oCtx.save();
+    if (direction === 'right') {
+      // Translate to where the new top-left should be after rotation
+      oCtx.translate(image.height, 0);
+      oCtx.rotate(Math.PI / 2);
+    } else {
+      oCtx.translate(0, image.width);
+      oCtx.rotate(-Math.PI / 2);
+    }
+    oCtx.drawImage(image, 0, 0);
+    oCtx.restore();
+
+    const rotated = new Image();
+    rotated.onload = () => {
+      image = rotated;
+
+      // Step 2: resize canvases — the displayed dims swap.
+      resizeCanvases(oldH, oldW);
+
+      // Step 3: transform every annotation's coordinates so they land on
+      // the same image content they were drawn over, just at the new
+      // orientation. Each shape kind has its own field set.
+      annotations = annotations.map((ann) => transformAnnotationOnRotate(ann, direction, oldW, oldH));
+
+      // Step 4: re-render base + annotations at new dims.
+      renderBase();
+      renderAnnotations();
+      updatePrompt();
+    };
+    rotated.src = off.toDataURL('image/png');
+  }
+
+  /** Apply a 90° rotation transform to a single annotation in-place. */
+  function transformAnnotationOnRotate(ann, direction, oldW, oldH) {
+    // Helper: rotate a point (x, y) in OLD coords to NEW coords.
+    const rot = (x, y) =>
+      direction === 'right'
+        ? { x: oldH - y, y: x }
+        : { x: y, y: oldW - x };
+
+    const shape = ann.shape || (ann.isArrow ? 'arrow' : 'rect');
+
+    if (shape === 'rect' || shape === 'circle' || shape === 'oval' || shape === 'highlight' || shape === 'shape-rect' || shape === 'shape-circle' || shape === 'shape-oval') {
+      // Bounding-box shapes. Rotate the (x, y) corner that has the
+      // smallest x and smallest y in the NEW coordinate system. Width
+      // and height swap.
+      // Old corners: (x, y) [top-left] and (x+w, y+h) [bottom-right].
+      // After CW rotation, the OLD bottom-left (x, y+h) becomes the
+      // NEW top-left. After CCW rotation, the OLD top-right (x+w, y)
+      // becomes the NEW top-left.
+      const newTopLeft = direction === 'right'
+        ? rot(ann.x, ann.y + (ann.h || 0))
+        : rot(ann.x + (ann.w || 0), ann.y);
+      return {
+        ...ann,
+        x: newTopLeft.x,
+        y: newTopLeft.y,
+        w: ann.h || 0,
+        h: ann.w || 0,
+      };
+    }
+
+    if (shape === 'line' || shape === 'arrow' || shape === 'shape-line' || shape === 'shape-arrow' || ann.isArrow) {
+      // Two-point shapes. Just rotate both endpoints.
+      const p1 = rot(ann.x1 ?? ann.x, ann.y1 ?? ann.y);
+      const p2 = rot(
+        ann.x2 ?? (ann.x + (ann.w || 0)),
+        ann.y2 ?? (ann.y + (ann.h || 0))
+      );
+      return { ...ann, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
+    }
+
+    if (shape === 'text') {
+      // Text annotations have a single anchor point. The text itself
+      // stays horizontal — we just move the anchor.
+      const p = rot(ann.x, ann.y);
+      return { ...ann, x: p.x, y: p.y };
+    }
+
+    // Doodle (free draw): array of points.
+    if (shape === 'doodle' && Array.isArray(ann.points)) {
+      const newPoints = ann.points.map((pt) => rot(pt.x, pt.y));
+      return { ...ann, points: newPoints };
+    }
+
+    // Unknown shape — best-effort rotate the (x, y) origin and swap any
+    // present w/h. Won't be perfect but won't crash either.
+    if (typeof ann.x === 'number' && typeof ann.y === 'number') {
+      const p = rot(ann.x, ann.y);
+      return {
+        ...ann,
+        x: p.x,
+        y: p.y,
+        w: ann.h ?? ann.w,
+        h: ann.w ?? ann.h,
+      };
+    }
+    return ann;
+  }
+
   // ── DRAW ANNOTATIONS ──────────────────────────────────────────────────────
   function hexToRgba(hex, alpha) {
     const r = parseInt(hex.slice(1,3), 16);
@@ -1793,7 +1919,7 @@
   // ── window bridge for inline event attributes ─────────────────
   Object.assign(window, {
     setTool, setShapeTool, setColor, setOpacity, setStrokeWidth,
-    triggerPaste, undo, redo, pasteOverlayImage, startCropMode,
+    triggerPaste, undo, redo, rotateImage, pasteOverlayImage, startCropMode,
     clearAll, changeSavePath, saveSession, copyPrompt,
     copyPromptFromOverlay, toggleOverlay, resetPrompt,
     onPromptEdit, onOverlayPromptEdit, updatePrompt,

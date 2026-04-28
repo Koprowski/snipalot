@@ -56,6 +56,8 @@
   <button class="tool-btn" onclick="triggerPaste()">📋 Paste Image</button>
   <button class="tool-btn" id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)" disabled style="opacity:0.4;padding:0 8px">↩</button>
   <button class="tool-btn" id="btn-redo" onclick="redo()" title="Redo (Ctrl+Y)" disabled style="opacity:0.4;padding:0 8px">↪</button>
+  <button class="tool-btn" id="btn-rotate-left" onclick="rotateImage('left')" title="Rotate image 90° counterclockwise (any annotations rotate with it)" style="padding:0 8px">↺ 90°</button>
+  <button class="tool-btn" id="btn-rotate-right" onclick="rotateImage('right')" title="Rotate image 90° clockwise (any annotations rotate with it)" style="padding:0 8px">↻ 90°</button>
   <button class="tool-btn" id="btn-paste-overlay" onclick="pasteOverlayImage()">🖼 Paste Overlay</button>
   <button class="tool-btn" id="btn-crop-overlay" onclick="startCropMode()" title="Crop selected overlay image">✂ Crop Overlay</button>
   <button class="tool-btn danger" onclick="clearAll()">🗑 Clear All</button>

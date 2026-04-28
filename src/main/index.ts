@@ -647,6 +647,12 @@ let pendingTradeContext: {
   recordingStartedAtMs: number;
   durationMs: number;
 } | null = null;
+/**
+ * setInterval handle that keeps the trade-context window above the
+ * 'screen-saver'-level overlay. See the matching hudKeepOnTopInterval
+ * for context — same z-order race, same fix.
+ */
+let tradeContextKeepOnTopInterval: NodeJS.Timeout | null = null;
 
 function openAnnotator(): void {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) {
@@ -812,7 +818,36 @@ function openTradeContextWindow(
   });
   tradeContextWindow.removeMenu();
   tradeContextWindow.loadFile(path.join(__dirname, '..', 'trade-context', 'trade-context.html'));
-  tradeContextWindow.once('ready-to-show', () => tradeContextWindow?.show());
+  tradeContextWindow.once('ready-to-show', () => {
+    if (!tradeContextWindow || tradeContextWindow.isDestroyed()) return;
+    tradeContextWindow.show();
+    // Bump to 'screen-saver' level to match the overlays. The constructor
+    // alwaysOnTop:true defaults to 'floating' which is BELOW 'screen-saver',
+    // so the still-open overlays would visually cover this window whenever
+    // focus shifted (e.g. user clicks browser to copy MockApe data, then
+    // the overlay re-stacks on top and the trade-context disappears).
+    tradeContextWindow.setAlwaysOnTop(true, 'screen-saver');
+    tradeContextWindow.moveTop();
+    tradeContextWindow.focus();
+  });
+  // Defensive: keep trade-context above the overlay through z-order races
+  // (overlay calls setAlwaysOnTop in its own state changes, which can shuffle
+  // same-level windows on Windows). Same pattern as hudKeepOnTopInterval.
+  if (tradeContextKeepOnTopInterval) clearInterval(tradeContextKeepOnTopInterval);
+  tradeContextKeepOnTopInterval = setInterval(() => {
+    if (
+      tradeContextWindow &&
+      !tradeContextWindow.isDestroyed() &&
+      tradeContextWindow.isVisible() &&
+      !tradeContextWindow.isFocused()
+    ) {
+      // Only re-assert if NOT focused — if the user is actively using
+      // another app (e.g. copying from browser), we don't want to keep
+      // stealing focus from them. moveTop without focus is enough to
+      // keep the window visible above the overlay.
+      tradeContextWindow.moveTop();
+    }
+  }, 1000);
   tradeContextWindow.on('closed', () => {
     // If the user dismissed the window without submit/skip (e.g. clicked
     // the X), treat as a skip so trade-pipeline can proceed. Write the
@@ -830,6 +865,10 @@ function openTradeContextWindow(
         log('trade-context', 'sentinel write fail on close', { err: (err as Error).message });
       }
       pendingTradeContext = null;
+    }
+    if (tradeContextKeepOnTopInterval) {
+      clearInterval(tradeContextKeepOnTopInterval);
+      tradeContextKeepOnTopInterval = null;
     }
     tradeContextWindow = null;
   });

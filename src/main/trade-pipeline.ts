@@ -408,30 +408,35 @@ and how it went). Either side can be missing.`}
 
 ## Output schema
 
-Return a JSON array, one object per trade. Use null for any field the
-transcript / data doesn't speak to:
+Return a JSON array, one object per trade. The shape below uses
+\`<PLACEHOLDER>\` markers — your actual output must replace each
+placeholder with the real value from the MockApe list and transcript
+above. The placeholder names are NOT example data; do NOT include
+them verbatim in your output.
+
+Use null for any field the transcript / data genuinely doesn't speak to.
 
 [
   {
-    "trade_id": 1,
-    "token_name": "PEPE",
-    "mockape_trade_id": "${hasMockape ? '17773210097418v1srba6s' : 'null'}",
-    "pre_call_offset_label": "0:34",
-    "pre_call_offset_ms": 34000,
-    "post_call_offset_label": "1:12",
-    "post_call_offset_ms": 72000,
-    "target_low_mc": 80000,
-    "target_high_mc": 100000,
-    "rationale": "Top holders look clean, volume picking up",
-    "pre_transcript_excerpt": "Pepe, I think this can hit 80 to 100k market cap...",
-    "post_transcript_excerpt": "Got out at 70k, didn't hit my range...",
-    "exit_mc_estimate": 70000,
-    "outcome_summary": "Exited below target range; took the chop",
-    "adherence_self_assessment": "Exited early due to holders bailing; not strict adherence",
-    "pre_confidence": "high",
-    "post_confidence": "medium",
-    "needs_review": false,
-    "notes": null
+    "trade_id": <SEQUENTIAL_INT_STARTING_AT_1>,
+    "token_name": "<TOKEN_NAME_FROM_MOCKAPE_LIST_ABOVE>",
+    "mockape_trade_id": ${hasMockape ? '"<EXACT_TRADE_ID_FROM_MOCKAPE_LIST_ABOVE>"' : 'null'},
+    "pre_call_offset_label": "<M:SS_OF_PRE_CALLOUT_OR_NULL>",
+    "pre_call_offset_ms": <SAME_AS_LABEL_IN_MS_OR_NULL>,
+    "post_call_offset_label": "<M:SS_OF_POST_CALLOUT_OR_NULL>",
+    "post_call_offset_ms": <SAME_AS_LABEL_IN_MS_OR_NULL>,
+    "target_low_mc": <SPOKEN_TARGET_LOW_INT_OR_NULL>,
+    "target_high_mc": <SPOKEN_TARGET_HIGH_INT_OR_NULL>,
+    "rationale": "<TRADER_S_OWN_WORDS_FOR_WHY_OR_NULL>",
+    "pre_transcript_excerpt": "<NEAR_VERBATIM_PRE_QUOTE_OR_NULL>",
+    "post_transcript_excerpt": "<NEAR_VERBATIM_POST_QUOTE_OR_NULL>",
+    "exit_mc_estimate": <SPOKEN_EXIT_MC_INT_OR_NULL>,
+    "outcome_summary": "<TRADER_S_OWN_WORDS_FOR_OUTCOME_OR_NULL>",
+    "adherence_self_assessment": "<TRADER_S_OWN_WORDS_ON_PLAN_ADHERENCE_OR_NULL>",
+    "pre_confidence": "<low|medium|high|null>",
+    "post_confidence": "<low|medium|high|null>",
+    "needs_review": <true_OR_false>,
+    "notes": "<ANY_RELEVANT_FLAG_OR_NULL>"
   }
 ]
 

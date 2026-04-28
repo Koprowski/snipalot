@@ -8,6 +8,8 @@ interface Window {
     cancel: () => Promise<void>;
     quit: () => Promise<void>;
     closeToTray: () => Promise<void>;
+    togglePin: () => Promise<boolean>;
+    getPinState: () => Promise<boolean>;
     settings: () => Promise<void>;
     toggleMinimize: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;

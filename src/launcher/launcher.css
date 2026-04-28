@@ -74,6 +74,23 @@ body {
   color: #fff;
 }
 
+/* Pin button — toggles launcher alwaysOnTop. Outlined when off (default
+   muted color), filled-amber when active so the user can see at a glance
+   whether the launcher is pinned above other windows. */
+.tb-pin.active {
+  color: #f59e0b;
+}
+
+.tb-pin.active svg path {
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.tb-pin:hover {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+}
+
 /* ─── content body ──────────────────────────────────────────── */
 
 .content {

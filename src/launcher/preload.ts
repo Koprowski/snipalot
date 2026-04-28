@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
       The X button on the launcher routes here, not to quit, so users
       who hit X expecting "minimize" don't accidentally kill the app. */
   closeToTray: () => ipcRenderer.invoke('launcher:close-to-tray'),
+  /** Toggle launcher's alwaysOnTop pin. Returns the new state so the
+      renderer can sync its visual indicator. */
+  togglePin: (): Promise<boolean> => ipcRenderer.invoke('launcher:toggle-pin'),
+  /** Read the current pin state on boot so the button starts in sync. */
+  getPinState: (): Promise<boolean> => ipcRenderer.invoke('launcher:get-pin-state'),
   settings: () => ipcRenderer.invoke('launcher:settings'),
   toggleMinimize: () => ipcRenderer.invoke('launcher:toggle-minimize'),
   log: (scope: string, ...args: unknown[]) =>

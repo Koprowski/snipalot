@@ -56,6 +56,14 @@ export interface SnipalotConfig {
      */
     autoPromptForTradeData: boolean;
   };
+  launcher: {
+    /**
+     * When true, the launcher window stays alwaysOnTop above other apps.
+     * Toggled via the pin button in the titlebar; persisted across
+     * sessions. Default false (normal window stacking).
+     */
+    pinnedOnTop: boolean;
+  };
   capture: {
     /**
      * Default capture mode for Record + Trade hotkeys / buttons.
@@ -124,6 +132,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   trade: {
     autoPromptForTradeData: true,
+  },
+  launcher: {
+    pinnedOnTop: false,
   },
   capture: {
     mode: 'region',

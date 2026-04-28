@@ -157,6 +157,25 @@ btnQuitEl.addEventListener('click', () => {
   window.snipalotLauncher.closeToTray();
 });
 
+// ── Pin (alwaysOnTop) toggle ─────────────────────────────────────────
+const btnPinEl = document.getElementById('btn-pin') as HTMLButtonElement;
+
+function applyPinVisualState(pinned: boolean): void {
+  btnPinEl.classList.toggle('active', pinned);
+  btnPinEl.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+  btnPinEl.title = pinned
+    ? 'Pinned on top — click to unpin (launcher will hide behind other windows)'
+    : 'Pin on top — keep launcher visible above other windows';
+}
+
+btnPinEl.addEventListener('click', async () => {
+  const pinned = await window.snipalotLauncher.togglePin();
+  applyPinVisualState(pinned);
+});
+
+// Sync the button visual to whatever main has stored in config.
+window.snipalotLauncher.getPinState().then(applyPinVisualState).catch(() => { /* ignore */ });
+
 window.snipalotLauncher.onState((state) => {
   window.snipalotLauncher.log('state', state);
   currentState = state.appState;

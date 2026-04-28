@@ -446,6 +446,39 @@ Rules:
   null. Same for missing post-callouts.
 - If the trader mentions a coin but doesn't clearly enter a position
   (musing only), set confidence=low, needs_review=true.
+
+**ANTI-FABRICATION (critical):**
+- rationale, outcome_summary, adherence_self_assessment, target_low_mc,
+  target_high_mc, exit_mc_estimate must come DIRECTLY from words the
+  trader said in the transcript. Quote-paraphrase only.
+- DO NOT invent rationale ("strong fundamentals", "bullish setup",
+  "good entry") if the trader didn't say something equivalent. If the
+  trader only said "this looks fun" or "let's see what happens", the
+  rationale is "this looks fun" — not a synthesized investment thesis.
+- DO NOT infer target market caps from the actual entry/exit prices.
+  Targets must come from the trader's spoken prediction. If they only
+  said "I'm going to double this", target_high_mc = entry × 2 IS a
+  defensible inference (double is a clear quantitative claim). If they
+  said nothing about a target, target_low_mc and target_high_mc are null.
+- pre_transcript_excerpt and post_transcript_excerpt must be VERBATIM
+  quotes from the transcript (or near-verbatim with [...] for elision).
+  These are evidence — the trader will read them to verify your
+  extraction is honest.
+- If a field would require speculation, set it to null. A null is more
+  useful than a fabricated value because the trader can see what wasn't
+  captured and decide whether to re-record more clearly next time.
+- needs_review=true on any trade where you had to guess at any
+  non-trivial field. Better to flag than to silently fabricate.
+
+**PARTIAL EXITS:**
+- Mock Ape's export sometimes shows ONE entry/exit pair per trade even
+  if the trader scaled out in pieces. The transcript may mention
+  "selling half now" then later "all out" — both refer to the same
+  underlying trade_id. Treat partial-exit commentary as part of the
+  SAME trade, not separate trades. post_transcript_excerpt should
+  combine the partial-exit statements ("selling half now [...] all
+  out at 4k") so the trader's full exit narrative is preserved.
+
 - **Output ONLY the JSON array.** No prose before or after, no markdown
   code fences, no commentary. The receiving tool parses your output
   directly.

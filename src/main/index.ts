@@ -551,6 +551,11 @@ function createLauncherWindow(): BrowserWindow {
   win.loadFile(path.join(__dirname, '..', 'launcher', 'launcher.html'));
   win.once('ready-to-show', () => {
     win.show();
+    // Restore pin state from config — set BEFORE broadcasting state so
+    // the renderer's getPinState() lookup returns the correct value.
+    if (getConfig().launcher.pinnedOnTop) {
+      win.setAlwaysOnTop(true);
+    }
     broadcastStateToLauncher();
   });
   win.on('closed', () => {
@@ -1953,6 +1958,20 @@ ipcMain.handle('launcher:quit', () => {
  * the launcher back + how to actually quit if that's what they wanted.
  */
 let hideToTrayNotificationShown = false;
+ipcMain.handle('launcher:toggle-pin', () => {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return false;
+  const next = !launcherWindow.isAlwaysOnTop();
+  launcherWindow.setAlwaysOnTop(next);
+  saveConfig({ launcher: { pinnedOnTop: next } } as never);
+  log('launcher', 'pin toggled', { pinnedOnTop: next });
+  return next;
+});
+
+ipcMain.handle('launcher:get-pin-state', () => {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return false;
+  return launcherWindow.isAlwaysOnTop();
+});
+
 ipcMain.handle('launcher:close-to-tray', () => {
   log('launcher', 'close-to-tray click');
   if (launcherWindow && !launcherWindow.isDestroyed()) {

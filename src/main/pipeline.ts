@@ -373,6 +373,8 @@ export interface TranscriptSegment {
   text: string;
   /** Segment start in whole seconds from recording start. */
   startSec: number;
+  /** Segment end in whole seconds from recording start. */
+  endSec: number;
 }
 
 function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
@@ -383,6 +385,7 @@ function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
   const out: TranscriptSegment[] = [];
   let currentStamp = '';
   let currentStartSec = 0;
+  let currentEndSec = 0;
 
   // SRT timestamp: HH:MM:SS,mmm --> HH:MM:SS,mmm
   const tsPattern = /^(\d{2}):(\d{2}):(\d{2}),\d+\s+-->\s+(\d{2}):(\d{2}):(\d{2}),\d+/;
@@ -398,11 +401,12 @@ function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
       const endMin = Math.floor(endTotalSec / 60);
       const endSecRem = endTotalSec % 60;
       currentStartSec = startTotalSec;
+      currentEndSec = endTotalSec;
       currentStamp = `[${startMin}:${String(startSecRem).padStart(2, '0')} - ${endMin}:${String(endSecRem).padStart(2, '0')}]`;
       continue;
     }
     if (line !== '' && !/^\d+$/.test(line) && currentStamp) {
-      out.push({ text: `${currentStamp} ${line}`, startSec: currentStartSec });
+      out.push({ text: `${currentStamp} ${line}`, startSec: currentStartSec, endSec: currentEndSec });
       currentStamp = '';
     }
   }
@@ -950,7 +954,52 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       if (fs.existsSync(srtPath)) {
         const srt = fs.readFileSync(srtPath, 'utf-8');
         transcriptSegments = parseSrtToTranscript(srt);
-        fs.writeFileSync(transcriptPath, transcriptSegments.map((s) => s.text).join('\n') + '\n', 'utf-8');
+        // Build the transcript text with a duration header + silence-tail
+        // marker. Without these, a long silent stretch at the end of the
+        // recording (e.g. trader watches charts without commentary) makes
+        // the transcript appear to end early. The user (and the LLM that
+        // reads the prompt) sees the file ending at, say, 5:48 and assumes
+        // the recording was 5:48 long — when in fact it was 10:21 with the
+        // trader silent from 4:38 onwards. Trades firing during that silent
+        // stretch then look like they fired "after the recording" when
+        // they're actually inside it. Explicit tail marker fixes this.
+        const recordingDurationSec = Math.round(input.durationMs / 1000);
+        const lastSegEndSec = transcriptSegments.length > 0
+          ? transcriptSegments[transcriptSegments.length - 1].endSec
+          : 0;
+        const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        const headerLines: string[] = [];
+        headerLines.push(`# Recording duration: ${fmt(recordingDurationSec)}`);
+        if (transcriptSegments.length > 0) {
+          headerLines.push(`# Last narration segment ended at ${fmt(lastSegEndSec)}`);
+        } else {
+          headerLines.push('# No narration detected (whisper produced no segments)');
+        }
+        headerLines.push('');
+        const bodyLines = transcriptSegments.map((s) => s.text);
+        // Append tail marker when there's a non-trivial silent gap
+        // (>10s) between the last whisper segment and the end of the
+        // recording. The threshold avoids spamming the marker for
+        // every recording that ends 1-2s after the last word.
+        const tailGapSec = recordingDurationSec - lastSegEndSec;
+        const tailLines: string[] = [];
+        if (tailGapSec > 10) {
+          tailLines.push(
+            `[${fmt(lastSegEndSec)} - ${fmt(recordingDurationSec)}] [SILENT — no audible speech detected for ${fmt(tailGapSec)}; recording continued through this stretch]`
+          );
+        }
+        const finalText = [
+          ...headerLines,
+          ...bodyLines,
+          ...tailLines,
+        ].join('\n') + '\n';
+        fs.writeFileSync(transcriptPath, finalText, 'utf-8');
+        log('pipeline', 'transcript written', {
+          segments: transcriptSegments.length,
+          recordingDurationSec,
+          lastSegEndSec,
+          silentTailSec: tailGapSec > 0 ? tailGapSec : 0,
+        });
         finalTranscriptPath = transcriptPath;
         try { fs.unlinkSync(srtPath); } catch { /* ignore */ }
       } else {

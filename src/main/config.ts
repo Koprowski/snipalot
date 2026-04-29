@@ -55,6 +55,13 @@ export interface SnipalotConfig {
      * toggle from inside the window via "Don't ask again".
      */
     autoPromptForTradeData: boolean;
+    /**
+     * Gemini API key used for automatic trade extraction after each session.
+     * Obtained from https://aistudio.google.com/apikey (free tier covers
+     * 1,500 requests/day). When empty, Snipalot falls back to the
+     * response-paste window so the user can paste the JSON manually.
+     */
+    geminiApiKey: string;
   };
   launcher: {
     /**
@@ -132,6 +139,7 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   trade: {
     autoPromptForTradeData: true,
+    geminiApiKey: '',
   },
   launcher: {
     pinnedOnTop: false,

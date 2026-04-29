@@ -17,16 +17,16 @@ extraResources:
       - '!models/**/.gitkeep'
 win:
   target:
-    - target: portable
-      arch:
-        - x64
     - target: nsis
       arch:
         - x64
-  icon: resources/icons/app.ico
-  artifactName: Snipalot-${version}-${arch}-${env.BUILD_TARGET}.${ext}
+  icon: resources/icons/app.png
+  artifactName: Snipalot-${version}-setup.${ext}
+  signAndEditExecutable: false
+  sign: null
 portable:
   artifactName: Snipalot-${version}-portable.exe
+
 nsis:
   oneClick: false
   perMachine: false

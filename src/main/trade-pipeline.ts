@@ -16,10 +16,10 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { spawn } from 'node:child_process';
 import { clipboard, Notification, shell } from 'electron';
 import { stringify as csvStringify } from 'csv-stringify/sync';
 import { log } from './logger';
+import { getConfig } from './config';
 import { TranscriptSegment } from './pipeline';
 
 /**
@@ -193,24 +193,25 @@ export async function runTradePipeline(
   );
   const { promptPath, responsePath } = writeExtractionPrompt(sessionDir, promptText);
 
-  // ── Auto-extraction: try Gemini CLI first ──────────────────────────
-  // If the Gemini CLI is installed and authenticated, pipe the prompt to
-  // it and write the JSON response ourselves — no manual paste needed.
-  // On any failure (not installed, auth required, bad JSON, timeout),
-  // fall through to the response-paste window.
-  let geminiCliSucceeded = false;
+  // ── Auto-extraction: call Gemini API directly ───────────────────────
+  // If an API key is configured in Settings, call the Gemini REST API
+  // directly (no CLI or Node.js required on the end user's machine).
+  // On any failure (no key, HTTP error, invalid JSON, timeout), fall
+  // through to the response-paste window for manual paste.
+  const geminiApiKey = getConfig().trade.geminiApiKey || process.env.GEMINI_API_KEY || '';
+  let geminiSucceeded = false;
   try {
-    geminiCliSucceeded = await tryGeminiCli(promptText, responsePath, onStep);
+    geminiSucceeded = await tryGeminiApi(promptText, responsePath, geminiApiKey, onStep);
   } catch (err) {
-    log('trade-pipeline', 'gemini-cli: unexpected throw, falling back', { err: String(err) });
+    log('trade-pipeline', 'gemini-api: unexpected throw, falling back', { err: String(err) });
   }
 
-  if (geminiCliSucceeded) {
-    if (onStep) onStep('Gemini CLI extracted trades — generating trade log…');
+  if (geminiSucceeded) {
+    if (onStep) onStep('Gemini extracted trades — generating trade log…');
     if (Notification.isSupported()) {
       new Notification({
         title: 'Snipalot Trade · auto-extracted',
-        body: 'Gemini CLI extracted your trades automatically. Generating trade log…',
+        body: 'Gemini extracted your trades automatically. Generating trade log…',
         silent: false,
       }).show();
     }
@@ -301,131 +302,85 @@ export async function runTradePipeline(
   };
 }
 
-// ─── Gemini CLI auto-extraction ──────────────────────────────────────
+// ─── Gemini API auto-extraction ──────────────────────────────────────
 
 /**
- * Attempt to auto-extract trade events by piping the extraction prompt to
- * the locally-installed Gemini CLI (resolved via PATH as `gemini.cmd` on
- * Windows). On success, writes the JSON response to `responsePath` and
- * returns true. On any failure — CLI not found, auth error, invalid JSON,
- * timeout — logs a warning and returns false so the caller falls back to
- * the response-paste window.
+ * Attempt to auto-extract trade events by calling the Gemini REST API
+ * directly via `fetch`. No external CLI or Node.js install required on the
+ * end user's machine — the API key is stored in Snipalot's settings and
+ * passed here by the caller.
  *
- * Uses `-p "."` in non-interactive (headless) mode with `--output-format
- * text` so stdout is the raw model response with no UI chrome. The full
- * prompt is written to stdin to avoid Windows CLI arg-length limits on
- * long transcripts.
+ * On success, writes the JSON response to `responsePath` and returns true.
+ * On any failure (no key, HTTP error, invalid JSON, timeout), logs a
+ * warning and returns false so the caller falls back to the response-paste
+ * window.
  */
-async function tryGeminiCli(
+async function tryGeminiApi(
   promptText: string,
   responsePath: string,
+  apiKey: string,
   onStep?: (step: string) => void,
   timeoutMs: number = 5 * 60 * 1000
 ): Promise<boolean> {
-  if (onStep) onStep('Auto-extracting via Gemini CLI…');
-  log('trade-pipeline', 'gemini-cli: attempting auto-extraction');
+  if (!apiKey) {
+    log('trade-pipeline', 'gemini-api: no API key configured, skipping');
+    return false;
+  }
 
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+  if (onStep) onStep('Auto-extracting via Gemini API…');
+  log('trade-pipeline', 'gemini-api: attempting auto-extraction');
 
-    const settle = (success: boolean, reason?: string): void => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      if (!success) {
-        log('trade-pipeline', 'gemini-cli: failed', {
-          reason,
-          stderrTail: stderr.slice(-500),
-        });
-      }
-      resolve(success);
-    };
+  const model = 'gemini-2.0-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-    let child: ReturnType<typeof spawn>;
-    try {
-      // shell:true lets Windows resolve gemini.cmd from PATH.
-      // -p "." enters non-interactive mode (stdin is prepended to the prompt).
-      // --output-format text → raw model text on stdout, no UI chrome.
-      // --skip-trust → no workspace-trust prompts.
-      // GEMINI_API_KEY is read from process.env (set as Windows user env var)
-      // and explicitly threaded so the child process always has it — even if
-      // the parent Electron process was launched before the env var was set.
-      const apiKey = process.env.GEMINI_API_KEY ?? '';
-      child = spawn(
-        'gemini',
-        ['-p', '.', '--output-format', 'text', '--skip-trust'],
-        {
-          shell: true,
-          windowsHide: true,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, GEMINI_API_KEY: apiKey },
-        }
-      );
-    } catch (err) {
-      log('trade-pipeline', 'gemini-cli: spawn failed', { err: String(err) });
-      settle(false, 'spawn error');
-      return;
-    }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    timer = setTimeout(() => {
-      try { child.kill(); } catch { /* ignore */ }
-      settle(false, `timeout after ${timeoutMs / 1000}s`);
-    }, timeoutMs);
-
-    child.stdin?.on('error', (e) => {
-      // Benign on Windows if the process exits before we finish writing.
-      log('trade-pipeline', 'gemini-cli: stdin error (ignored)', { err: String(e) });
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: promptText }] }],
+        generationConfig: { temperature: 0.1 },
+      }),
+      signal: controller.signal,
     });
+    clearTimeout(timer);
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on('error', (err) => {
-      settle(false, `child error: ${err.message}`);
-    });
-
-    child.on('close', (code) => {
-      if (settled) return;
-      if (code !== 0) {
-        settle(false, `exit code ${code}`);
-        return;
-      }
-      const trimmed = stdout.trim();
-      if (!trimmed) {
-        settle(false, 'empty output');
-        return;
-      }
-      try {
-        // Validate it's a well-formed trade JSON array before writing.
-        parseAndValidateResponse(trimmed);
-        fs.writeFileSync(responsePath, trimmed, 'utf-8');
-        log('trade-pipeline', 'gemini-cli: auto-extraction succeeded', {
-          chars: trimmed.length,
-          responsePath,
-        });
-        settle(true);
-      } catch (err) {
-        settle(false, `JSON validation failed: ${(err as Error).message}`);
-      }
-    });
-
-    // Write the prompt to stdin then close to signal EOF.
-    try {
-      child.stdin?.write(promptText, 'utf-8', () => {
-        child.stdin?.end();
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      log('trade-pipeline', 'gemini-api: HTTP error', {
+        status: res.status,
+        body: errBody.slice(0, 400),
       });
-    } catch (err) {
-      settle(false, `stdin write threw: ${String(err)}`);
+      return false;
     }
-  });
+
+    const data = await res.json() as Record<string, unknown>;
+    const candidates = (data?.candidates as Array<Record<string, unknown>>);
+    const text = (candidates?.[0]?.content as Record<string, unknown>)
+      ?.parts as Array<Record<string, unknown>>;
+    const rawText = text?.[0]?.text as string | undefined;
+
+    if (!rawText) {
+      log('trade-pipeline', 'gemini-api: empty response body', { data: JSON.stringify(data).slice(0, 300) });
+      return false;
+    }
+
+    // Validate + write
+    parseAndValidateResponse(rawText);
+    fs.writeFileSync(responsePath, rawText, 'utf-8');
+    log('trade-pipeline', 'gemini-api: auto-extraction succeeded', {
+      chars: rawText.length,
+      responsePath,
+    });
+    return true;
+  } catch (err) {
+    clearTimeout(timer);
+    log('trade-pipeline', 'gemini-api: failed', { err: String(err) });
+    return false;
+  }
 }
 
 /** Format ms offset as "M:SS" for the markers payload + extraction prompt. */

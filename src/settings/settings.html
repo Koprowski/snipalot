@@ -128,6 +128,25 @@
         </div>
       </div>
 
+      <!-- trade mode -->
+      <div class="section">
+        <div class="section-title">Trade Mode</div>
+        <p class="info">
+          After a Trade session, Snipalot can automatically send the transcript to Gemini and
+          generate your trade log CSV with no manual steps. Paste your API key below to enable it.
+          Get a free key (1,500 requests/day, no credit card) at
+          <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent)">aistudio.google.com/apikey</a>.
+        </p>
+        <div class="field-row" style="margin-top:10px">
+          <label for="input-gemini-key">Gemini API Key</label>
+          <div class="input-row">
+            <input type="password" id="input-gemini-key" placeholder="AIza…" spellcheck="false" autocomplete="off" style="flex:1;font-family:monospace;font-size:12px" />
+            <button class="btn" id="btn-show-key" style="min-width:60px">Show</button>
+          </div>
+          <p class="info" id="gemini-key-status" style="margin-top:4px"></p>
+        </div>
+      </div>
+
       <!-- about -->
       <div class="section">
         <div class="section-title">About</div>

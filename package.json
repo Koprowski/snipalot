@@ -1,6 +1,6 @@
 {
   "name": "snipalot",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Portable Windows screen-feedback tool: record, annotate live, transcribe, and hand an LLM-ready prompt to your clipboard.",
   "main": "dist/main/index.js",
   "author": "Jason Koprowski",

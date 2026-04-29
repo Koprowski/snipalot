@@ -49,6 +49,8 @@ const editedHotkeys: Record<string, string> = {};
 // Working copy of the snapshot behavior. Mutates as the user clicks the
 // radio; flushed on Save.
 let editedSnapClearAfter = true;
+// Working copy of the Gemini API key.
+let editedGeminiApiKey = '';
 // Working copy of the capture mode + countdown duration.
 let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 let editedCountdownSec = 3;
@@ -113,11 +115,30 @@ async function init(): Promise<void> {
     const raw = Number(countdownCustom.value);
     if (Number.isFinite(raw) && raw >= 0) {
       editedCountdownSec = Math.floor(raw);
-      // Slider clamps visually to its 0..10 range; the stored value
-      // (editedCountdownSec) keeps the full custom number.
       countdownSlider.value = String(Math.min(10, Math.max(0, editedCountdownSec)));
     }
   });
+
+  // Gemini API key field.
+  const cfgTrade = (config as unknown as { trade?: { geminiApiKey?: string } }).trade;
+  editedGeminiApiKey = cfgTrade?.geminiApiKey ?? '';
+  const geminiKeyInput = document.getElementById('input-gemini-key') as HTMLInputElement;
+  const btnShowKey = document.getElementById('btn-show-key') as HTMLButtonElement;
+  const geminiKeyStatus = document.getElementById('gemini-key-status') as HTMLElement;
+  geminiKeyInput.value = editedGeminiApiKey;
+  geminiKeyInput.addEventListener('input', () => {
+    editedGeminiApiKey = geminiKeyInput.value.trim();
+    geminiKeyStatus.textContent = '';
+  });
+  btnShowKey.addEventListener('click', () => {
+    const isHidden = geminiKeyInput.type === 'password';
+    geminiKeyInput.type = isHidden ? 'text' : 'password';
+    btnShowKey.textContent = isHidden ? 'Hide' : 'Show';
+  });
+  if (editedGeminiApiKey) {
+    geminiKeyStatus.textContent = '✓ API key saved — auto-extraction enabled';
+    geminiKeyStatus.style.color = 'var(--success, #16a34a)';
+  }
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────
@@ -285,6 +306,7 @@ btnSave.addEventListener('click', async () => {
       hotkeys: editedHotkeys as never,
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
       capture: { mode: editedCaptureMode, countdownSec: editedCountdownSec } as never,
+      trade: { geminiApiKey: editedGeminiApiKey } as never,
     });
     firstRunBanner.style.display = 'none';
     // Close immediately — no need for user to also hit X.

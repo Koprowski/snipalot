@@ -114,6 +114,21 @@ export interface PipelineInput {
    * swallowed; never let UI bookkeeping break the pipeline.
    */
   onStep?: (step: string) => void;
+  /**
+   * Capture mode that produced this recording. Determines downstream output
+   * shape and folder-name suffix.
+   *  - 'record' (default): existing feedback-walkthrough flow → `{stamp} feedback/`
+   *  - 'trade':            TradeCall flow → `{stamp} trade/`, runs trade-pipeline
+   *                        for LLM extraction + CSV/MD log after whisper.
+   */
+  mode?: 'record' | 'trade';
+  /**
+   * Trade-mode hotkey markers (recording-relative ms). Empty / undefined when
+   * mode === 'record' or when the user never pressed Ctrl+Shift+T during a
+   * trade session. Markers are anchor points for the LLM extraction prompt;
+   * extraction works without them, just less precisely.
+   */
+  tradeMarkers?: number[];
 }
 
 export interface PipelineResult {
@@ -353,11 +368,13 @@ function findWhisperBinary(): { exe: string; model: string } | null {
   return null;
 }
 
-interface TranscriptSegment {
+export interface TranscriptSegment {
   /** Formatted line: "[M:SS - M:SS] text" */
   text: string;
   /** Segment start in whole seconds from recording start. */
   startSec: number;
+  /** Segment end in whole seconds from recording start. */
+  endSec: number;
 }
 
 function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
@@ -368,6 +385,7 @@ function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
   const out: TranscriptSegment[] = [];
   let currentStamp = '';
   let currentStartSec = 0;
+  let currentEndSec = 0;
 
   // SRT timestamp: HH:MM:SS,mmm --> HH:MM:SS,mmm
   const tsPattern = /^(\d{2}):(\d{2}):(\d{2}),\d+\s+-->\s+(\d{2}):(\d{2}):(\d{2}),\d+/;
@@ -383,11 +401,12 @@ function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
       const endMin = Math.floor(endTotalSec / 60);
       const endSecRem = endTotalSec % 60;
       currentStartSec = startTotalSec;
+      currentEndSec = endTotalSec;
       currentStamp = `[${startMin}:${String(startSecRem).padStart(2, '0')} - ${endMin}:${String(endSecRem).padStart(2, '0')}]`;
       continue;
     }
     if (line !== '' && !/^\d+$/.test(line) && currentStamp) {
-      out.push({ text: `${currentStamp} ${line}`, startSec: currentStartSec });
+      out.push({ text: `${currentStamp} ${line}`, startSec: currentStartSec, endSec: currentEndSec });
       currentStamp = '';
     }
   }
@@ -726,13 +745,12 @@ async function buildSnapshotChapters(
  */
 function buildCombinedSnapshotPrompt(args: {
   sessionDir: string;
-  mp4Path: string;
   gifPath: string;
   transcriptPath: string | null;
   chapters: ChapterArtifact[];
   durationMs: number;
 }): string {
-  const { sessionDir, mp4Path, gifPath, transcriptPath, chapters, durationMs } = args;
+  const { sessionDir, gifPath, transcriptPath, chapters, durationMs } = args;
   const screenCount = chapters.length;
   const durationLabel = formatMsAsMinSec(durationMs);
 
@@ -742,8 +760,10 @@ function buildCombinedSnapshotPrompt(args: {
   );
   lines.push('');
   lines.push(`Session folder: ${sessionDir}`);
-  lines.push(`Recording: ${mp4Path}`);
-  lines.push(`GIF (for visual reference, not for Claude): ${gifPath}`);
+  // MP4 intentionally omitted — LLMs can't decode video, AND only the
+  // most recent recording.mp4 is kept on disk (overwritten each session
+  // at parent level), so a stale prompt would point at the wrong file.
+  lines.push(`GIF preview (LLMs see the FIRST FRAME only — opening shot): ${gifPath}`);
   if (transcriptPath) lines.push(`Full transcript: ${transcriptPath}`);
   lines.push('');
   lines.push('Per-screen deliverables (each prompt.md has its own screenshot + transcript slice + numbered annotations):');
@@ -765,51 +785,95 @@ function buildPromptText(args: {
   annotationFrames: Array<{ number: number; path: string; drawnAtMs: number }>;
   snapFrames: Array<{ path: string; name: string }>;
   annotations: AnnotationRecord[];
+  /**
+   * Absolute path to the GIF preview. Included in the prompt so the LLM
+   * (or whatever client opens the prompt) has a still-image reference
+   * for the opening shot of the recording. The MP4 is intentionally NOT
+   * passed in: LLMs can't decode video, AND only the most recent
+   * recording.mp4 is kept on disk (overwritten each session at parent
+   * level), so a stale prompt would point at the wrong file anyway.
+   */
+  gifPath: string;
 }): string {
-  const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations } = args;
+  const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations, gifPath } = args;
 
-  const transcriptLine = transcriptPath
-    ? `1. Read the transcript: ${transcriptPath}`
-    : `1. (Transcript unavailable — whisper.cpp not installed; see annotations.json for the visual context only.)`;
+  // Source files block — only the LLM-readable artifacts. The MP4
+  // is intentionally NOT listed: (1) most LLMs can't decode video and
+  // (2) Snipalot keeps only the most recent recording.mp4 at parent
+  // level (overwritten each run), so by the time a stale prompt gets
+  // pasted, the path may point to a different recording.
+  const sourceBlock = [
+    'Source files (all paths absolute):',
+    `- GIF preview (12x speedup with timecode burned in): ${gifPath}`,
+    "  ↑ Multimodal LLMs (Claude, GPT-4o, Gemini) decode GIFs as still",
+    '    images and read the FIRST FRAME — i.e. T=0 of the recording.',
+    '    Useful for "what app/screen was I on" but NOT for mid-session',
+    '    moments. For specific moments, see the annotation/snapshot',
+    '    frames below (if any) — those are PNGs captured at exact times.',
+    transcriptPath
+      ? `- Transcript (timestamped): ${transcriptPath}`
+      : '- Transcript unavailable (whisper.cpp not installed — run `npm run fetch-resources`)',
+    `- Structured metadata (annotations, region, durations): ${annotationsPath}`,
+  ].join('\n');
 
-  // Annotation frames: captured at the exact ms the user drew each numbered rectangle.
-  const annotationFrameListing =
-    annotationFrames.length === 0
-      ? '(No annotation frames — no numbered rectangles were drawn this session.)'
-      : annotationFrames
-          .map((f) => `   #${f.number} (${formatMsAsMinSec(f.drawnAtMs)}): ${f.path}`)
-          .join('\n');
+  const hasAnnotations = annotations.length > 0;
+  const hasSnaps = snapFrames.length > 0;
+  const hasVisualEvidence = annotationFrames.length > 0 || hasSnaps;
 
-  // Snap frames: captured by the user pressing the HUD 📷 button.
-  const snapFrameListing =
-    snapFrames.length === 0
-      ? '(No manual snaps this session.)'
-      : snapFrames.map((f) => `   ${f.name}: ${f.path}`).join('\n');
+  // Annotation evidence section — shown only when there's actually
+  // visual evidence to reference. Skips the empty "(no annotation
+  // frames)" / "(no manual snaps)" lines that previously cluttered
+  // transcript-only prompts.
+  const annotationFrameListing = annotationFrames
+    .map((f) => `  #${f.number} (${formatMsAsMinSec(f.drawnAtMs)}): ${f.path}`)
+    .join('\n');
+  const snapFrameListing = snapFrames.map((f) => `  ${f.name}: ${f.path}`).join('\n');
+  const visualEvidenceBlock = hasVisualEvidence
+    ? [
+        '',
+        'Visual evidence:',
+        annotationFrames.length > 0 ? '- Frames captured at the moment each annotation was drawn:' : null,
+        annotationFrames.length > 0 ? annotationFrameListing : null,
+        snapFrames.length > 0 ? '- Manual snap frames captured during the recording:' : null,
+        snapFrames.length > 0 ? snapFrameListing : null,
+      ].filter(Boolean).join('\n')
+    : '';
 
-  const annotationSummary =
-    annotations.length === 0
-      ? 'No annotations were drawn during this recording.'
-      : annotations
+  // Annotation summary — only when annotations exist.
+  const annotationSummaryBlock = hasAnnotations
+    ? [
+        '',
+        'Annotation summary (timestamps are M:SS since recording start):',
+        annotations
           .map((a) => `#${a.number} at ${formatMsAsMinSec(a.drawnAtMs)} (region ${a.x},${a.y} ${a.w}×${a.h})`)
-          .join('\n');
+          .join('\n'),
+      ].join('\n')
+    : '';
+
+  // Workflow guidance — adapts based on whether we have annotation
+  // evidence or it's a transcript-only walkthrough.
+  const workflowBlock = hasVisualEvidence
+    ? [
+        '',
+        'The transcript references my annotations by number ("#1", "the first box", etc.). For each numbered comment, open the matching frame PNG to see what was on screen at that moment; the red numbered rectangle in the frame shows exactly what I was pointing at. annotations.json lists the region coordinates if you need pixel-level precision.',
+      ].join('\n')
+    : [
+        '',
+        "This was a transcript-only walkthrough — I described things verbally without drawing rectangles. The GIF (first frame) gives you the opening shot of the session for context; for mid-session moments, rely on the transcript's timestamps and the verbal cues there (the GIF's timecode is burned in, so if you need to reason about what was likely visible at minute X, mention it and I can confirm).",
+      ].join('\n');
 
   return [
     'I have a screen-recorded walkthrough with spoken feedback about my app. Please review and apply all changes.',
     '',
-    transcriptLine,
-    `2. Annotations (numbered rectangles I drew while recording): ${annotationsPath}`,
-    '3. Frames captured at the moment each annotation was drawn (read these images directly):',
-    annotationFrameListing,
-    '4. Manual snap frames captured via the 📷 button (read these images directly):',
-    snapFrameListing,
-    '',
-    'The transcript references my annotations by number ("#1", "the first box", etc.). For each numbered comment, open the matching frame-N.png to see what was on screen at that moment; the red numbered rectangle in the frame shows exactly what I was pointing at. annotations.json lists the region coordinates if you need pixel-level precision.',
-    '',
-    'Annotation summary (timestamps are M:SS since recording start):',
-    annotationSummary,
+    sourceBlock,
+    visualEvidenceBlock,
+    annotationSummaryBlock,
+    workflowBlock,
     '',
     'Work through each observation in the transcript in order. For each item:',
-    '- Open the corresponding frame PNG to confirm visually what I meant',
+    hasVisualEvidence
+      ? '- Open the corresponding frame PNG (or the GIF first frame) to confirm visually what I meant'
+      : '- Open the GIF (first frame) for the opening visual context; rely on transcript timestamps for mid-session moments',
     '- Identify which file(s) need to change',
     '- Make the change',
     '- Note the timestamp from the transcript so I can verify',
@@ -824,7 +888,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const warnings: string[] = [];
   const startedAt = new Date(input.startedAtMs);
   const stamp = formatSessionStamp(startedAt);
-  const sessionBasename = `${stamp} feedback`;
+  // Folder suffix mirrors the capture mode: 'feedback' for record-mode (the
+  // legacy default — annotation walkthroughs) and 'trade' for trade-mode
+  // (TradeCall sessions). Pre-created dirs (live snaps) already encode the
+  // right suffix in main; this fallback handles the case where main didn't
+  // pre-create the dir (e.g. unexpected stop with no live snaps).
+  const mode = input.mode ?? 'record';
+  const folderSuffix = mode === 'trade' ? 'trade' : 'feedback';
+  const sessionBasename = `${stamp} ${folderSuffix}`;
   // Use a pre-created dir (for live snaps) if available, otherwise create one.
   const sessionDir = input.preCreatedSessionDir ?? path.join(input.outputRoot, sessionBasename);
   ensureDir(sessionDir);
@@ -883,7 +954,52 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       if (fs.existsSync(srtPath)) {
         const srt = fs.readFileSync(srtPath, 'utf-8');
         transcriptSegments = parseSrtToTranscript(srt);
-        fs.writeFileSync(transcriptPath, transcriptSegments.map((s) => s.text).join('\n') + '\n', 'utf-8');
+        // Build the transcript text with a duration header + silence-tail
+        // marker. Without these, a long silent stretch at the end of the
+        // recording (e.g. trader watches charts without commentary) makes
+        // the transcript appear to end early. The user (and the LLM that
+        // reads the prompt) sees the file ending at, say, 5:48 and assumes
+        // the recording was 5:48 long — when in fact it was 10:21 with the
+        // trader silent from 4:38 onwards. Trades firing during that silent
+        // stretch then look like they fired "after the recording" when
+        // they're actually inside it. Explicit tail marker fixes this.
+        const recordingDurationSec = Math.round(input.durationMs / 1000);
+        const lastSegEndSec = transcriptSegments.length > 0
+          ? transcriptSegments[transcriptSegments.length - 1].endSec
+          : 0;
+        const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        const headerLines: string[] = [];
+        headerLines.push(`# Recording duration: ${fmt(recordingDurationSec)}`);
+        if (transcriptSegments.length > 0) {
+          headerLines.push(`# Last narration segment ended at ${fmt(lastSegEndSec)}`);
+        } else {
+          headerLines.push('# No narration detected (whisper produced no segments)');
+        }
+        headerLines.push('');
+        const bodyLines = transcriptSegments.map((s) => s.text);
+        // Append tail marker when there's a non-trivial silent gap
+        // (>10s) between the last whisper segment and the end of the
+        // recording. The threshold avoids spamming the marker for
+        // every recording that ends 1-2s after the last word.
+        const tailGapSec = recordingDurationSec - lastSegEndSec;
+        const tailLines: string[] = [];
+        if (tailGapSec > 10) {
+          tailLines.push(
+            `[${fmt(lastSegEndSec)} - ${fmt(recordingDurationSec)}] [SILENT — no audible speech detected for ${fmt(tailGapSec)}; recording continued through this stretch]`
+          );
+        }
+        const finalText = [
+          ...headerLines,
+          ...bodyLines,
+          ...tailLines,
+        ].join('\n') + '\n';
+        fs.writeFileSync(transcriptPath, finalText, 'utf-8');
+        log('pipeline', 'transcript written', {
+          segments: transcriptSegments.length,
+          recordingDurationSec,
+          lastSegEndSec,
+          silentTailSec: tailGapSec > 0 ? tailGapSec : 0,
+        });
         finalTranscriptPath = transcriptPath;
         try { fs.unlinkSync(srtPath); } catch { /* ignore */ }
       } else {
@@ -1011,7 +1127,6 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const promptText = useChapterFlow
     ? buildCombinedSnapshotPrompt({
         sessionDir,
-        mp4Path,
         gifPath,
         transcriptPath: finalTranscriptPath,
         chapters: chapterArtifacts,
@@ -1023,18 +1138,45 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         annotationFrames,
         snapFrames,
         annotations: input.annotations,
+        gifPath,
       });
 
-  step('Writing prompt + copying to clipboard…');
-  fs.writeFileSync(promptPath, promptText, 'utf-8');
-  clipboard.writeText(promptText);
-  log('pipeline', 'prompt written + clipboarded', {
-    length: promptText.length,
-    mode: useChapterFlow ? 'chapters' : 'legacy',
-    chapters: chapterArtifacts.length,
-    annotationFrames: annotationFrames.length,
-    snapFrames: snapFrames.length,
-  });
+  // In trade-mode, the trade-pipeline (below) owns the clipboard — it
+  // writes the extraction prompt the user pastes into their LLM. If we
+  // wrote the legacy walkthrough prompt + clipboarded it here, the user
+  // could paste in the ~30s gap before the trade-pipeline catches up
+  // and get the wrong prompt. Skip the legacy clipboard write entirely
+  // for trade sessions; still write a stub prompt.txt pointing at the
+  // trade artifacts so the file isn't missing.
+  if (mode === 'trade') {
+    const stub = [
+      'This is a trade-mode session. The Snipalot prompt for your LLM is in:',
+      '  extraction_prompt.md',
+      '',
+      'Paste that into Claude Code / Gemini / Cursor, then save the JSON',
+      'reply as extraction_response.json in this folder. Snipalot will',
+      'pick it up and generate trade_log.csv + trade_log.md.',
+      '',
+      'For richer reporting, also drop your MockApe trade export into',
+      'this folder as mockape.json — the trade-pipeline will join it to',
+      'your spoken trades by token name + timestamp and enrich the log',
+      'with actual entry/exit market caps + P&L per trade.',
+      '',
+    ].join('\n');
+    fs.writeFileSync(promptPath, stub, 'utf-8');
+    log('pipeline', 'trade-mode stub prompt.txt written (trade-pipeline owns clipboard)');
+  } else {
+    step('Writing prompt + copying to clipboard…');
+    fs.writeFileSync(promptPath, promptText, 'utf-8');
+    clipboard.writeText(promptText);
+    log('pipeline', 'prompt written + clipboarded', {
+      length: promptText.length,
+      mode: useChapterFlow ? 'chapters' : 'legacy',
+      chapters: chapterArtifacts.length,
+      annotationFrames: annotationFrames.length,
+      snapFrames: snapFrames.length,
+    });
+  }
 
   // The user's clipboard is now populated — they can act on it. The gif
   // may still be encoding in the background; await it so the cleanup of
@@ -1051,7 +1193,29 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     /* leave it if we can't delete */
   }
 
-  log('pipeline', 'session complete', { sessionDir, warnings });
+  // 10. Trade-mode extension: after the legacy pipeline finishes, run the
+  //     trade-pipeline which writes extraction_prompt.md (M4) and once the
+  //     user pastes a response, generates trade_log.csv + .md (M5). This
+  //     is fire-and-forget — the launcher already exited 'processing' so
+  //     trade work happens in the background. M3 scaffold logs only.
+  if (mode === 'trade') {
+    try {
+      const { runTradePipeline } = await import('./trade-pipeline');
+      void runTradePipeline({
+        sessionDir,
+        mp4Path,
+        transcriptSegments,
+        tradeMarkers: input.tradeMarkers ?? [],
+        startedAtMs: input.startedAtMs,
+        onStep: input.onStep,
+      });
+    } catch (err) {
+      warnings.push(`trade-pipeline import/launch failed: ${(err as Error).message}`);
+      log('pipeline', 'trade-pipeline launch fail', { err: String(err) });
+    }
+  }
+
+  log('pipeline', 'session complete', { sessionDir, warnings, mode });
 
   return {
     sessionDir,

@@ -51,11 +51,38 @@
   <input type="range" class="opacity-slider" id="stroke-slider" min="1" max="8" value="2" oninput="setStrokeWidth(this.value)">
   <span id="stroke-val" style="font-size:11px;color:var(--muted);min-width:16px">2</span>
 
+  <!-- Text annotation style controls — displayed only when a text annotation is selected -->
+  <div id="text-style-bar" style="display:none;align-items:center;gap:6px;flex-wrap:nowrap">
+    <div class="toolbar-sep"></div>
+    <span style="font-size:11px;color:var(--muted);white-space:nowrap">Font:</span>
+    <select id="font-family-select" onchange="setSelectedFontFamily(this.value)" class="tool-select">
+      <option value="system-ui, -apple-system, sans-serif">System</option>
+      <option value="Arial, sans-serif">Arial</option>
+      <option value="Georgia, serif">Georgia</option>
+      <option value="'Courier New', monospace">Courier</option>
+      <option value="Impact, sans-serif">Impact</option>
+      <option value="'Times New Roman', serif">Times</option>
+      <option value="Verdana, sans-serif">Verdana</option>
+    </select>
+    <input type="range" class="opacity-slider" id="text-size-slider" min="8" max="96" value="18" oninput="setSelectedFontSize(this.value)" style="width:64px">
+    <span id="text-size-val" style="font-size:11px;color:var(--muted);min-width:22px">18</span>
+    <div class="toolbar-sep"></div>
+    <span style="font-size:11px;color:var(--muted);white-space:nowrap">Bg:</span>
+    <span class="checker-btn active" id="text-bg-none-btn" onclick="setSelectedTextBg('transparent')" title="Transparent — no background fill"></span>
+    <input type="color" id="text-bg-color-input" class="color-input" value="#000000" oninput="setSelectedTextBg(this.value)" title="Pick background color">
+    <div class="toolbar-sep"></div>
+    <span style="font-size:11px;color:var(--muted);white-space:nowrap">Border:</span>
+    <span class="checker-btn active" id="text-border-none-btn" onclick="setSelectedBorderColor('none')" title="No border"></span>
+    <input type="color" id="text-border-color-input" class="color-input" value="#ef4444" oninput="setSelectedBorderColor(this.value)" title="Pick border color">
+  </div>
+
   <div class="toolbar-sep"></div>
 
   <button class="tool-btn" onclick="triggerPaste()">📋 Paste Image</button>
   <button class="tool-btn" id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)" disabled style="opacity:0.4;padding:0 8px">↩</button>
   <button class="tool-btn" id="btn-redo" onclick="redo()" title="Redo (Ctrl+Y)" disabled style="opacity:0.4;padding:0 8px">↪</button>
+  <button class="tool-btn" id="btn-rotate-left" onclick="rotateImage('left')" title="Rotate image 90° counterclockwise (any annotations rotate with it)" style="padding:0 8px">↺ 90°</button>
+  <button class="tool-btn" id="btn-rotate-right" onclick="rotateImage('right')" title="Rotate image 90° clockwise (any annotations rotate with it)" style="padding:0 8px">↻ 90°</button>
   <button class="tool-btn" id="btn-paste-overlay" onclick="pasteOverlayImage()">🖼 Paste Overlay</button>
   <button class="tool-btn" id="btn-crop-overlay" onclick="startCropMode()" title="Crop selected overlay image">✂ Crop Overlay</button>
   <button class="tool-btn danger" onclick="clearAll()">🗑 Clear All</button>

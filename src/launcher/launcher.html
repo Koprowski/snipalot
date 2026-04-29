@@ -11,10 +11,17 @@
         <span class="titlebar-title">Snipalot</span>
       </div>
       <div class="titlebar-controls">
+        <button id="btn-pin" class="tb-btn tb-pin" title="Pin on top — when enabled, launcher stays visible above other windows" aria-label="Pin on top" aria-pressed="false">
+          <!-- Pin icon: small pushpin, outlined when off / filled when on. -->
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M7.5 1 L11 4.5 L8.5 5 L8 7.5 L4.5 4 L7 3.5 Z M5 5 L7 7 L4 10 Z"
+                  fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <button id="btn-minimize" class="tb-btn" title="Minimize" aria-label="Minimize">
           <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1"/></svg>
         </button>
-        <button id="btn-quit" class="tb-btn tb-close" title="Close" aria-label="Close">
+        <button id="btn-quit" class="tb-btn tb-close" title="Hide to tray (Snipalot keeps running — hotkeys stay live. To fully exit, right-click tray icon → Quit)" aria-label="Hide to tray">
           <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1"/><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1"/></svg>
         </button>
       </div>
@@ -24,6 +31,15 @@
         <span class="app-title">Snipalot</span>
         <span class="state-label" id="state-label">IDLE</span>
         <span class="header-spacer"></span>
+        <button id="btn-copy-last" class="btn-icon btn-icon-sm" title="Copy last prompt — re-copies the prompt from the most recent recording / trade / screenshot to the clipboard">
+          <!-- Clipboard SVG: rounded body + clip top tab + a single text line. -->
+          <svg width="13" height="14" viewBox="0 0 13 14" aria-hidden="true">
+            <rect x="1" y="2.5" width="11" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1"/>
+            <rect x="3.5" y="0.5" width="6" height="3" rx="0.6" fill="none" stroke="currentColor" stroke-width="1"/>
+            <line x1="3.5" y1="7" x2="9.5" y2="7" stroke="currentColor" stroke-width="1"/>
+            <line x1="3.5" y1="9.5" x2="8" y2="9.5" stroke="currentColor" stroke-width="1"/>
+          </svg>
+        </button>
         <button id="btn-settings" class="btn-icon btn-icon-sm" title="Settings">⚙</button>
       </div>
       <div class="controls">
@@ -46,8 +62,35 @@
           </svg>
           <span id="btn-screenshot-label">Screenshot</span>
         </button>
+        <button id="btn-trade" class="btn-trade" title="Trade — record a session for trade-log extraction">
+          <!-- Candlestick chart glyph: three vertical wicks of varying
+               height (the bottom of one slightly above the prior, evoking
+               an uptrend), with thicker bodies. currentColor inherits
+               from the button so it re-tints in the selecting state. -->
+          <svg class="btn-glyph" width="14" height="12" viewBox="0 0 14 12" aria-hidden="true">
+            <line x1="2.5" y1="1.5" x2="2.5" y2="10.5" stroke="currentColor" stroke-width="1"/>
+            <rect x="1.4" y="3.5" width="2.2" height="4" fill="currentColor"/>
+            <line x1="7" y1="0.5" x2="7" y2="11" stroke="currentColor" stroke-width="1"/>
+            <rect x="5.9" y="2" width="2.2" height="6.5" fill="currentColor"/>
+            <line x1="11.5" y1="2" x2="11.5" y2="9" stroke="currentColor" stroke-width="1"/>
+            <rect x="10.4" y="3" width="2.2" height="3" fill="currentColor"/>
+          </svg>
+          <span id="btn-trade-label">Trade</span>
+        </button>
       </div>
       <div class="hint" id="hint">Click Record to select a region</div>
+      <!-- Progress bar shown only during 'processing' state. The label
+           above (hint) carries the step name; this bar shows the
+           wall-clock estimate. ETA text + elapsed/total below. -->
+      <div class="progress-block" id="progress-block" style="display:none">
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-meta">
+          <span id="progress-elapsed">0:00</span>
+          <span id="progress-eta">~0:00 remaining</span>
+        </div>
+      </div>
     </div>
     <script src="launcher.js"></script>
   </body>

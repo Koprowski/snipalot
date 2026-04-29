@@ -4,8 +4,16 @@ interface Window {
   snipalotLauncher: {
     record: () => Promise<void>;
     screenshot: () => Promise<void>;
+    trade: () => Promise<void>;
     cancel: () => Promise<void>;
     quit: () => Promise<void>;
+    closeToTray: () => Promise<void>;
+    togglePin: () => Promise<boolean>;
+    getPinState: () => Promise<boolean>;
+    copyLastPrompt: () => Promise<
+      | { ok: true; kind: 'record' | 'trade' | 'screenshot'; sessionName: string; chars: number }
+      | { ok: false; error: string }
+    >;
     settings: () => Promise<void>;
     toggleMinimize: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;
@@ -15,10 +23,13 @@ interface Window {
           | 'idle'
           | 'selecting'
           | 'selecting-screenshot'
+          | 'selecting-trade'
           | 'recording'
           | 'processing';
         processingStep: string | null;
         startStopHotkey?: string;
+        sessionMode?: 'record' | 'trade';
+        processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;
       }) => void
     ) => void;
   };

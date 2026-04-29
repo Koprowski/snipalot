@@ -39,6 +39,13 @@
     <!-- text input for text annotations -->
     <input id="text-input" class="text-input" type="text" placeholder="type, Enter to commit, Esc to cancel" spellcheck="false" style="display:none" />
 
+    <!-- countdown overlay shown after region is confirmed (mouseup ends drag);
+         counts 3-2-1-GO then auto-fires confirm-region. Esc cancels. -->
+    <div id="countdown" class="countdown countdown-hidden">
+      <div class="countdown-number" id="countdown-number">3</div>
+      <div class="countdown-hint">Recording in… · Esc to cancel</div>
+    </div>
+
     <script src="overlay.js"></script>
   </body>
 </html>

@@ -49,6 +49,9 @@ const editedHotkeys: Record<string, string> = {};
 // Working copy of the snapshot behavior. Mutates as the user clicks the
 // radio; flushed on Save.
 let editedSnapClearAfter = true;
+// Working copy of the capture mode + countdown duration.
+let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
+let editedCountdownSec = 3;
 
 async function init(): Promise<void> {
   const config = await api.getConfig();
@@ -78,6 +81,43 @@ async function init(): Promise<void> {
   if (editedSnapClearAfter) radioClear.checked = true; else radioKeep.checked = true;
   radioClear.addEventListener('change', () => { if (radioClear.checked) editedSnapClearAfter = true; });
   radioKeep.addEventListener('change', () => { if (radioKeep.checked) editedSnapClearAfter = false; });
+
+  // Capture mode + countdown.
+  const cfgCap = (config as unknown as { capture?: { mode?: 'region' | 'fullscreen' | 'window'; countdownSec?: number } }).capture;
+  editedCaptureMode = cfgCap?.mode ?? 'region';
+  editedCountdownSec = cfgCap?.countdownSec ?? 3;
+  const capRegion = document.getElementById('capture-region') as HTMLInputElement;
+  const capFullscreen = document.getElementById('capture-fullscreen') as HTMLInputElement;
+  const capWindow = document.getElementById('capture-window') as HTMLInputElement;
+  if (editedCaptureMode === 'fullscreen') capFullscreen.checked = true;
+  else if (editedCaptureMode === 'window') capWindow.checked = true;
+  else capRegion.checked = true;
+  capRegion.addEventListener('change', () => { if (capRegion.checked) editedCaptureMode = 'region'; });
+  capFullscreen.addEventListener('change', () => { if (capFullscreen.checked) editedCaptureMode = 'fullscreen'; });
+  capWindow.addEventListener('change', () => { if (capWindow.checked) editedCaptureMode = 'window'; });
+
+  // Countdown control: slider (0..10) + custom number input. The two
+  // stay in sync — drag the slider, the number updates; type a number,
+  // the slider clamps to its 0..10 range but the actual stored value
+  // can be anything ≥0 (e.g. 30s) so power users aren't capped at 10.
+  const countdownSlider = document.getElementById('countdown-slider') as HTMLInputElement;
+  const countdownCustom = document.getElementById('countdown-custom') as HTMLInputElement;
+  countdownSlider.value = String(Math.min(10, Math.max(0, editedCountdownSec)));
+  countdownCustom.value = String(editedCountdownSec);
+  countdownSlider.addEventListener('input', () => {
+    const v = Number(countdownSlider.value);
+    editedCountdownSec = v;
+    countdownCustom.value = String(v);
+  });
+  countdownCustom.addEventListener('input', () => {
+    const raw = Number(countdownCustom.value);
+    if (Number.isFinite(raw) && raw >= 0) {
+      editedCountdownSec = Math.floor(raw);
+      // Slider clamps visually to its 0..10 range; the stored value
+      // (editedCountdownSec) keeps the full custom number.
+      countdownSlider.value = String(Math.min(10, Math.max(0, editedCountdownSec)));
+    }
+  });
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────
@@ -244,6 +284,7 @@ btnSave.addEventListener('click', async () => {
       firstRun: false,
       hotkeys: editedHotkeys as never,
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
+      capture: { mode: editedCaptureMode, countdownSec: editedCountdownSec } as never,
     });
     firstRunBanner.style.display = 'none';
     // Close immediately — no need for user to also hit X.

@@ -11,7 +11,13 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { log } from './logger';
 
-type AppState = 'idle' | 'selecting' | 'selecting-screenshot' | 'recording' | 'processing';
+type AppState =
+  | 'idle'
+  | 'selecting'
+  | 'selecting-screenshot'
+  | 'selecting-trade'
+  | 'recording'
+  | 'processing';
 
 let tray: Tray | null = null;
 
@@ -68,6 +74,7 @@ export function updateTrayMenu(state: AppState): void {
     state === 'recording' ? 'Stop Recording' :
     state === 'selecting' ? 'Cancel Selection' :
     state === 'selecting-screenshot' ? 'Cancel Screenshot' :
+    state === 'selecting-trade' ? 'Cancel Trade Setup' :
     state === 'processing' ? 'Processing… (please wait)' :
     'Start Recording';
 

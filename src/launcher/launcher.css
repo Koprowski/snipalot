@@ -74,6 +74,23 @@ body {
   color: #fff;
 }
 
+/* Pin button — toggles launcher alwaysOnTop. Outlined when off (default
+   muted color), filled-amber when active so the user can see at a glance
+   whether the launcher is pinned above other windows. */
+.tb-pin.active {
+  color: #f59e0b;
+}
+
+.tb-pin.active svg path {
+  fill: currentColor;
+  stroke: currentColor;
+}
+
+.tb-pin:hover {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+}
+
 /* ─── content body ──────────────────────────────────────────── */
 
 .content {
@@ -207,6 +224,48 @@ body {
   cursor: not-allowed;
 }
 
+/* Trade button — sibling to Record + Screenshot. Purple/violet accent
+   so the three primary actions read distinctly: red = live recording,
+   blue = one-shot capture, violet = trading session (long-form recording
+   with post-session LLM extraction). */
+.btn-trade {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #7c3aed;
+  border: 1px solid #7c3aed;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 80ms ease;
+}
+
+.btn-trade:hover {
+  background: #8b5cf6;
+  border-color: #8b5cf6;
+}
+
+.btn-trade.selecting {
+  background: #f59e0b;
+  border-color: #f59e0b;
+}
+
+.btn-trade.selecting:hover {
+  background: #fbbf24;
+  border-color: #fbbf24;
+}
+
+.btn-trade:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Disabled-looking blue while the pipeline runs. Click is also blocked
    via the .disabled property in JS to keep keyboard activation off too. */
 .btn-primary.processing {
@@ -262,10 +321,58 @@ body {
   border-radius: 4px;
 }
 
+/* Brief 2s confirmation flash on the copy-last button after a successful
+   copy. Green border + tint so peripheral vision picks it up even when
+   the user's eyes are elsewhere. .err uses red for failures. */
+.btn-icon.copied {
+  background: rgba(34, 197, 94, 0.18);
+  border-color: #22c55e;
+  color: #4ade80;
+}
+.btn-icon.err {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: #ef4444;
+  color: #f87171;
+}
+
 .hint {
   color: #8b92a0;
   font-size: 11px;
   text-align: center;
   padding: 2px 0 0;
   font-style: italic;
+}
+
+/* Progress bar shown only during 'processing' state. Track is the dim
+   container; fill grows left→right by JS-set inline width. ETA + elapsed
+   time sit on a single row below in muted monospace. */
+.progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 4px 0;
+}
+
+.progress-track {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #60a5fa, #3b82f6);
+  border-radius: 3px;
+  transition: width 220ms ease-out;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 10px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
 }

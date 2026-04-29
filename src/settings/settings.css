@@ -146,6 +146,101 @@ body {
   border-color: var(--accent);
 }
 
+.select {
+  flex: 1;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.select:focus {
+  border-color: var(--accent);
+}
+
+.radio-row.dim {
+  opacity: 0.55;
+}
+
+/* Slider + number-input row used by the countdown control. Slider takes
+   the available width; number input is a small fixed-width box that
+   syncs with the slider but can also accept values outside its range. */
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 360px;
+}
+
+.slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  cursor: grab;
+  transition: background 0.1s, transform 0.1s;
+}
+
+.slider::-webkit-slider-thumb:hover {
+  background: var(--accent-hover);
+  transform: scale(1.15);
+}
+
+.slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+}
+
+.slider-number {
+  width: 56px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 8px;
+  text-align: right;
+  outline: none;
+  /* Hide the default spinners — the slider IS the spinner. The number
+     input is here for typing a value, not for click-to-increment. */
+  -moz-appearance: textfield;
+}
+
+.slider-number::-webkit-inner-spin-button,
+.slider-number::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.slider-number:focus {
+  border-color: var(--accent);
+}
+
+.slider-unit {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 26px;
+}
+
 .btn {
   background: var(--btn-bg);
   border: 1px solid var(--border);

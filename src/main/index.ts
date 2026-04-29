@@ -66,7 +66,13 @@ let launcherWindow: BrowserWindow | null = null;
  */
 let hudKeepOnTopInterval: NodeJS.Timeout | null = null;
 
-type AppState = 'idle' | 'selecting' | 'selecting-screenshot' | 'recording' | 'processing';
+type AppState =
+  | 'idle'
+  | 'selecting'
+  | 'selecting-screenshot'
+  | 'selecting-trade'
+  | 'recording'   // active capture (BOTH record-mode and trade-mode use this)
+  | 'processing';
 let appState: AppState = 'idle';
 /**
  * When appState === 'processing', this carries the current pipeline step
@@ -75,6 +81,19 @@ let appState: AppState = 'idle';
  * Null in any other state.
  */
 let processingStep: string | null = null;
+/**
+ * Wall-clock progress estimate for the current pipeline run. Set when
+ * stopRecording fires, cleared when state returns to 'idle'. Lets the
+ * launcher render a progress bar + ETA under the step label so a long
+ * (e.g. 1-hour) recording's processing doesn't look stuck at "Saving
+ * recording…" for 5 seconds and then "Transcribing…" for 14 minutes
+ * with no visible progression.
+ */
+let processingStartedAtMs: number | null = null;
+let processingEstimatedTotalSec: number | null = null;
+/** 250ms tick that re-broadcasts state so the launcher's progress bar
+ *  animates smoothly while the pipeline runs. */
+let processingTickInterval: NodeJS.Timeout | null = null;
 
 let recordingStartedAt: number | null = null;
 let recordingPaused = false;
@@ -120,6 +139,21 @@ let currentChapters: ChapterRecord[] = [];
 // its annotation payload.
 const pendingChapterPngs = new Map<number, string>();
 
+/**
+ * Capture mode of the current/most-recent recording. Decides the session
+ * folder suffix ('feedback' for record, 'trade' for trade) and which
+ * post-recording pipeline path runs. Set when region-confirmed lands,
+ * carried into the pipeline via PendingProcessing.
+ */
+let currentSessionMode: 'record' | 'trade' = 'record';
+/**
+ * Recording-relative ms offsets where the user pressed the Trade marker
+ * hotkey (Ctrl+Shift+T). Empty for non-trade sessions. The trade-pipeline
+ * uses these as anchor tags in the LLM extraction prompt so the model
+ * focuses on the trader-flagged moments.
+ */
+let currentTradeMarkers: number[] = [];
+
 interface PendingProcessing {
   annotations: AnnotationRecord[];
   recordingRegion: { x: number; y: number; w: number; h: number } | null;
@@ -127,6 +161,8 @@ interface PendingProcessing {
   durationMs: number;
   preCreatedSessionDir: string | null;
   chapters: ChapterRecord[];
+  mode: 'record' | 'trade';
+  tradeMarkers: number[];
 }
 // Snapshot of the stopping recording's metadata. The webm buffer arrives
 // async via recorder:save-webm and the pipeline picks up from here.
@@ -148,16 +184,24 @@ function setAppState(next: AppState, why: string): void {
   log('state', `${prev} → ${next}`, why);
   appState = next;
   // processingStep is only meaningful while in 'processing'; clear on exit.
-  if (next !== 'processing') processingStep = null;
+  if (next !== 'processing') {
+    processingStep = null;
+    stopProcessingProgressTick();
+  }
 
-  // Annotate + snapshot hotkeys are registered ONLY while recording so
-  // they never steal keypresses from other apps when Snipalot is idle.
+  // Annotate + snapshot + trade-marker hotkeys are registered ONLY while
+  // recording so they never steal keypresses from other apps when Snipalot
+  // is idle. Trade-marker is also gated on mode === 'trade' (no point
+  // grabbing the chord during a normal recording — markers are a
+  // trade-mode concept).
   if (next === 'recording' && prev !== 'recording') {
     registerAnnotationHotkey();
     registerSnapshotHotkey();
+    if (currentSessionMode === 'trade') registerTradeMarkerHotkey();
   } else if (prev === 'recording' && next !== 'recording') {
     unregisterAnnotationHotkey();
     unregisterSnapshotHotkey();
+    unregisterTradeMarkerHotkey();
   }
 
   broadcastStateToLauncher();
@@ -170,6 +214,66 @@ function setAppState(next: AppState, why: string): void {
  * Triggers a launcher rebroadcast so the user sees the current pipeline
  * stage (e.g. "Converting video → Transcribing audio → ...").
  */
+/**
+ * Estimate total post-recording processing wall-clock seconds.
+ *
+ * The pipeline runs audio (whisper, the long pole) and video (mp4
+ * transcode + gif) in parallel after a brief sequential setup. Whisper
+ * is ~25% of recording duration on the bundled base.en model + this
+ * machine's CPU; mp4 transcode at ultrafast preset is ~10%. Plus a
+ * ~5s overhead for save/chapters/prompt write/etc. Trade mode adds a
+ * small baseline for the trade-context window setup.
+ *
+ * These coefficients are approximate; a real run can land within ±25%.
+ * The progress bar caps at 95% until the pipeline actually completes,
+ * so a slow run just sits at 95% rather than overshooting visually.
+ */
+function estimateProcessingSec(recordingDurationMs: number, mode: 'record' | 'trade'): number {
+  const recordingSec = Math.max(1, recordingDurationMs / 1000);
+  // Audio + video branches run in parallel; max() reflects wall clock.
+  const audioBranchSec = 1 + 0.25 * recordingSec;   // wav extract + whisper
+  const videoBranchSec = 0.10 * recordingSec;       // ultrafast libx264
+  const gifTailSec = 0.05 * recordingSec;           // sequential after mp4
+  const overheadSec = 5;                            // save webm + chapters + prompt + cleanup
+  const tradeExtraSec = mode === 'trade' ? 5 : 0;   // small visible baseline
+  return Math.ceil(
+    overheadSec + Math.max(audioBranchSec, videoBranchSec) + gifTailSec + tradeExtraSec
+  );
+}
+
+function startProcessingProgressTick(estimatedTotalSec: number): void {
+  processingStartedAtMs = Date.now();
+  processingEstimatedTotalSec = estimatedTotalSec;
+  if (processingTickInterval) clearInterval(processingTickInterval);
+  processingTickInterval = setInterval(() => {
+    // Just rebroadcast — the launcher reads the current progress fields
+    // and recomputes pct/eta on every tick.
+    if (appState === 'processing') broadcastStateToLauncher();
+  }, 250);
+  log('processing', 'progress tick started', { estimatedTotalSec });
+}
+
+function stopProcessingProgressTick(): void {
+  if (processingTickInterval) {
+    clearInterval(processingTickInterval);
+    processingTickInterval = null;
+  }
+  processingStartedAtMs = null;
+  processingEstimatedTotalSec = null;
+}
+
+function computeProcessingProgress(): { pct: number; etaSec: number; elapsedSec: number } | null {
+  if (processingStartedAtMs === null || processingEstimatedTotalSec === null) return null;
+  const elapsedSec = (Date.now() - processingStartedAtMs) / 1000;
+  // Cap the visible bar at 95% so we never claim "done" before the
+  // pipeline actually fires its 'idle' transition. The final 5% jump
+  // on completion is fine — better than a premature 100%.
+  const rawPct = (elapsedSec / processingEstimatedTotalSec) * 100;
+  const pct = Math.min(95, Math.max(0, rawPct));
+  const etaSec = Math.max(0, processingEstimatedTotalSec - elapsedSec);
+  return { pct, etaSec, elapsedSec };
+}
+
 function setProcessingStep(step: string): void {
   if (appState !== 'processing') return;
   processingStep = step;
@@ -224,6 +328,43 @@ function unregisterSnapshotHotkey(): void {
 }
 
 /**
+ * Trade-marker hotkey: only registered while recording AND mode === 'trade'.
+ * Each press appends a recording-relative ms offset to currentTradeMarkers,
+ * which the trade-pipeline uses as anchor tags for the LLM extraction prompt.
+ * No separate recording is started — markers are lightweight metadata only.
+ */
+function registerTradeMarkerHotkey(): void {
+  const accel = toAccelerator(getConfig().hotkeys.tradeMarker);
+  if (globalShortcut.isRegistered(accel)) return;
+  const ok = globalShortcut.register(accel, () => {
+    if (appState !== 'recording' || currentSessionMode !== 'trade' || recordingStartedAt === null) {
+      log('hotkey', `${accel} fired but not in trade-recording state`, { appState, currentSessionMode });
+      return;
+    }
+    const offsetMs = Date.now() - recordingStartedAt - totalPausedMs;
+    currentTradeMarkers.push(offsetMs);
+    log('hotkey', `${accel} trade marker added`, { offsetMs, totalMarkers: currentTradeMarkers.length });
+    showNotification('Snipalot Trade', `Marker #${currentTradeMarkers.length} at ${formatMs(offsetMs)}`);
+  });
+  log('hotkey', `${accel} registered (trade-recording started)`, { ok });
+}
+
+function unregisterTradeMarkerHotkey(): void {
+  const accel = toAccelerator(getConfig().hotkeys.tradeMarker);
+  if (!globalShortcut.isRegistered(accel)) return;
+  globalShortcut.unregister(accel);
+  log('hotkey', `${accel} unregistered (trade-recording ended)`);
+}
+
+/** Format ms offset as "M:SS" for the trade-marker notification. */
+function formatMs(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
  * Wipe all global shortcuts and re-register from current config. Called
  * once at startup and again whenever the settings save mutates hotkeys.
  * The annotation hotkey is intentionally NOT registered here — it lives
@@ -263,6 +404,20 @@ function reloadGlobalHotkeys(): void {
   reg(hk.clear, () => {
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-clear');
   });
+  // Always-on Trade-session toggle hotkey. Mirrors the launcher's violet
+  // Trade button: idle → enterSelectingTrade, active trade-recording →
+  // stopRecording. Available globally so the user can start a session
+  // without finding the launcher first.
+  reg(hk.startTrade, () => {
+    log('hotkey', 'startTrade fired', { appState, currentSessionMode });
+    if (appState === 'idle') {
+      enterSelectingTrade();
+    } else if (appState === 'recording' && currentSessionMode === 'trade') {
+      stopRecording('trade hotkey');
+    } else if (appState === 'selecting-trade') {
+      exitSelecting('trade hotkey toggle');
+    }
+  });
 
   // Re-arm the recording-only annotate + snapshot hotkeys at their new
   // combos if we're mid-session. unregisterAll() above already cleared
@@ -270,6 +425,7 @@ function reloadGlobalHotkeys(): void {
   if (appState === 'recording') {
     registerAnnotationHotkey();
     registerSnapshotHotkey();
+    if (currentSessionMode === 'trade') registerTradeMarkerHotkey();
   }
 }
 
@@ -300,13 +456,12 @@ function handleAnnotationHotkey(): void {
 
 function broadcastStateToLauncher(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  // Include the current startStop combo so the launcher hint can stay in
-  // sync when the user rebinds it via settings — otherwise the hint text
-  // would lie about the keyboard shortcut.
   launcherWindow.webContents.send('launcher:state', {
     appState,
     processingStep,
     startStopHotkey: getConfig().hotkeys.startStop,
+    sessionMode: currentSessionMode,
+    processingProgress: computeProcessingProgress(),
   });
 }
 
@@ -421,12 +576,14 @@ function createRecorderWindow(): BrowserWindow {
 
 function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
-  // Wider than the original 340px to comfortably fit two primary actions
-  // (Record + Screenshot) side by side without their labels truncating.
-  const w = 380;
-  // Custom title bar is 28px + content ~112px (header 20, gap 8, controls 32,
-  // gap 8, hint 16, padding 20). No need for extra slack.
-  const h = 140;
+  // Bumped to 480 to fit three primary actions side by side
+  // (Record + Screenshot + Trade) without label truncation.
+  const w = 480;
+  // Custom title bar 28px + content ~140px. The extra ~30px (vs the prior
+  // 140 total) makes room for the progress bar block under the hint that
+  // shows during the 'processing' state. Hidden during idle but reserves
+  // the layout space so transitions don't cause window-size jumps.
+  const h = 170;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;
@@ -468,6 +625,11 @@ function createLauncherWindow(): BrowserWindow {
   win.loadFile(path.join(__dirname, '..', 'launcher', 'launcher.html'));
   win.once('ready-to-show', () => {
     win.show();
+    // Restore pin state from config — set BEFORE broadcasting state so
+    // the renderer's getPinState() lookup returns the correct value.
+    if (getConfig().launcher.pinnedOnTop) {
+      win.setAlwaysOnTop(true);
+    }
     broadcastStateToLauncher();
   });
   win.on('closed', () => {
@@ -542,6 +704,34 @@ let annotatorWindow: BrowserWindow | null = null;
  * standalone (e.g. via the tray dev-preview entry).
  */
 let pendingAnnotatorImage: { dataUrl: string; sessionStamp: string } | null = null;
+
+// ─── trade-context window (TradeCall trade-data input) ───────────────
+//
+// Opens automatically after a Trade-mode recording stops (unless the user
+// has set config.trade.autoPromptForTradeData = false). Collects a
+// MockApe / Padre trade export from the user (paste JSON or CSV, or browse
+// for a file). Writes the parsed data to mockape.json in the session dir
+// before the trade-pipeline renders the LLM extraction prompt — so the
+// prompt can embed the actual trades as context for the LLM to align
+// against the spoken transcript.
+
+let tradeContextWindow: BrowserWindow | null = null;
+/**
+ * Session info handed to the trade-context window on boot via the
+ * trade-context:get-session-info IPC. Set by openTradeContextWindow();
+ * cleared when the window submits or skips.
+ */
+let pendingTradeContext: {
+  sessionDir: string;
+  recordingStartedAtMs: number;
+  durationMs: number;
+} | null = null;
+/**
+ * setInterval handle that keeps the trade-context window above the
+ * 'screen-saver'-level overlay. See the matching hudKeepOnTopInterval
+ * for context — same z-order race, same fix.
+ */
+let tradeContextKeepOnTopInterval: NodeJS.Timeout | null = null;
 
 function openAnnotator(): void {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) {
@@ -662,6 +852,173 @@ ipcMain.handle(
 // IPC: renderer asks main to close the annotator (e.g. user hits Cancel).
 ipcMain.handle('annotator:cancel', () => {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) annotatorWindow.close();
+});
+
+/**
+ * Open the trade-context window for an in-flight trade-mode session.
+ * The window collects MockApe trade data from the user and writes it
+ * (or a sentinel) to the session folder. Trade-pipeline polls for the
+ * file before rendering the LLM extraction prompt.
+ *
+ * Pre-creates the trade-context state so the window can fetch session
+ * info on boot. Window auto-closes when user submits or skips.
+ */
+function openTradeContextWindow(
+  sessionDir: string,
+  recordingStartedAtMs: number,
+  durationMs: number
+): void {
+  if (tradeContextWindow && !tradeContextWindow.isDestroyed()) {
+    tradeContextWindow.focus();
+    return;
+  }
+  pendingTradeContext = { sessionDir, recordingStartedAtMs, durationMs };
+  const primary = screen.getPrimaryDisplay();
+  const w = 640;
+  const h = 560;
+  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  tradeContextWindow = new BrowserWindow({
+    width: w,
+    height: h,
+    x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
+    y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
+    title: 'Snipalot Trade · Add trade data',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    backgroundColor: '#0f1117',
+    show: false,
+    alwaysOnTop: true,
+    minimizable: false,
+    maximizable: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'trade-context', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  tradeContextWindow.removeMenu();
+  tradeContextWindow.loadFile(path.join(__dirname, '..', 'trade-context', 'trade-context.html'));
+  tradeContextWindow.once('ready-to-show', () => {
+    if (!tradeContextWindow || tradeContextWindow.isDestroyed()) return;
+    tradeContextWindow.show();
+    // Bump to 'screen-saver' level to match the overlays. The constructor
+    // alwaysOnTop:true defaults to 'floating' which is BELOW 'screen-saver',
+    // so the still-open overlays would visually cover this window whenever
+    // focus shifted (e.g. user clicks browser to copy MockApe data, then
+    // the overlay re-stacks on top and the trade-context disappears).
+    tradeContextWindow.setAlwaysOnTop(true, 'screen-saver');
+    tradeContextWindow.moveTop();
+    tradeContextWindow.focus();
+  });
+  // Defensive: keep trade-context above the overlay through z-order races
+  // (overlay calls setAlwaysOnTop in its own state changes, which can shuffle
+  // same-level windows on Windows). Same pattern as hudKeepOnTopInterval.
+  if (tradeContextKeepOnTopInterval) clearInterval(tradeContextKeepOnTopInterval);
+  tradeContextKeepOnTopInterval = setInterval(() => {
+    if (
+      tradeContextWindow &&
+      !tradeContextWindow.isDestroyed() &&
+      tradeContextWindow.isVisible() &&
+      !tradeContextWindow.isFocused()
+    ) {
+      // Only re-assert if NOT focused — if the user is actively using
+      // another app (e.g. copying from browser), we don't want to keep
+      // stealing focus from them. moveTop without focus is enough to
+      // keep the window visible above the overlay.
+      tradeContextWindow.moveTop();
+    }
+  }, 1000);
+  tradeContextWindow.on('closed', () => {
+    // If the user dismissed the window without submit/skip (e.g. clicked
+    // the X), treat as a skip so trade-pipeline can proceed. Write the
+    // sentinel only if neither has already happened (the IPC handlers
+    // below also write it; this is the fallback).
+    if (pendingTradeContext) {
+      const skipPath = path.join(pendingTradeContext.sessionDir, 'mockape.json.skipped');
+      try {
+        if (!fs.existsSync(skipPath) &&
+            !fs.existsSync(path.join(pendingTradeContext.sessionDir, 'mockape.json'))) {
+          fs.writeFileSync(skipPath, '', 'utf-8');
+          log('trade-context', 'window dismissed without submit/skip → wrote .skipped sentinel');
+        }
+      } catch (err) {
+        log('trade-context', 'sentinel write fail on close', { err: (err as Error).message });
+      }
+      pendingTradeContext = null;
+    }
+    if (tradeContextKeepOnTopInterval) {
+      clearInterval(tradeContextKeepOnTopInterval);
+      tradeContextKeepOnTopInterval = null;
+    }
+    tradeContextWindow = null;
+  });
+  log('trade-context', 'opened', { sessionDir, recordingStartedAtMs, durationMs });
+}
+
+ipcMain.handle('trade-context:get-session-info', () => {
+  return pendingTradeContext ?? { sessionDir: '', recordingStartedAtMs: 0, durationMs: 0 };
+});
+
+ipcMain.handle(
+  'trade-context:submit',
+  (_evt, payload: { trades: unknown[]; dontAskAgain: boolean }) => {
+    if (!pendingTradeContext) return;
+    const { sessionDir } = pendingTradeContext;
+    const mockApePath = path.join(sessionDir, 'mockape.json');
+    try {
+      fs.writeFileSync(mockApePath, JSON.stringify(payload.trades, null, 2), 'utf-8');
+      log('trade-context', 'mockape.json written via submit', {
+        mockApePath,
+        trades: payload.trades.length,
+      });
+    } catch (err) {
+      log('trade-context', 'mockape.json write fail', { err: (err as Error).message });
+    }
+    if (payload.dontAskAgain) {
+      saveConfig({ trade: { autoPromptForTradeData: false } } as never);
+      log('trade-context', 'autoPromptForTradeData disabled by user');
+    }
+    pendingTradeContext = null;
+    if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
+  }
+);
+
+ipcMain.handle('trade-context:skip', (_evt, payload: { dontAskAgain: boolean }) => {
+  if (!pendingTradeContext) return;
+  const { sessionDir } = pendingTradeContext;
+  const skipPath = path.join(sessionDir, 'mockape.json.skipped');
+  try {
+    fs.writeFileSync(skipPath, '', 'utf-8');
+    log('trade-context', 'skip sentinel written', { skipPath });
+  } catch (err) {
+    log('trade-context', 'skip sentinel fail', { err: (err as Error).message });
+  }
+  if (payload.dontAskAgain) {
+    saveConfig({ trade: { autoPromptForTradeData: false } } as never);
+    log('trade-context', 'autoPromptForTradeData disabled by user');
+  }
+  pendingTradeContext = null;
+  if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
+});
+
+ipcMain.handle('trade-context:browse', async () => {
+  if (!tradeContextWindow || tradeContextWindow.isDestroyed()) return null;
+  const result = await dialog.showOpenDialog(tradeContextWindow, {
+    title: 'Choose trade export file',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Trade exports', extensions: ['json', 'csv'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const filepath = result.filePaths[0];
+  try {
+    const contents = fs.readFileSync(filepath, 'utf-8');
+    return { contents, filename: path.basename(filepath) };
+  } catch (err) {
+    log('trade-context', 'browse read fail', { err: (err as Error).message });
+    return null;
+  }
 });
 
 function openSettings(isFirstRun = false): void {
@@ -920,13 +1277,45 @@ async function captureStillFrame(
 
 // ─── shared state-machine actions ────────────────────────────────────
 
+/**
+ * Detects which display the cursor is currently on. Used by fullscreen
+ * capture mode to decide which display's overlay should start its
+ * fullscreen countdown.
+ */
+function getCursorDisplayId(): string {
+  const cursor = screen.getCursorScreenPoint();
+  return String(screen.getDisplayNearestPoint(cursor).id);
+}
+
+/**
+ * Send the region-select / fullscreen-countdown IPC to either every
+ * overlay (region mode — user picks which display by dragging on it)
+ * or just the cursor's overlay (fullscreen mode — no drag needed).
+ * Returns true if a fullscreen short-circuit was used.
+ */
+function dispatchRegionEntry(captureMode: 'region' | 'fullscreen' | 'window', countdownSec: number): void {
+  if (captureMode === 'fullscreen') {
+    const targetId = getCursorDisplayId();
+    targetOverlay(targetId, 'overlay:enter-region-select', {
+      countdownSec,
+      mode: 'fullscreen',
+    });
+    log('state', 'dispatchRegionEntry: fullscreen mode', { targetId, countdownSec });
+  } else {
+    // 'region' (and 'window' fallback for now) → the existing drag-to-select
+    // flow, broadcast to all overlays.
+    broadcastOverlay('overlay:enter-region-select', { countdownSec, mode: 'region' });
+  }
+}
+
 function enterSelecting(): void {
   if (appState !== 'idle') {
     log('state', 'enterSelecting ignored', { appState });
     return;
   }
   setAppState('selecting', 'user toggle from idle');
-  broadcastOverlay('overlay:enter-region-select');
+  const cfg = getConfig().capture;
+  dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
 /**
@@ -942,11 +1331,34 @@ function enterSelectingScreenshot(): void {
     return;
   }
   setAppState('selecting-screenshot', 'screenshot button from idle');
-  broadcastOverlay('overlay:enter-region-select');
+  const cfg = getConfig().capture;
+  dispatchRegionEntry(cfg.mode, cfg.countdownSec);
+}
+
+/**
+ * Region-select for the Trade flow. Same overlay UI as record-mode
+ * region-select; the post-confirm branch in overlay:region-confirmed
+ * decides whether to start MediaRecorder normally (record), capture a
+ * still PNG (screenshot), or start MediaRecorder with mode='trade'
+ * (which produces a 'trade'-suffix session folder and runs the trade-
+ * pipeline after whisper).
+ */
+function enterSelectingTrade(): void {
+  if (appState !== 'idle') {
+    log('state', 'enterSelectingTrade ignored', { appState });
+    return;
+  }
+  setAppState('selecting-trade', 'trade button from idle');
+  const cfg = getConfig().capture;
+  dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
 function exitSelecting(reason: string): void {
-  if (appState !== 'selecting' && appState !== 'selecting-screenshot') return;
+  if (
+    appState !== 'selecting' &&
+    appState !== 'selecting-screenshot' &&
+    appState !== 'selecting-trade'
+  ) return;
   setAppState('idle', `exitSelecting: ${reason}`);
   broadcastOverlay('overlay:exit-region-select');
   pendingRegion = null;
@@ -1050,12 +1462,42 @@ function stopRecording(reason: string): void {
       durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
       preCreatedSessionDir: liveSessionDir,
       chapters: [...currentChapters],
+      mode: currentSessionMode,
+      tradeMarkers: [...currentTradeMarkers],
     };
     log('main', 'pendingProcessing snapshotted', {
       annotations: pendingProcessing.annotations.length,
       chapters: pendingProcessing.chapters.length,
       durationMs: pendingProcessing.durationMs,
+      mode: pendingProcessing.mode,
+      tradeMarkers: pendingProcessing.tradeMarkers.length,
     });
+
+    // For trade-mode sessions, immediately open the trade-context window
+    // (parallel to the pipeline's mp4/whisper work) so the user can paste
+    // their MockApe export while ffmpeg + whisper are running. Trade-
+    // pipeline won't render the LLM extraction prompt until either
+    // mockape.json or mockape.json.skipped exists in the session folder.
+    if (
+      currentSessionMode === 'trade' &&
+      liveSessionDir !== null &&
+      getConfig().trade.autoPromptForTradeData
+    ) {
+      openTradeContextWindow(
+        liveSessionDir,
+        recordingStartedAt,
+        pendingProcessing.durationMs
+      );
+    } else if (currentSessionMode === 'trade' && liveSessionDir !== null) {
+      // User opted out of the prompt — write the .skipped sentinel so
+      // trade-pipeline doesn't wait.
+      try {
+        fs.writeFileSync(path.join(liveSessionDir, 'mockape.json.skipped'), '', 'utf-8');
+        log('trade-context', 'auto-skipped (autoPromptForTradeData=false)');
+      } catch {
+        /* ignore */
+      }
+    }
   }
   liveSessionDir = null;
 
@@ -1070,6 +1512,15 @@ function stopRecording(reason: string): void {
   // 'idle' when it's actually done.
   setAppState('processing', `user stop: ${reason}`);
   processingStep = 'Saving recording…';
+  // Kick off the wall-clock progress estimator. The 250ms tick keeps the
+  // launcher's progress bar animating smoothly until pipeline completion
+  // toggles state back to 'idle' (which also stops the tick via the
+  // setAppState side-effect below).
+  if (pendingProcessing) {
+    startProcessingProgressTick(
+      estimateProcessingSec(pendingProcessing.durationMs, pendingProcessing.mode)
+    );
+  }
   broadcastStateToLauncher();
   recordingStartedAt = null;
   recordingPaused = false;
@@ -1120,12 +1571,18 @@ ipcMain.handle(
   'overlay:region-confirmed',
   async (_evt, payload: { displayId: string; rect: OverlayRect }) => {
     log('overlay', 'region-confirmed received', payload);
-    if (appState !== 'selecting' && appState !== 'selecting-screenshot') {
+    if (
+      appState !== 'selecting' &&
+      appState !== 'selecting-screenshot' &&
+      appState !== 'selecting-trade'
+    ) {
       log('overlay', 'ignoring region-confirmed (wrong state)', { appState });
       return;
     }
-    const intent: 'record' | 'screenshot' =
-      appState === 'selecting-screenshot' ? 'screenshot' : 'record';
+    const intent: 'record' | 'screenshot' | 'trade' =
+      appState === 'selecting-screenshot' ? 'screenshot' :
+      appState === 'selecting-trade' ? 'trade' :
+      'record';
 
     const display = screen
       .getAllDisplays()
@@ -1182,7 +1639,10 @@ ipcMain.handle(
       return;
     }
 
-    // ── RECORD branch: existing flow. ──
+    // ── RECORD or TRADE branch: both start the MediaRecorder. The only
+    //    difference is the AppState transition (recording vs trading) and
+    //    currentSessionMode, which the pipeline reads at stop time to pick
+    //    the folder suffix + extra trade-pipeline stage.
     const sources = await desktopCapturer.getSources({ types: ['screen'] });
     log('overlay', 'desktopCapturer sources', sources.map((s) => ({
       id: s.id,
@@ -1200,7 +1660,9 @@ ipcMain.handle(
     activeDisplayId = payload.displayId;
     activeSourceId = source.id;
     pendingRegion = region;
-    setAppState('recording', 'region confirmed');
+    currentSessionMode = intent === 'trade' ? 'trade' : 'record';
+    currentTradeMarkers = [];
+    setAppState('recording', `region confirmed (mode=${currentSessionMode})`);
     broadcastOverlay('overlay:exit-region-select');
     // Tell the active display's overlay to draw the region outline + receive annotations.
     targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
@@ -1265,6 +1727,8 @@ ipcMain.handle(
       annotations: snap?.annotations ?? [],
       preCreatedSessionDir: snap?.preCreatedSessionDir ?? undefined,
       chapters: snap?.chapters ?? [],
+      mode: snap?.mode ?? 'record',
+      tradeMarkers: snap?.tradeMarkers ?? [],
       onStep: (step) => setProcessingStep(step),
     })
       .then((result) => {
@@ -1328,12 +1792,16 @@ ipcMain.handle(
       pendingChapterPngs.clear();
 
       // Pre-create the session folder so live snaps have somewhere to land.
+      // Folder suffix reflects the capture mode (`feedback` for record-mode,
+      // `trade` for trade-mode); pipeline.ts reads the same currentSessionMode
+      // via PendingProcessing so its naming matches.
       const outputRoot = getConfig().outputDir;
       if (!fs.existsSync(outputRoot)) fs.mkdirSync(outputRoot, { recursive: true });
       const stamp = formatSessionStamp(new Date(recordingStartedAt));
-      liveSessionDir = path.join(outputRoot, `${stamp} feedback`);
+      const suffix = currentSessionMode === 'trade' ? 'trade' : 'feedback';
+      liveSessionDir = path.join(outputRoot, `${stamp} ${suffix}`);
       if (!fs.existsSync(liveSessionDir)) fs.mkdirSync(liveSessionDir, { recursive: true });
-      log('main', 'liveSessionDir created', { liveSessionDir });
+      log('main', 'liveSessionDir created', { liveSessionDir, mode: currentSessionMode });
 
       const display = screen
         .getAllDisplays()
@@ -1375,6 +1843,8 @@ ipcMain.handle(
             durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
             preCreatedSessionDir: liveSessionDir,
             chapters: [...currentChapters],
+            mode: currentSessionMode,
+            tradeMarkers: [...currentTradeMarkers],
           };
         }
         liveSessionDir = null;
@@ -1554,9 +2024,137 @@ ipcMain.handle('launcher:screenshot', () => {
   else if (appState === 'selecting-screenshot') exitSelecting('screenshot toggle');
 });
 
+ipcMain.handle('launcher:trade', () => {
+  log('launcher', 'trade click', { appState });
+  if (appState === 'idle') enterSelectingTrade();
+  else if (appState === 'selecting-trade') exitSelecting('trade toggle');
+});
+
 ipcMain.handle('launcher:quit', () => {
   log('launcher', 'quit click');
   app.quit();
+});
+
+/**
+ * Hide the launcher to tray. App keeps running (so global hotkeys keep
+ * firing). One-time notification per session tells the user how to bring
+ * the launcher back + how to actually quit if that's what they wanted.
+ */
+let hideToTrayNotificationShown = false;
+ipcMain.handle('launcher:toggle-pin', () => {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return false;
+  const next = !launcherWindow.isAlwaysOnTop();
+  launcherWindow.setAlwaysOnTop(next);
+  saveConfig({ launcher: { pinnedOnTop: next } } as never);
+  log('launcher', 'pin toggled', { pinnedOnTop: next });
+  return next;
+});
+
+ipcMain.handle('launcher:get-pin-state', () => {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return false;
+  return launcherWindow.isAlwaysOnTop();
+});
+
+/**
+ * Find the most recent session folder under outputDir and re-copy its
+ * prompt to the clipboard. Useful when the auto-copy on session
+ * completion got overwritten by something the user copied in the
+ * intervening minutes.
+ *
+ * Session-kind detection from folder suffix:
+ *   "{stamp} feedback"   → record (uses prompt.txt)
+ *   "{stamp} trade"      → trade  (uses extraction_prompt.md, falls back to prompt.txt stub)
+ *   "{stamp} screenshot" → screenshot (uses prompt.md)
+ *
+ * Sorted by mtime so we always grab the newest regardless of session type.
+ */
+ipcMain.handle('launcher:copy-last-prompt', () => {
+  const outputDir = getConfig().outputDir;
+  if (!fs.existsSync(outputDir)) {
+    return { ok: false as const, error: 'Output folder does not exist' };
+  }
+  let entries: { name: string; mtimeMs: number }[];
+  try {
+    entries = fs
+      .readdirSync(outputDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => {
+        const stat = fs.statSync(path.join(outputDir, e.name));
+        return { name: e.name, mtimeMs: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  } catch (err) {
+    log('launcher', 'copy-last: outputDir read fail', { err: (err as Error).message });
+    return { ok: false as const, error: 'Could not read output folder' };
+  }
+
+  // Walk from newest to oldest; skip folders without a recognizable prompt.
+  for (const entry of entries) {
+    const dir = path.join(outputDir, entry.name);
+    const kind: 'record' | 'trade' | 'screenshot' =
+      entry.name.endsWith(' trade') ? 'trade' :
+      entry.name.endsWith(' screenshot') ? 'screenshot' :
+      entry.name.endsWith(' feedback') ? 'record' :
+      // Unknown suffix — try anyway, kind will default to 'record'
+      'record';
+    // Candidate filenames per session kind. Trade folders contain a
+    // prompt.txt stub that's just a pointer ("see extraction_prompt.md")
+    // — we deliberately do NOT fall back to it. If extraction_prompt.md
+    // isn't there yet (e.g. user clicked Copy before the trade-context
+    // window was submitted), walk to the previous session that has a
+    // real prompt instead.
+    const candidates = kind === 'trade'
+      ? ['extraction_prompt.md']
+      : kind === 'screenshot'
+      ? ['prompt.md']
+      : ['prompt.txt'];
+    for (const candidate of candidates) {
+      const filePath = path.join(dir, candidate);
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        const text = fs.readFileSync(filePath, 'utf-8');
+        clipboard.writeText(text);
+        log('launcher', 'copy-last: prompt re-clipboarded', {
+          sessionName: entry.name,
+          kind,
+          file: candidate,
+          chars: text.length,
+        });
+        return {
+          ok: true as const,
+          kind,
+          sessionName: entry.name,
+          chars: text.length,
+        };
+      } catch (err) {
+        log('launcher', 'copy-last: read fail', {
+          filePath,
+          err: (err as Error).message,
+        });
+        // Try the next candidate / next session.
+      }
+    }
+  }
+  return {
+    ok: false as const,
+    error: 'No prompt file found in any session folder',
+  };
+});
+
+ipcMain.handle('launcher:close-to-tray', () => {
+  log('launcher', 'close-to-tray click');
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    launcherWindow.hide();
+  }
+  if (!hideToTrayNotificationShown) {
+    hideToTrayNotificationShown = true;
+    showNotification(
+      'Snipalot is still running',
+      'Hotkeys (Ctrl+Shift+S record, Ctrl+Shift+T trade) stay active. ' +
+        'Click the tray icon to bring the launcher back, or right-click ' +
+        'the tray → Quit Snipalot to fully exit.'
+    );
+  }
 });
 
 ipcMain.handle('launcher:settings', () => {

@@ -15,6 +15,12 @@ export interface HotkeyConfig {
   annotate: string;
   /** Mirrors the HUD 📸 button: capture this screen and close the chapter. */
   snapshot: string;
+  /** Start / stop a Trade session (mirrors the launcher's violet Trade
+      button). Always-on global hotkey — toggles. */
+  startTrade: string;
+  /** Trade-mode marker: appends a recording-relative timestamp the LLM
+      extraction prompt uses as an anchor. Recording-only, mode='trade' only. */
+  tradeMarker: string;
   clear: string;
   undo: string;
   pauseResume: string;
@@ -38,6 +44,44 @@ export interface SnipalotConfig {
      * apply to the next chapter (false, the new "carry over" mode)?
      */
     clearAnnotationsAfter: boolean;
+  };
+  trade: {
+    /**
+     * After a Trade-mode recording stops, should Snipalot pop the
+     * trade-context window asking the user to paste their MockApe /
+     * Padre export? When true (default), the window opens automatically.
+     * When false, trade-pipeline proceeds straight to extraction without
+     * the actual-trade context (LLM has only the transcript). User can
+     * toggle from inside the window via "Don't ask again".
+     */
+    autoPromptForTradeData: boolean;
+  };
+  launcher: {
+    /**
+     * When true, the launcher window stays alwaysOnTop above other apps.
+     * Toggled via the pin button in the titlebar; persisted across
+     * sessions. Default false (normal window stacking).
+     */
+    pinnedOnTop: boolean;
+  };
+  capture: {
+    /**
+     * Default capture mode for Record + Trade hotkeys / buttons.
+     *  - 'region':     drag to select a custom region (default, current behavior)
+     *  - 'fullscreen': skip region-select, capture the whole display the
+     *                  cursor is on (or primary). Fastest workflow.
+     *  - 'window':     pick a specific app window via a picker UI. Bounds
+     *                  match the window's current size. (UI deferred — falls
+     *                  back to 'region' for now if selected.)
+     */
+    mode: 'region' | 'fullscreen' | 'window';
+    /**
+     * Seconds to count down after a region is selected (or immediately
+     * after a hotkey press in fullscreen / window mode) before recording
+     * starts. 0 disables the countdown (recording starts instantly).
+     * Default 3.
+     */
+    countdownSec: number;
   };
   /** true until the user completes first-run onboarding. */
   firstRun: boolean;
@@ -65,6 +109,13 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     // globalShortcut.register, so the browser print-preview default
     // never fires while a recording is active and the binding is live.
     snapshot: 'Ctrl+Shift+P',
+    // 'T' for Trade — toggles a Trade session, equivalent to clicking
+    // the violet Trade button in the launcher. Always-on global.
+    startTrade: 'Ctrl+Shift+T',
+    // 'M' for Mark — only registered while a trade-mode recording is
+    // live. Each press logs a recording-relative timestamp the LLM
+    // uses as an anchor when extracting trades.
+    tradeMarker: 'Ctrl+Shift+M',
     clear: 'Ctrl+Shift+C',
     undo: 'Ctrl+Z',
     // Pause/resume moved off Ctrl+Shift+P to make room for snapshot.
@@ -78,6 +129,16 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   snapshot: {
     clearAnnotationsAfter: true,
+  },
+  trade: {
+    autoPromptForTradeData: true,
+  },
+  launcher: {
+    pinnedOnTop: false,
+  },
+  capture: {
+    mode: 'region',
+    countdownSec: 3,
   },
   firstRun: true,
 };

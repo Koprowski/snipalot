@@ -592,6 +592,75 @@ async function exitRegionSelectMode(): Promise<void> {
   redraw();
 }
 
+// ─── countdown ────────────────────────────────────────────────────────
+//
+// After mouseup ends region-select with a valid region, we run a 3-2-1
+// countdown then auto-fire confirm-region. The confirm panel (Start /
+// Cancel buttons) is suppressed during countdown — the user can still
+// hit Esc to bail. Countdown duration is set from main via the
+// overlay:enter-region-select IPC payload (default 3s).
+
+let countdownTimer: number | null = null;
+let countdownDurationSec = 3;
+const countdownEl = document.getElementById('countdown')!;
+const countdownNumberEl = document.getElementById('countdown-number')!;
+
+function startCountdown(r: Rect): void {
+  cancelCountdown(); // defensive — never run two at once
+  // Countdown duration of 0 means "fire immediately, no countdown" —
+  // useful for users who prefer the snappier flow. Default 3s.
+  if (countdownDurationSec <= 0) {
+    fireConfirm(r);
+    return;
+  }
+  let remaining = countdownDurationSec;
+  countdownEl.classList.remove('countdown-hidden');
+  countdownNumberEl.classList.remove('go');
+  renderCountdownTick(remaining);
+  countdownTimer = window.setInterval(() => {
+    remaining--;
+    if (remaining > 0) {
+      renderCountdownTick(remaining);
+    } else {
+      // Show "GO" briefly then fire confirm.
+      countdownNumberEl.textContent = 'GO';
+      countdownNumberEl.classList.add('go');
+      // Re-trigger the pulse animation by yanking the class.
+      void countdownNumberEl.offsetWidth;
+      if (countdownTimer !== null) {
+        window.clearInterval(countdownTimer);
+        countdownTimer = null;
+      }
+      window.setTimeout(() => {
+        countdownEl.classList.add('countdown-hidden');
+        fireConfirm(r);
+      }, 250);
+    }
+  }, 1000);
+}
+
+function renderCountdownTick(n: number): void {
+  countdownNumberEl.textContent = String(n);
+  // Re-trigger the pulse animation by reflowing.
+  countdownNumberEl.classList.remove('go');
+  void countdownNumberEl.offsetWidth;
+}
+
+function cancelCountdown(): void {
+  if (countdownTimer !== null) {
+    window.clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+  countdownEl.classList.add('countdown-hidden');
+}
+
+function fireConfirm(r: Rect): void {
+  recordingRegion = { ...r };
+  outlineVisible = true;
+  ownsRecording = true;
+  window.snipalot.confirmRegion(r);
+}
+
 function showRegionConfirmPanel(r: Rect): void {
   const panelEstimate = { w: 230, h: 42 };
   let left = r.x + r.w - panelEstimate.w;
@@ -937,7 +1006,10 @@ canvas.addEventListener('mouseup', (e) => {
     const r = currentRect;
     if (r.w > 8 && r.h > 8) {
       confirmedRegion = { ...r };
-      showRegionConfirmPanel(r);
+      // Auto-fire the countdown → confirm flow instead of waiting on the
+      // user to click Start. The Cancel/Esc path during countdown lets
+      // the user back out if they drew the wrong region.
+      startCountdown(r);
     }
     currentRect = null;
     dragStart = null;
@@ -1218,6 +1290,15 @@ window.addEventListener('mouseup', () => {
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    // Esc during countdown bails out of the about-to-record state and
+    // returns the user to drag-a-region mode. They can re-draw or hit
+    // Esc again to fully cancel.
+    if (countdownTimer !== null || !countdownEl.classList.contains('countdown-hidden')) {
+      cancelCountdown();
+      confirmedRegion = null;
+      // Stay in regionSelectMode so the user can immediately re-drag.
+      return;
+    }
     if (regionSelectMode) { window.snipalot.cancelRegion(); return; }
     if (annotationMode) {
       if (textInputEl.style.display !== 'none') { hideTextInput(); return; }
@@ -1296,7 +1377,27 @@ regionCancelBtn.addEventListener('click', () => {
 
 // ─── IPC wiring ──────────────────────────────────────────────────────
 
-window.snipalot.onEnterRegionSelect(() => { enterRegionSelectMode(); });
+window.snipalot.onEnterRegionSelect((payload) => {
+  // Main can pass per-session countdown duration (from config). Default 3s.
+  if (payload && typeof payload.countdownSec === 'number') {
+    countdownDurationSec = Math.max(0, Math.min(10, payload.countdownSec));
+  }
+  // Fullscreen mode short-circuit: skip drag-to-select. Use the full
+  // overlay bounds as the recording region and trigger the countdown
+  // immediately. Main only sends this IPC to the cursor's display so
+  // multi-monitor users get the right one captured.
+  if (payload && payload.mode === 'fullscreen') {
+    const fullRect: Rect = { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+    confirmedRegion = { ...fullRect };
+    // Enter region-select mode briefly so the existing exit/cleanup
+    // pathways work. The countdown UI takes over immediately.
+    void enterRegionSelectMode().then(() => {
+      startCountdown(fullRect);
+    });
+    return;
+  }
+  void enterRegionSelectMode();
+});
 window.snipalot.onExitRegionSelect(() => { exitRegionSelectMode(); });
 
 window.snipalot.onEnterAnnotationMode(() => {

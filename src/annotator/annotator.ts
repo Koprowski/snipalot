@@ -350,6 +350,7 @@
     }
 
     renderLabels();
+    updateTextStyleBar();
   }
 
   function drawAnnotation(ctx, ann, num, isSelected, isPreview) {
@@ -423,13 +424,28 @@
         return;
       }
       const fontSize = ann.fontSize || 18;
-      ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
-      ctx.fillStyle = ann.color;
+      const fontFamily = ann.fontFamily || "system-ui, -apple-system, sans-serif";
+      ctx.font = `bold ${fontSize}px ${fontFamily}`;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       const displayText = ann.text || '';
+
+      // Measure bounds for background / border (must be AFTER ctx.font is set)
+      const metrics = measureTextAnnotation(ctx, ann);
+      const px = 4, py = 2; // padding around text box
+
+      // Background fill
+      const bgColor = ann.bgColor;
+      if (bgColor && bgColor !== 'transparent') {
+        ctx.setLineDash([]);
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(ann.x - px, ann.y - py, metrics.w + px * 2, metrics.h + py * 2);
+      }
+
+      // Text
+      ctx.fillStyle = ann.color;
       if (!displayText) {
-        // Empty text -- show faint placeholder
+        // Empty text — show faint placeholder
         ctx.globalAlpha = 0.3;
         ctx.fillText('(text)', ann.x, ann.y);
         ctx.globalAlpha = 1;
@@ -440,13 +456,22 @@
           ctx.fillText(line, ann.x, ann.y + li * lineHeight);
         });
       }
-      // Draw selection outline
+
+      // Border stroke (drawn after text so it's on top of the fill)
+      const borderColor = ann.borderColor;
+      if (borderColor && borderColor !== 'none') {
+        ctx.setLineDash([]);
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(ann.x - px, ann.y - py, metrics.w + px * 2, metrics.h + py * 2);
+      }
+
+      // Selection outline (dashed) — slightly outside the border
       if (isSelected && !isPreview) {
-        const metrics = measureTextAnnotation(ctx, ann);
         ctx.strokeStyle = ann.color;
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 3]);
-        ctx.strokeRect(ann.x - 2, ann.y - 2, metrics.w + 4, metrics.h + 4);
+        ctx.strokeRect(ann.x - px - 2, ann.y - py - 2, metrics.w + (px + 2) * 2, metrics.h + (py + 2) * 2);
         ctx.setLineDash([]);
       }
       if (!isPreview) drawBadge(ctx, ann.x, ann.y - 20, num, ann.color, isSelected);
@@ -476,7 +501,8 @@
 
   function measureTextAnnotation(ctx, ann) {
     const fontSize = ann.fontSize || 18;
-    ctx.font = `bold ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+    const fontFamily = ann.fontFamily || "system-ui, -apple-system, sans-serif";
+    ctx.font = `bold ${fontSize}px ${fontFamily}`;
     const text = ann.text || '(text)';
     const lines = text.split('\n');
     const lineHeight = fontSize * 1.3;
@@ -721,7 +747,7 @@
 
     // Text tool: single click to place and immediately open inline editor
     if (tool === 'text') {
-      const ann = { id: nextId++, shape: 'text', x: pos.x, y: pos.y, text: '', fontSize: 18, color: currentColor, strokeWidth: currentStrokeWidth, opacity: currentOpacity, note: '', type: 'improvement' };
+      const ann = { id: nextId++, shape: 'text', x: pos.x, y: pos.y, text: '', fontSize: 18, color: currentColor, strokeWidth: currentStrokeWidth, opacity: currentOpacity, note: '', type: 'improvement', fontFamily: (document.getElementById('font-family-select') as any)?.value || 'system-ui, -apple-system, sans-serif', bgColor: 'transparent', borderColor: 'none' };
       annotations.push(ann);
       selectedId = ann.id;
       renderAnnotations();
@@ -915,8 +941,10 @@
 
   function hitTestText(pos, ann) {
     const metrics = measureTextAnnotation(dCtx, ann);
-    return pos.x >= ann.x - 2 && pos.x <= ann.x + metrics.w + 2 &&
-           pos.y >= ann.y - 2 && pos.y <= ann.y + metrics.h + 2;
+    // Extend hit area by the same padding used when drawing bg/border (px=4, py=2) plus a bit extra
+    const px = 6, py = 4;
+    return pos.x >= ann.x - px && pos.x <= ann.x + metrics.w + px &&
+           pos.y >= ann.y - py && pos.y <= ann.y + metrics.h + py;
   }
 
   function pointNearLine(pos, ann) {
@@ -955,7 +983,17 @@
     textarea.style.left = ann.x + 'px';
     textarea.style.top = ann.y + 'px';
     textarea.style.fontSize = (ann.fontSize || 18) + 'px';
+    textarea.style.fontFamily = ann.fontFamily || "system-ui, -apple-system, sans-serif";
     textarea.style.color = ann.color;
+    // Apply background: use annotation's bgColor (transparent by default means clear)
+    const bgColor = ann.bgColor;
+    textarea.style.background = (bgColor && bgColor !== 'transparent') ? bgColor : 'transparent';
+    // Apply border: use annotation's borderColor or fall back to accent focus ring
+    const borderColor = ann.borderColor;
+    if (borderColor && borderColor !== 'none') {
+      textarea.style.border = `2px solid ${borderColor}`;
+      textarea.style.boxShadow = `0 0 0 3px ${borderColor}44`;
+    }
     textarea.value = ann.text || '';
     textarea.placeholder = 'Type here...';
 
@@ -1500,6 +1538,104 @@
     document.getElementById('stroke-val').textContent = val;
   }
 
+  // ── TEXT ANNOTATION STYLE CONTROLS ────────────────────────────────────────
+
+  /** Sync the text-style-bar controls to the currently selected text annotation. */
+  function updateTextStyleBar() {
+    const bar = document.getElementById('text-style-bar');
+    if (!bar) return;
+    const sel = annotations.find(a => a.id === selectedId);
+    const isTextSel = !!(sel && sel.shape === 'text');
+    bar.style.display = isTextSel ? 'flex' : 'none';
+    if (!isTextSel) return;
+
+    // Font size
+    const sizeSlider = document.getElementById('text-size-slider') as HTMLInputElement;
+    const sizeVal = document.getElementById('text-size-val');
+    const fontSize = sel.fontSize || 18;
+    if (sizeSlider) sizeSlider.value = String(fontSize);
+    if (sizeVal) sizeVal.textContent = String(fontSize);
+
+    // Font family
+    const fontSelect = document.getElementById('font-family-select') as HTMLSelectElement;
+    if (fontSelect) fontSelect.value = sel.fontFamily || 'system-ui, -apple-system, sans-serif';
+
+    // Background
+    const bgNoneBtn = document.getElementById('text-bg-none-btn');
+    const bgInput = document.getElementById('text-bg-color-input') as HTMLInputElement;
+    const bgColor = sel.bgColor || 'transparent';
+    if (bgNoneBtn) bgNoneBtn.classList.toggle('active', bgColor === 'transparent');
+    if (bgInput && bgColor !== 'transparent') bgInput.value = bgColor;
+
+    // Border
+    const borderNoneBtn = document.getElementById('text-border-none-btn');
+    const borderInput = document.getElementById('text-border-color-input') as HTMLInputElement;
+    const borderColor = sel.borderColor || 'none';
+    if (borderNoneBtn) borderNoneBtn.classList.toggle('active', borderColor === 'none');
+    if (borderInput && borderColor !== 'none') borderInput.value = borderColor;
+  }
+
+  function setSelectedFontSize(val) {
+    const numVal = parseInt(val);
+    const sizeVal = document.getElementById('text-size-val');
+    if (sizeVal) sizeVal.textContent = String(numVal);
+    const sel = annotations.find(a => a.id === selectedId);
+    if (!sel || sel.shape !== 'text') return;
+    sel.fontSize = numVal;
+    // Keep inline editor in sync if open
+    if (_activeInlineEditor && _activeInlineAnnId === sel.id) {
+      _activeInlineEditor.style.fontSize = numVal + 'px';
+    }
+    renderAnnotations();
+    _pushHistory();
+  }
+
+  function setSelectedFontFamily(val) {
+    const sel = annotations.find(a => a.id === selectedId);
+    if (!sel || sel.shape !== 'text') return;
+    sel.fontFamily = val;
+    // Keep inline editor in sync if open
+    if (_activeInlineEditor && _activeInlineAnnId === sel.id) {
+      _activeInlineEditor.style.fontFamily = val;
+    }
+    renderAnnotations();
+    _pushHistory();
+  }
+
+  function setSelectedTextBg(val) {
+    const sel = annotations.find(a => a.id === selectedId);
+    if (!sel || sel.shape !== 'text') return;
+    sel.bgColor = val;
+    const bgNoneBtn = document.getElementById('text-bg-none-btn');
+    if (bgNoneBtn) bgNoneBtn.classList.toggle('active', val === 'transparent');
+    // Keep inline editor in sync if open
+    if (_activeInlineEditor && _activeInlineAnnId === sel.id) {
+      _activeInlineEditor.style.background = (val && val !== 'transparent') ? val : 'transparent';
+    }
+    renderAnnotations();
+    _pushHistory();
+  }
+
+  function setSelectedBorderColor(val) {
+    const sel = annotations.find(a => a.id === selectedId);
+    if (!sel || sel.shape !== 'text') return;
+    sel.borderColor = val;
+    const borderNoneBtn = document.getElementById('text-border-none-btn');
+    if (borderNoneBtn) borderNoneBtn.classList.toggle('active', val === 'none');
+    // Keep inline editor in sync if open
+    if (_activeInlineEditor && _activeInlineAnnId === sel.id) {
+      if (val && val !== 'none') {
+        _activeInlineEditor.style.border = `2px solid ${val}`;
+        _activeInlineEditor.style.boxShadow = `0 0 0 3px ${val}44`;
+      } else {
+        _activeInlineEditor.style.border = '2px solid var(--accent)';
+        _activeInlineEditor.style.boxShadow = '0 0 0 3px rgba(59,130,246,0.3)';
+      }
+    }
+    renderAnnotations();
+    _pushHistory();
+  }
+
   // ── SIDE PANEL ─────────────────────────────────────────────────────────────
   function renderSidePanel() {
     document.getElementById('ann-count').textContent = annotations.length;
@@ -1917,8 +2053,18 @@
   requestAnimationFrame(_syncLoop);
 
   // ── window bridge for inline event attributes ─────────────────
+  // All functions called via onclick="..." in dynamically-generated HTML
+  // (renderSidePanel, text-style-bar) must be on window since attribute
+  // handlers are evaluated in the global scope, not the IIFE closure.
   Object.assign(window, {
+    // Tool + color
     setTool, setShapeTool, setColor, setOpacity, setStrokeWidth,
+    // Annotation lifecycle (used in renderSidePanel innerHTML)
+    selectAnnotation, deleteAnnotation, updateNote, updateTextContent,
+    updateFontSize, setAnnType,
+    // Text annotation style controls (text-style-bar)
+    setSelectedFontSize, setSelectedFontFamily, setSelectedTextBg, setSelectedBorderColor,
+    // Utilities
     triggerPaste, undo, redo, rotateImage, pasteOverlayImage, startCropMode,
     clearAll, changeSavePath, saveSession, copyPrompt,
     copyPromptFromOverlay, toggleOverlay, resetPrompt,

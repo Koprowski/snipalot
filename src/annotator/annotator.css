@@ -637,6 +637,62 @@
   }
   .ov-delete:hover { background: #dc2626; }
 
+  /* TEXT STYLE BAR */
+  /* Checker-pattern button: represents "transparent" or "none" for bg/border pickers. */
+  .checker-btn {
+    display: inline-block;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 2px solid var(--border);
+    background-image:
+      linear-gradient(45deg, #666 25%, transparent 25%),
+      linear-gradient(-45deg, #666 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #666 75%),
+      linear-gradient(-45deg, transparent 75%, #666 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+    background-color: #999;
+    flex-shrink: 0;
+    transition: border-color 0.15s;
+  }
+  .checker-btn:hover { border-color: #aaa; }
+  .checker-btn.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+  /* Compact native color picker — flush into toolbar height */
+  input[type=color].color-input {
+    width: 28px;
+    height: 22px;
+    padding: 0 1px;
+    border: 2px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: none;
+    flex-shrink: 0;
+    transition: border-color 0.15s;
+  }
+  input[type=color].color-input:hover { border-color: #aaa; }
+
+  /* Compact dropdown for font-family selection */
+  .tool-select {
+    height: 28px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 0 6px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s;
+    flex-shrink: 0;
+  }
+  .tool-select:hover { border-color: #3d4466; }
+  .tool-select:focus { border-color: var(--accent); }
+  .tool-select option { background: var(--surface2); color: var(--text); }
+
   /* CROP UI */
   .crop-ui {
     position: absolute;

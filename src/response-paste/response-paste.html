@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snipalot · Paste LLM Response</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #22263a;
+  --border: #2e3350;
+  --text: #e8eaf6;
+  --muted: #6b7280;
+  --accent: #3b82f6;
+  --success: #16a34a;
+  --danger: #ef4444;
+  --purple: #7c3aed;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Title bar ── */
+.titlebar {
+  height: 36px;
+  background: #0b0d11;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  gap: 10px;
+}
+.titlebar-icon { font-size: 16px; }
+.titlebar-title { font-size: 12px; font-weight: 700; color: var(--purple); letter-spacing: 0.05em; }
+.titlebar-step { font-size: 11px; color: var(--muted); }
+
+/* ── Content ── */
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px 16px;
+  gap: 14px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.instruction {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.instruction h3 {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.step-badge {
+  background: var(--purple);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 6px;
+  letter-spacing: 0.04em;
+}
+
+.instruction p {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.instruction p strong { color: var(--text); }
+
+kbd {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: monospace;
+  color: var(--text);
+}
+
+.session-path {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: monospace;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 10px;
+  font-family: monospace;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-btn:hover { color: #60a5fa; }
+
+/* ── Textarea ── */
+.paste-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.paste-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#status-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-weight: 600;
+  display: none;
+}
+#status-badge.valid { background: rgba(22,163,74,0.2); color: #4ade80; border: 1px solid #16a34a; display: inline-block; }
+#status-badge.invalid { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid #ef4444; display: inline-block; }
+
+textarea#json-input {
+  flex: 1;
+  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  line-height: 1.5;
+  padding: 12px 14px;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s;
+  user-select: text;
+  -webkit-user-select: text;
+}
+textarea#json-input::placeholder { color: var(--muted); }
+textarea#json-input:focus { border-color: var(--accent); }
+textarea#json-input.valid { border-color: var(--success); }
+textarea#json-input.invalid { border-color: var(--danger); }
+
+#error-msg {
+  font-size: 11px;
+  color: #f87171;
+  display: none;
+  padding: 2px 0;
+}
+#error-msg.visible { display: block; }
+
+/* ── Action bar ── */
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+button {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  transition: background 0.12s, border-color 0.12s;
+}
+
+#btn-submit {
+  flex: 1;
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+#btn-submit:hover:not(:disabled) { background: #15803d; border-color: #15803d; }
+#btn-submit:disabled { opacity: 0.45; cursor: not-allowed; }
+
+#btn-dismiss {
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 12px;
+}
+#btn-dismiss:hover { background: #2a2f47; color: var(--text); }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <span class="titlebar-icon">📊</span>
+  <span class="titlebar-title">TradeCall</span>
+  <span class="titlebar-step">Step 2 of 2 — Paste LLM Response</span>
+</div>
+
+<div class="content">
+
+  <div class="instruction">
+    <h3><span class="step-badge">STEP 2</span> Paste the LLM's JSON reply</h3>
+    <p>
+      The extraction prompt is <strong>on your clipboard</strong> and saved to the session folder.<br>
+      Paste it into <strong>Claude Code</strong>, <strong>Gemini CLI</strong>, <strong>Cursor</strong>, or any LLM —
+      then paste the JSON response it returns into the box below.
+    </p>
+    <div class="session-path">
+      Session: <span id="session-path-label">…</span>
+      <button class="link-btn" onclick="openFolder()">open folder ↗</button>
+    </div>
+  </div>
+
+  <div class="paste-wrap">
+    <div class="paste-label">
+      JSON response
+      <span id="status-badge"></span>
+    </div>
+    <textarea
+      id="json-input"
+      placeholder='Paste the LLM&#x27;s JSON array here, e.g. [{ "trade_id": 1, "token_name": "PEPE", ... }]'
+      spellcheck="false"
+      oninput="onInput()"
+    ></textarea>
+    <div id="error-msg"></div>
+  </div>
+
+  <div class="actions">
+    <button id="btn-dismiss" onclick="dismiss()">I'll do it later</button>
+    <button id="btn-submit" onclick="submit()" disabled>Generate Trade Log</button>
+  </div>
+
+</div>
+
+<script>
+(() => {
+  const api = window.snipalotResponsePaste;
+  let sessionDir = '';
+
+  // Load session info on boot
+  api.getSessionInfo().then(info => {
+    sessionDir = info.sessionDir;
+    const label = document.getElementById('session-path-label');
+    if (label) label.textContent = info.sessionDir;
+  }).catch(err => {
+    api.log('boot-error', String(err));
+  });
+
+  function openFolder() {
+    api.openFolder();
+  }
+
+  function onInput() {
+    const val = document.getElementById('json-input').value.trim();
+    const submitBtn = document.getElementById('btn-submit');
+    const badge = document.getElementById('status-badge');
+    const errEl = document.getElementById('error-msg');
+    const ta = document.getElementById('json-input');
+
+    if (!val) {
+      submitBtn.disabled = true;
+      badge.className = '';
+      badge.style.display = 'none';
+      ta.className = '';
+      errEl.className = '';
+      return;
+    }
+
+    // Strip markdown code fences if present
+    const stripped = val
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/, '')
+      .trim();
+
+    try {
+      const parsed = JSON.parse(stripped);
+      if (!Array.isArray(parsed)) throw new Error('Response must be a JSON array.');
+      if (parsed.length === 0) throw new Error('Array is empty — no trades found.');
+      // Basic shape check: first item should have trade_id and token_name
+      const first = parsed[0];
+      if (typeof first.trade_id === 'undefined' || typeof first.token_name === 'undefined') {
+        throw new Error('Items must have trade_id and token_name fields. Is this the right JSON?');
+      }
+      // Valid
+      submitBtn.disabled = false;
+      badge.textContent = `✓ ${parsed.length} trade${parsed.length !== 1 ? 's' : ''} found`;
+      badge.className = 'valid';
+      ta.className = 'valid';
+      errEl.className = '';
+    } catch (e) {
+      submitBtn.disabled = true;
+      badge.textContent = '✗ Invalid';
+      badge.className = 'invalid';
+      ta.className = 'invalid';
+      errEl.textContent = e.message;
+      errEl.className = 'visible';
+    }
+  }
+
+  async function submit() {
+    const val = document.getElementById('json-input').value.trim();
+    const btn = document.getElementById('btn-submit');
+    btn.disabled = true;
+    btn.textContent = '⏳ Writing…';
+
+    const result = await api.submit(val);
+    if (result.ok) {
+      btn.textContent = '✓ Done — generating trade log…';
+      btn.style.background = '#166534';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Generate Trade Log';
+      const errEl = document.getElementById('error-msg');
+      errEl.textContent = result.error || 'Unknown error — check the JSON and try again.';
+      errEl.className = 'visible';
+    }
+  }
+
+  function dismiss() {
+    api.dismiss();
+  }
+
+  // Expose to HTML onclick attributes
+  Object.assign(window, { onInput, submit, dismiss, openFolder });
+})();
+</script>
+
+</body>
+</html>

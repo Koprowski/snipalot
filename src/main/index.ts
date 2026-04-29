@@ -11,6 +11,7 @@ import {
   dialog,
   Menu,
   clipboard,
+  shell,
 } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -1021,6 +1022,110 @@ ipcMain.handle('trade-context:browse', async () => {
   }
 });
 
+// ── Response-paste window ──────────────────────────────────────────────────
+// Opens after the extraction prompt is written. User pastes the LLM's JSON
+// reply here; we write it to extraction_response.json and the pipeline
+// poller picks it up automatically.
+
+let responsePasteWindow: BrowserWindow | null = null;
+let pendingResponsePaste: { sessionDir: string; responsePath: string; promptPath: string } | null = null;
+
+function openResponsePasteWindow(
+  sessionDir: string,
+  responsePath: string,
+  promptPath: string
+): void {
+  if (responsePasteWindow && !responsePasteWindow.isDestroyed()) {
+    responsePasteWindow.focus();
+    return;
+  }
+  pendingResponsePaste = { sessionDir, responsePath, promptPath };
+  const primary = screen.getPrimaryDisplay();
+  const w = 600;
+  const h = 540;
+  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  responsePasteWindow = new BrowserWindow({
+    width: w,
+    height: h,
+    x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
+    y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
+    minWidth: 480,
+    minHeight: 400,
+    title: 'Snipalot · Paste LLM Response',
+    icon: iconPath,
+    frame: false,
+    titleBarStyle: 'hidden',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'response-paste', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  responsePasteWindow.removeMenu();
+  responsePasteWindow.loadFile(
+    path.join(__dirname, '..', 'response-paste', 'response-paste.html')
+  );
+  responsePasteWindow.once('ready-to-show', () => {
+    if (!responsePasteWindow || responsePasteWindow.isDestroyed()) return;
+    responsePasteWindow.show();
+    responsePasteWindow.setAlwaysOnTop(true, 'screen-saver');
+    responsePasteWindow.moveTop();
+    responsePasteWindow.focus();
+  });
+  responsePasteWindow.on('closed', () => {
+    responsePasteWindow = null;
+  });
+}
+
+ipcMain.handle('response-paste:get-session-info', () => {
+  return pendingResponsePaste ?? { sessionDir: '', responsePath: '', promptPath: '' };
+});
+
+ipcMain.handle('response-paste:submit', (_evt, jsonStr: string) => {
+  if (!pendingResponsePaste) return { ok: false, error: 'No active session.' };
+  const { responsePath, sessionDir } = pendingResponsePaste;
+  // Strip markdown code fences if the user accidentally included them.
+  const stripped = jsonStr
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
+  try {
+    const parsed = JSON.parse(stripped);
+    if (!Array.isArray(parsed)) throw new Error('Response must be a JSON array.');
+    // Write the file — the pipeline poller picks it up within 2 s.
+    fs.writeFileSync(responsePath, JSON.stringify(parsed, null, 2), 'utf-8');
+    log('response-paste', 'extraction_response.json written', {
+      trades: parsed.length,
+      responsePath,
+    });
+    // Close the window after a short delay so the "Done" state is visible.
+    setTimeout(() => {
+      if (responsePasteWindow && !responsePasteWindow.isDestroyed()) {
+        responsePasteWindow.close();
+      }
+      // Open session folder so the user can see the CSV when it appears.
+      void shell.openPath(sessionDir);
+    }, 1200);
+    return { ok: true };
+  } catch (err) {
+    log('response-paste', 'submit error', { err: (err as Error).message });
+    return { ok: false, error: (err as Error).message };
+  }
+});
+
+ipcMain.handle('response-paste:dismiss', () => {
+  if (responsePasteWindow && !responsePasteWindow.isDestroyed()) {
+    responsePasteWindow.close();
+  }
+});
+
+ipcMain.handle('response-paste:open-folder', () => {
+  if (pendingResponsePaste) {
+    void shell.openPath(pendingResponsePaste.sessionDir);
+  }
+});
+
 function openSettings(isFirstRun = false): void {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     // Bring it above the overlays and focus.
@@ -1730,6 +1835,7 @@ ipcMain.handle(
       mode: snap?.mode ?? 'record',
       tradeMarkers: snap?.tradeMarkers ?? [],
       onStep: (step) => setProcessingStep(step),
+      onTradePromptReady: (sDir, rPath, pPath) => openResponsePasteWindow(sDir, rPath, pPath),
     })
       .then((result) => {
         log('recorder', 'pipeline complete', {

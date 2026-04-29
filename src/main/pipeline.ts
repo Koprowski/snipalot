@@ -129,6 +129,13 @@ export interface PipelineInput {
    * extraction works without them, just less precisely.
    */
   tradeMarkers?: number[];
+  /**
+   * Called by trade-pipeline once extraction_prompt.md is written. index.ts
+   * supplies this to open the response-paste window, eliminating the manual
+   * "save extraction_response.json to disk" step. Optional — if omitted the
+   * pipeline falls back to the disk-poll-only path.
+   */
+  onTradePromptReady?: (sessionDir: string, responsePath: string, promptPath: string) => void;
 }
 
 export interface PipelineResult {
@@ -1208,6 +1215,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         tradeMarkers: input.tradeMarkers ?? [],
         startedAtMs: input.startedAtMs,
         onStep: input.onStep,
+        onPromptReady: input.onTradePromptReady,
       });
     } catch (err) {
       warnings.push(`trade-pipeline import/launch failed: ${(err as Error).message}`);

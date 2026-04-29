@@ -85,6 +85,13 @@ export interface TradePipelineInput {
   startedAtMs: number;
   /** Step callback for launcher UI (mirrors PipelineInput.onStep). */
   onStep?: (step: string) => void;
+  /**
+   * Called immediately after extraction_prompt.md is written, with the
+   * paths the response-paste window needs. index.ts passes a function
+   * that opens the BrowserWindow — the pipeline stays decoupled from the
+   * window layer.
+   */
+  onPromptReady?: (sessionDir: string, responsePath: string, promptPath: string) => void;
 }
 
 /**
@@ -185,7 +192,14 @@ export async function runTradePipeline(
   );
   const { promptPath, responsePath } = writeExtractionPrompt(sessionDir, promptText);
 
-  if (onStep) onStep('Waiting for extraction_response.json (paste prompt into your LLM)…');
+  // Notify the caller (index.ts) that the prompt is ready — it opens the
+  // response-paste window so the user can paste the LLM reply without
+  // manually saving a file.
+  if (input.onPromptReady) {
+    input.onPromptReady(sessionDir, responsePath, promptPath);
+  }
+
+  if (onStep) onStep('Waiting for LLM response (paste into the response window)…');
   const trades = await waitForExtractionResponse(responsePath);
 
   if (!trades) {
@@ -588,13 +602,11 @@ The polling timeout is 60 minutes from the moment the recording stopped.
 
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Snipalot Trade · prompt ready (on clipboard)',
+      title: 'Snipalot Trade · prompt ready',
       body:
-        `Step 1: paste the prompt into Claude Code / Gemini / Cursor.\n` +
-        `Step 2: save the LLM's JSON reply as extraction_response.json ` +
-        `in the folder that just opened.\n` +
-        `Step 3 (optional): drop your MockApe export as mockape.json.\n\n` +
-        `Read NEXT_STEPS.md in the session folder for full instructions.`,
+        `Paste the prompt into Claude Code / Gemini / Cursor, then paste ` +
+        `the JSON reply into the Snipalot response window. ` +
+        `Trade log generates automatically.`,
       silent: false,
     }).show();
   }

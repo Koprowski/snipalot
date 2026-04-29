@@ -49,8 +49,11 @@ const editedHotkeys: Record<string, string> = {};
 // Working copy of the snapshot behavior. Mutates as the user clicks the
 // radio; flushed on Save.
 let editedSnapClearAfter = true;
-// Working copy of the Gemini API key.
+// Working copies of LLM API keys + OpenAI-compatible settings.
 let editedGeminiApiKey = '';
+let editedOpenaiApiKey = '';
+let editedOpenaiBaseUrl = '';
+let editedOpenaiModel = '';
 // Working copy of the capture mode + countdown duration.
 let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 let editedCountdownSec = 3;
@@ -119,26 +122,46 @@ async function init(): Promise<void> {
     }
   });
 
-  // Gemini API key field.
-  const cfgTrade = (config as unknown as { trade?: { geminiApiKey?: string } }).trade;
+  // LLM API key fields.
+  const cfgTrade = (config as unknown as {
+    trade?: {
+      geminiApiKey?: string;
+      openaiApiKey?: string;
+      openaiBaseUrl?: string;
+      openaiModel?: string;
+    }
+  }).trade;
+
   editedGeminiApiKey = cfgTrade?.geminiApiKey ?? '';
+  editedOpenaiApiKey = cfgTrade?.openaiApiKey ?? '';
+  editedOpenaiBaseUrl = cfgTrade?.openaiBaseUrl ?? 'https://openrouter.ai/api/v1';
+  editedOpenaiModel = cfgTrade?.openaiModel ?? 'google/gemini-2.0-flash-exp:free';
+
   const geminiKeyInput = document.getElementById('input-gemini-key') as HTMLInputElement;
-  const btnShowKey = document.getElementById('btn-show-key') as HTMLButtonElement;
-  const geminiKeyStatus = document.getElementById('gemini-key-status') as HTMLElement;
+  const btnShowGeminiKey = document.getElementById('btn-show-gemini-key') as HTMLButtonElement;
   geminiKeyInput.value = editedGeminiApiKey;
-  geminiKeyInput.addEventListener('input', () => {
-    editedGeminiApiKey = geminiKeyInput.value.trim();
-    geminiKeyStatus.textContent = '';
+  geminiKeyInput.addEventListener('input', () => { editedGeminiApiKey = geminiKeyInput.value.trim(); });
+  btnShowGeminiKey.addEventListener('click', () => {
+    geminiKeyInput.type = geminiKeyInput.type === 'password' ? 'text' : 'password';
+    btnShowGeminiKey.textContent = geminiKeyInput.type === 'password' ? 'Show' : 'Hide';
   });
-  btnShowKey.addEventListener('click', () => {
-    const isHidden = geminiKeyInput.type === 'password';
-    geminiKeyInput.type = isHidden ? 'text' : 'password';
-    btnShowKey.textContent = isHidden ? 'Hide' : 'Show';
+
+  const openaiKeyInput = document.getElementById('input-openai-key') as HTMLInputElement;
+  const btnShowOpenaiKey = document.getElementById('btn-show-openai-key') as HTMLButtonElement;
+  openaiKeyInput.value = editedOpenaiApiKey;
+  openaiKeyInput.addEventListener('input', () => { editedOpenaiApiKey = openaiKeyInput.value.trim(); });
+  btnShowOpenaiKey.addEventListener('click', () => {
+    openaiKeyInput.type = openaiKeyInput.type === 'password' ? 'text' : 'password';
+    btnShowOpenaiKey.textContent = openaiKeyInput.type === 'password' ? 'Show' : 'Hide';
   });
-  if (editedGeminiApiKey) {
-    geminiKeyStatus.textContent = '✓ API key saved — auto-extraction enabled';
-    geminiKeyStatus.style.color = 'var(--success, #16a34a)';
-  }
+
+  const openaiBaseUrlInput = document.getElementById('input-openai-base-url') as HTMLInputElement;
+  openaiBaseUrlInput.value = editedOpenaiBaseUrl;
+  openaiBaseUrlInput.addEventListener('input', () => { editedOpenaiBaseUrl = openaiBaseUrlInput.value.trim(); });
+
+  const openaiModelInput = document.getElementById('input-openai-model') as HTMLInputElement;
+  openaiModelInput.value = editedOpenaiModel;
+  openaiModelInput.addEventListener('input', () => { editedOpenaiModel = openaiModelInput.value.trim(); });
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────
@@ -306,7 +329,12 @@ btnSave.addEventListener('click', async () => {
       hotkeys: editedHotkeys as never,
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
       capture: { mode: editedCaptureMode, countdownSec: editedCountdownSec } as never,
-      trade: { geminiApiKey: editedGeminiApiKey } as never,
+      trade: {
+        geminiApiKey: editedGeminiApiKey,
+        openaiApiKey: editedOpenaiApiKey,
+        openaiBaseUrl: editedOpenaiBaseUrl,
+        openaiModel: editedOpenaiModel,
+      } as never,
     });
     firstRunBanner.style.display = 'none';
     // Close immediately — no need for user to also hit X.

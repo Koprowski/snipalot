@@ -198,20 +198,40 @@ export async function runTradePipeline(
   // directly (no CLI or Node.js required on the end user's machine).
   // On any failure (no key, HTTP error, invalid JSON, timeout), fall
   // through to the response-paste window for manual paste.
-  const geminiApiKey = getConfig().trade.geminiApiKey || process.env.GEMINI_API_KEY || '';
-  let geminiSucceeded = false;
-  try {
-    geminiSucceeded = await tryGeminiApi(promptText, responsePath, geminiApiKey, onStep);
-  } catch (err) {
-    log('trade-pipeline', 'gemini-api: unexpected throw, falling back', { err: String(err) });
+  const cfg = getConfig().trade;
+  const geminiApiKey = cfg.geminiApiKey || process.env.GEMINI_API_KEY || '';
+  let autoSucceeded = false;
+  let autoLabel = 'Gemini';
+
+  // Try Gemini first (if key is set), then OpenAI/OpenRouter as fallback.
+  if (geminiApiKey) {
+    try {
+      autoSucceeded = await tryGeminiApi(promptText, responsePath, geminiApiKey, onStep);
+      autoLabel = 'Gemini';
+    } catch (err) {
+      log('trade-pipeline', 'gemini-api: unexpected throw', { err: String(err) });
+    }
   }
 
-  if (geminiSucceeded) {
-    if (onStep) onStep('Gemini extracted trades — generating trade log…');
+  if (!autoSucceeded && cfg.openaiApiKey) {
+    const baseUrl = cfg.openaiBaseUrl || 'https://openrouter.ai/api/v1';
+    const model = cfg.openaiModel || 'google/gemini-2.0-flash-exp:free';
+    autoLabel = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
+    try {
+      autoSucceeded = await tryOpenAiApi(
+        promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep
+      );
+    } catch (err) {
+      log('trade-pipeline', 'openai-api: unexpected throw', { err: String(err) });
+    }
+  }
+
+  if (autoSucceeded) {
+    if (onStep) onStep(`${autoLabel} extracted trades — generating trade log…`);
     if (Notification.isSupported()) {
       new Notification({
         title: 'Snipalot Trade · auto-extracted',
-        body: 'Gemini extracted your trades automatically. Generating trade log…',
+        body: `${autoLabel} extracted your trades automatically. Generating trade log…`,
         silent: false,
       }).show();
     }
@@ -379,6 +399,81 @@ async function tryGeminiApi(
   } catch (err) {
     clearTimeout(timer);
     log('trade-pipeline', 'gemini-api: failed', { err: String(err) });
+    return false;
+  }
+}
+
+/**
+ * Attempt auto-extraction via any OpenAI-compatible API (OpenAI, OpenRouter,
+ * or any other provider that speaks the chat completions format). Falls back
+ * to the response-paste window on any failure.
+ *
+ * OpenRouter free tier: set baseUrl=https://openrouter.ai/api/v1 and model=
+ * google/gemini-2.0-flash-exp:free — zero cost within rate limits.
+ */
+async function tryOpenAiApi(
+  promptText: string,
+  responsePath: string,
+  apiKey: string,
+  baseUrl: string,
+  model: string,
+  onStep?: (step: string) => void,
+  timeoutMs: number = 5 * 60 * 1000
+): Promise<boolean> {
+  if (!apiKey) {
+    log('trade-pipeline', 'openai-api: no API key configured, skipping');
+    return false;
+  }
+
+  const label = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
+  if (onStep) onStep(`Auto-extracting via ${label}…`);
+  log('trade-pipeline', 'openai-api: attempting auto-extraction', { baseUrl, model });
+
+  const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: promptText }],
+        temperature: 0.1,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      log('trade-pipeline', 'openai-api: HTTP error', {
+        status: res.status,
+        body: errBody.slice(0, 400),
+      });
+      return false;
+    }
+
+    const data = await res.json() as Record<string, unknown>;
+    const choices = data?.choices as Array<Record<string, unknown>> | undefined;
+    const rawText = (choices?.[0]?.message as Record<string, unknown>)?.content as string | undefined;
+
+    if (!rawText) {
+      log('trade-pipeline', 'openai-api: empty response', { data: JSON.stringify(data).slice(0, 300) });
+      return false;
+    }
+
+    parseAndValidateResponse(rawText);
+    fs.writeFileSync(responsePath, rawText, 'utf-8');
+    log('trade-pipeline', 'openai-api: auto-extraction succeeded', { chars: rawText.length });
+    return true;
+  } catch (err) {
+    clearTimeout(timer);
+    log('trade-pipeline', 'openai-api: failed', { err: String(err) });
     return false;
   }
 }

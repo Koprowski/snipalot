@@ -132,18 +132,42 @@
       <div class="section">
         <div class="section-title">Trade Mode</div>
         <p class="info">
-          After a Trade session, Snipalot can automatically send the transcript to Gemini and
-          generate your trade log CSV with no manual steps. Paste your API key below to enable it.
-          Get a free key (1,500 requests/day, no credit card) at
-          <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent)">aistudio.google.com/apikey</a>.
+          After a Trade session, Snipalot automatically sends the transcript to an LLM and
+          generates your trade log CSV with no manual steps. Add at least one API key below.
+          Gemini is tried first; OpenRouter is the fallback.
         </p>
-        <div class="field-row" style="margin-top:10px">
-          <label for="input-gemini-key">Gemini API Key</label>
+
+        <div class="field-row" style="margin-top:12px">
+          <label for="input-gemini-key">
+            Gemini API Key
+            <span class="muted" style="font-weight:400"> — <a href="https://aistudio.google.com/apikey" target="_blank" style="color:var(--accent)">aistudio.google.com/apikey</a> · free 1,500 req/day</span>
+          </label>
           <div class="input-row">
             <input type="password" id="input-gemini-key" placeholder="AIza…" spellcheck="false" autocomplete="off" style="flex:1;font-family:monospace;font-size:12px" />
-            <button class="btn" id="btn-show-key" style="min-width:60px">Show</button>
+            <button class="btn" id="btn-show-gemini-key" style="min-width:60px">Show</button>
           </div>
-          <p class="info" id="gemini-key-status" style="margin-top:4px"></p>
+        </div>
+
+        <div class="field-row" style="margin-top:12px">
+          <label for="input-openai-key">
+            OpenRouter / OpenAI API Key
+            <span class="muted" style="font-weight:400"> — <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--accent)">openrouter.ai/keys</a> · free tier available</span>
+          </label>
+          <div class="input-row">
+            <input type="password" id="input-openai-key" placeholder="sk-or-…  or  sk-…" spellcheck="false" autocomplete="off" style="flex:1;font-family:monospace;font-size:12px" />
+            <button class="btn" id="btn-show-openai-key" style="min-width:60px">Show</button>
+          </div>
+        </div>
+
+        <div class="field-row" style="margin-top:10px">
+          <label for="input-openai-base-url">API Base URL <span class="muted" style="font-weight:400">(OpenRouter or any OpenAI-compatible endpoint)</span></label>
+          <input type="text" id="input-openai-base-url" spellcheck="false" autocomplete="off" style="font-family:monospace;font-size:12px;width:100%" />
+        </div>
+
+        <div class="field-row" style="margin-top:10px">
+          <label for="input-openai-model">Model</label>
+          <input type="text" id="input-openai-model" spellcheck="false" autocomplete="off" style="font-family:monospace;font-size:12px;width:100%" />
+          <p class="info" style="margin-top:4px">OpenRouter free: <code>google/gemini-2.0-flash-exp:free</code> · OpenAI: <code>gpt-4o-mini</code></p>
         </div>
       </div>
 

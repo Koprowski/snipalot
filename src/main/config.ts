@@ -58,10 +58,30 @@ export interface SnipalotConfig {
     /**
      * Gemini API key used for automatic trade extraction after each session.
      * Obtained from https://aistudio.google.com/apikey (free tier covers
-     * 1,500 requests/day). When empty, Snipalot falls back to the
-     * response-paste window so the user can paste the JSON manually.
+     * 1,500 requests/day). When empty, Snipalot tries the OpenAI key (if
+     * set) then falls back to the response-paste window.
      */
     geminiApiKey: string;
+    /**
+     * OpenAI-compatible API key for automatic trade extraction. Works with:
+     *   - OpenAI directly (api.openai.com) — use model gpt-4o-mini
+     *   - OpenRouter (openrouter.ai/api/v1) — free tier has Gemini Flash,
+     *     Llama 3.3 70B, and others at $0. Get a key at openrouter.ai/keys.
+     * When set, used as a fallback if geminiApiKey is empty.
+     */
+    openaiApiKey: string;
+    /**
+     * Base URL for the OpenAI-compatible API. Defaults to OpenAI
+     * (https://api.openai.com/v1). Set to https://openrouter.ai/api/v1
+     * for OpenRouter, or any other OpenAI-compatible endpoint.
+     */
+    openaiBaseUrl: string;
+    /**
+     * Model to use with the OpenAI-compatible API.
+     * OpenRouter free: "google/gemini-2.0-flash-exp:free" or "meta-llama/llama-3.3-70b-instruct:free"
+     * OpenAI: "gpt-4o-mini"
+     */
+    openaiModel: string;
   };
   launcher: {
     /**
@@ -140,6 +160,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   trade: {
     autoPromptForTradeData: true,
     geminiApiKey: '',
+    openaiApiKey: '',
+    openaiBaseUrl: 'https://openrouter.ai/api/v1',
+    openaiModel: 'google/gemini-2.0-flash-exp:free',
   },
   launcher: {
     pinnedOnTop: false,

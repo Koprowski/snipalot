@@ -10,7 +10,15 @@ contextBridge.exposeInMainWorld('snipalotHud', {
   enterAnnotation: () => ipcRenderer.invoke('hud:enter-annotation'),
   snap: () => ipcRenderer.invoke('hud:snap'),
   onState: (
-    cb: (payload: { startedAt: number; paused: boolean; totalPausedMs: number }) => void
+    cb: (payload: {
+      startedAt: number;
+      paused: boolean;
+      totalPausedMs: number;
+      annotateHotkey?: string;
+      snapshotHotkey?: string;
+      pauseResumeHotkey?: string;
+      tradeMarkerHotkey?: string;
+    }) => void
   ) => ipcRenderer.on('hud:state', (_evt, payload) => cb(payload)),
   /**
    * Fires when the overlay enters / exits annotation mode. Lets the HUD

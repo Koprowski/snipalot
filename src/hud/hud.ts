@@ -21,6 +21,10 @@ let startedAt: number | null = null;
 let paused = false;
 let totalPausedMs = 0;
 let tickHandle: number | null = null;
+let annotateHotkey = 'Ctrl+Shift+A';
+let snapshotHotkey = 'Ctrl+Shift+P';
+let pauseResumeHotkey = 'Ctrl+Shift+B';
+let annotationActive = false;
 
 function format(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -40,6 +44,14 @@ function render(): void {
   recLabelEl.classList.toggle('paused', paused);
   recLabelEl.textContent = paused ? 'PAUSED' : 'REC';
   btnPauseEl.textContent = paused ? '▶' : '⏸';
+}
+
+function renderTooltips(): void {
+  btnAnnotateEl.title = annotationActive
+    ? `Exit annotation (${annotateHotkey})`
+    : `Annotate (${annotateHotkey})`;
+  btnSnapEl.title = `Snapshot / close chapter (${snapshotHotkey})`;
+  btnPauseEl.title = `Pause / resume (${pauseResumeHotkey})`;
 }
 
 function startTicker(): void {
@@ -82,7 +94,11 @@ window.snipalotHud.onState((payload) => {
   startedAt = payload.startedAt;
   paused = payload.paused;
   totalPausedMs = payload.totalPausedMs;
+  annotateHotkey = payload.annotateHotkey || annotateHotkey;
+  snapshotHotkey = payload.snapshotHotkey || snapshotHotkey;
+  pauseResumeHotkey = payload.pauseResumeHotkey || pauseResumeHotkey;
   render();
+  renderTooltips();
   startTicker();
 });
 
@@ -90,10 +106,10 @@ window.snipalotHud.onState((payload) => {
 // a visible toggle cue. Tooltip switches to "Exit annotation" so the
 // affordance reads correctly when the button is already lit.
 window.snipalotHud.onAnnotationState((payload) => {
+  annotationActive = payload.active;
   btnAnnotateEl.classList.toggle('active', payload.active);
-  btnAnnotateEl.title = payload.active
-    ? 'Exit annotation (Ctrl+Shift+A)'
-    : 'Annotate (Ctrl+Shift+A)';
+  renderTooltips();
 });
 
 render();
+renderTooltips();

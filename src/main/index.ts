@@ -859,7 +859,6 @@ let pendingTradeContext: {
   recordingStartedAtMs: number;
   durationMs: number;
 } | null = null;
-let tradeContextKeepOnTopInterval: NodeJS.Timeout | null = null;
 function openAnnotator(): void {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) {
     annotatorWindow.focus();
@@ -1063,10 +1062,6 @@ function openTradeContextWindow(
         log('trade-context', 'sentinel write fail on close', { err: (err as Error).message });
       }
       pendingTradeContext = null;
-    }
-    if (tradeContextKeepOnTopInterval) {
-      clearInterval(tradeContextKeepOnTopInterval);
-      tradeContextKeepOnTopInterval = null;
     }
     tradeContextWindow = null;
   });
@@ -2382,10 +2377,15 @@ function notifyHud(channel: string, payload?: unknown): void {
 }
 
 function broadcastRecordingState(): void {
+  const hotkeys = getConfig().hotkeys;
   notifyHud('hud:state', {
     startedAt: recordingStartedAt ?? Date.now(),
     paused: recordingPaused,
     totalPausedMs,
+    annotateHotkey: hotkeys.annotate,
+    snapshotHotkey: hotkeys.snapshot,
+    pauseResumeHotkey: hotkeys.pauseResume,
+    tradeMarkerHotkey: hotkeys.tradeMarker,
   });
 }
 
@@ -2639,10 +2639,6 @@ function abandonProcessing(reason: string): boolean {
   run.abandoned = true;
   run.abortController.abort();
 
-  if (tradeContextKeepOnTopInterval) {
-    clearInterval(tradeContextKeepOnTopInterval);
-    tradeContextKeepOnTopInterval = null;
-  }
   if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
   if (responsePasteWindow && !responsePasteWindow.isDestroyed()) responsePasteWindow.close();
   pendingTradeContext = null;

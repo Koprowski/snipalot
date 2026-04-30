@@ -1019,6 +1019,7 @@ canvas.addEventListener('mouseup', (e) => {
   }
 
   if (dragMode === 'draw') {
+    let createdAnnotation = false;
     if ((currentShape === 'rect' || currentShape === 'circle' || currentShape === 'oval') && currentRect) {
       const r = currentRect;
       if (r.w > 4 && r.h > 4) {
@@ -1035,6 +1036,7 @@ canvas.addEventListener('mouseup', (e) => {
         selectedIndex = annotations.length - 1;
         nextNumber += 1;
         pushAnnotationSync();
+        createdAnnotation = true;
       } else {
         deselect();
       }
@@ -1054,6 +1056,7 @@ canvas.addEventListener('mouseup', (e) => {
         selectedIndex = annotations.length - 1;
         nextNumber += 1;
         pushAnnotationSync();
+        createdAnnotation = true;
       } else {
         deselect();
       }
@@ -1063,6 +1066,7 @@ canvas.addEventListener('mouseup', (e) => {
     dragStart = null;
     dragMode = 'none';
     redraw();
+    if (createdAnnotation) void exitAnnotationMode();
     return;
   }
 
@@ -1155,12 +1159,14 @@ function hideTextInput(): void {
 function commitTextInput(): void {
   if (!textInputAt) return;
   const text = textInputEl.value.trim();
+  let committedTextAnnotation = false;
   if (editingTextIndex !== null) {
     // Editing an existing text annotation: update text in place.
     const existing = annotations[editingTextIndex];
     if (existing && existing.shape === 'text') {
       if (text) {
         annotations[editingTextIndex] = { ...existing, text };
+        committedTextAnnotation = true;
       } else {
         // Empty text deletes the annotation and renumbers.
         annotations.splice(editingTextIndex, 1);
@@ -1186,9 +1192,11 @@ function commitTextInput(): void {
     selectedIndex = annotations.length - 1;
     nextNumber += 1;
     pushAnnotationSync();
+    committedTextAnnotation = true;
   }
   hideTextInput();
   redraw();
+  if (committedTextAnnotation) void exitAnnotationMode();
 }
 
 textInputEl.addEventListener('keydown', (e) => {

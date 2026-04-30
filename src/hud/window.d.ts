@@ -9,7 +9,15 @@ interface Window {
     enterAnnotation: () => Promise<void>;
     snap: () => Promise<void>;
     onState: (
-      cb: (payload: { startedAt: number; paused: boolean; totalPausedMs: number }) => void
+      cb: (payload: {
+        startedAt: number;
+        paused: boolean;
+        totalPausedMs: number;
+        annotateHotkey?: string;
+        snapshotHotkey?: string;
+        pauseResumeHotkey?: string;
+        tradeMarkerHotkey?: string;
+      }) => void
     ) => void;
     onAnnotationState: (cb: (payload: { active: boolean }) => void) => void;
   };

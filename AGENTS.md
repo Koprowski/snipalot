@@ -75,6 +75,9 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Window topmost policy clarified (local branch):**
   - The main launcher window (Record / Screenshot / Trade) should always behave like a normal desktop window. The old launcher pin/topmost behavior is disabled and hidden, and startup forces launcher `alwaysOnTop=false` even if an older config has `launcher.pinnedOnTop=true`.
   - The recording HUD remains intentionally topmost at `screen-saver` level while recording, with the existing keep-on-top interval, because it is the user's stop/pause/snapshot/annotation control surface.
+- **HUD shortcut tooltip + one-shot annotations (local branch):**
+  - The HUD snapshot camera tooltip now uses the configured `snapshot` hotkey from main state (default `Ctrl+Shift+P`) instead of a hardcoded description, and pause/annotate tooltips also track configured hotkeys.
+  - Completed annotations are now one-shot: after a valid shape/line/text annotation is committed, the overlay exits annotation mode and becomes click-through while leaving the annotation visible until clear/snapshot behavior removes it.
 - **Gemini CLI settings-test fallback + diagnostics (local branch):**
  - `settings:test-llm-connection` now retries the prompt probe with a positional prompt when Gemini returns the known "`--prompt` + positional" parser conflict, preventing false negatives from runtime argv quirks.
  - Added structured, non-secret `settings` logs for each Gemini test stage (launch/version/prompt/fallback success/failure) with sanitized stderr tails for faster root-cause support.

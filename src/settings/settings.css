@@ -454,6 +454,19 @@ body {
   color: #facc15;
 }
 
+.about-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.about-version {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* ── first-run banner ── */
 
 .first-run-banner {

@@ -1478,6 +1478,10 @@ async function testGeminiCliConnection(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+    // Resolver returns process.execPath as the spawn binary so we bypass
+    // the .cmd shim's EINVAL on Node 22+. Inside Electron, process.execPath
+    // is electron.exe — it only behaves like Node when this env var is set.
+    ELECTRON_RUN_AS_NODE: '1',
   };
   delete env.GEMINI_API_KEY;
   const runGemini = (
@@ -1689,6 +1693,8 @@ async function listGeminiCliModelsWithCache(command: string): Promise<GeminiCliM
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+      // electron.exe spawned with this flag behaves like node.exe.
+      ELECTRON_RUN_AS_NODE: '1',
     };
     delete env.GEMINI_API_KEY;
     const runModelsCmd = (args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> =>
@@ -1899,6 +1905,11 @@ ipcMain.handle(
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+      // Resolver returns process.execPath (electron.exe in our context).
+      // Without this flag, electron.exe ignores the JS arg and opens an
+      // empty Electron window instead of running the script — browser
+      // never opens, OAuth flow never starts.
+      ELECTRON_RUN_AS_NODE: '1',
     };
     delete env.GEMINI_API_KEY;
 

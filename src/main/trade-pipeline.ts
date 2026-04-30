@@ -346,6 +346,9 @@ async function tryGeminiCli(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+    // electron.exe (process.execPath under Electron) needs this to behave
+    // as a Node runtime when running the gemini-cli JS bundle.
+    ELECTRON_RUN_AS_NODE: '1',
   };
   delete env.GEMINI_API_KEY;
   const result = await new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {

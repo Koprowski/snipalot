@@ -36,6 +36,7 @@ let currentProcessingStep: string | null = null;
 let currentProcessingProgress:
   | { pct: number; etaSec: number; elapsedSec: number }
   | null = null;
+let currentCanAbandonProcessing = false;
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
 // idle hint always reflects the current binding (default: Ctrl+Shift+S).
 let currentStartStopHotkey = 'Ctrl+Shift+S';
@@ -71,13 +72,18 @@ function renderLauncherImpl(): void {
   labelEl.classList.toggle('processing', currentState === 'processing');
   btnPrimaryEl.classList.toggle('selecting', isSelectingRecord);
   btnPrimaryEl.classList.toggle('processing', currentState === 'processing');
+  btnPrimaryEl.classList.toggle(
+    'processing-abandon',
+    currentState === 'processing' && currentCanAbandonProcessing
+  );
   btnScreenshotEl.classList.toggle('selecting', isSelectingScreenshot);
   btnTradeEl.classList.toggle('selecting', isSelectingTrade);
 
   // Disable the off-action buttons while another mode is mid-flight so the
   // user can't accidentally start a different mode partway through.
   btnPrimaryEl.disabled =
-    currentState === 'processing' || isSelectingScreenshot || isSelectingTrade || isTrading;
+    (currentState === 'processing' && !currentCanAbandonProcessing) ||
+    isSelectingScreenshot || isSelectingTrade || isTrading;
   btnScreenshotEl.disabled =
     currentState === 'processing' || isSelectingRecord || isSelectingTrade || isRecording;
   btnTradeEl.disabled =
@@ -118,12 +124,15 @@ function renderLauncherImpl(): void {
       ? `Trade session live · ${currentTradeMarkerHotkey} marks a trade · stop via HUD`
       : 'Use the HUD to pause, annotate, or stop';
   } else if (currentState === 'processing') {
-    btnPrimaryLabelEl.textContent = 'Processing…';
+    btnPrimaryLabelEl.textContent = currentCanAbandonProcessing ? 'Abandon' : 'Processing…';
     btnScreenshotLabelEl.textContent = 'Screenshot';
     btnTradeLabelEl.textContent = 'Trade';
     hintEl.textContent = currentProcessingStep
       ? currentProcessingStep
       : 'Saving recording, transcribing, and generating prompt…';
+    btnPrimaryEl.title = currentCanAbandonProcessing
+      ? 'Abandon this processing run and clear its session folder (recording.mp4 is kept)'
+      : 'Processing…';
   }
 
   // Progress bar visibility + fill: shown only during 'processing' state
@@ -163,6 +172,8 @@ btnPrimaryEl.addEventListener('click', () => {
     window.snipalotLauncher.record();
   } else if (currentState === 'selecting') {
     window.snipalotLauncher.cancel();
+  } else if (currentState === 'processing' && currentCanAbandonProcessing) {
+    void window.snipalotLauncher.abandonProcessing();
   }
   // recording state: button is a no-op here; use HUD
 });
@@ -263,6 +274,7 @@ window.snipalotLauncher.onState((state) => {
   if (state.startTradeHotkey) currentStartTradeHotkey = state.startTradeHotkey;
   if (state.tradeMarkerHotkey) currentTradeMarkerHotkey = state.tradeMarkerHotkey;
   if (state.sessionMode) currentSessionMode = state.sessionMode;
+  currentCanAbandonProcessing = state.canAbandonProcessing ?? false;
   currentProcessingProgress = state.processingProgress ?? null;
   renderLauncherImpl();
 });

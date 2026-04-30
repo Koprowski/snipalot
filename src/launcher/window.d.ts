@@ -6,6 +6,7 @@ interface Window {
     screenshot: () => Promise<void>;
     trade: () => Promise<void>;
     cancel: () => Promise<void>;
+    abandonProcessing: () => Promise<boolean>;
     quit: () => Promise<void>;
     closeToTray: () => Promise<void>;
     togglePin: () => Promise<boolean>;
@@ -33,6 +34,7 @@ interface Window {
         startTradeHotkey?: string;
         tradeMarkerHotkey?: string;
         sessionMode?: 'record' | 'trade';
+        canAbandonProcessing?: boolean;
         processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;
       }) => void
     ) => void;

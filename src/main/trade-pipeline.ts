@@ -52,6 +52,9 @@ export interface TradeEvent {
   post_confidence: 'low' | 'medium' | 'high' | null;
   needs_review: boolean;
   notes: string | null;
+  leg_index?: number | null;
+  leg_count?: number | null;
+  position_fraction?: number | null;
   // ── Optional Padre/MockApe outcome fields (filled by joinMockApe) ──
   /** Matched MockApe trade id for traceability. */
   mockape_trade_id?: string | null;
@@ -95,6 +98,7 @@ export interface TradePipelineInput {
    * window layer.
    */
   onPromptReady?: (sessionDir: string, responsePath: string, promptPath: string) => void;
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -133,6 +137,12 @@ export interface TradePipelineResult {
   warnings: string[];
 }
 
+function throwIfAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    throw new Error('Processing abandoned.');
+  }
+}
+
 /**
  * Trade-pipeline entry point. Called by `runPipeline()` after whisper
  * succeeds when `input.mode === 'trade'`. Body is a no-op in M1; real
@@ -143,6 +153,8 @@ export async function runTradePipeline(
 ): Promise<TradePipelineResult> {
   const { sessionDir, transcriptSegments, tradeMarkers, onStep } = input;
   const warnings: string[] = [];
+  const abortSignal = input.abortSignal;
+  throwIfAborted(abortSignal);
 
   log('trade-pipeline', 'invoked', {
     sessionDir,
@@ -176,7 +188,7 @@ export async function runTradePipeline(
   //    If autoPromptForTradeData is off, main writes the .skipped
   //    sentinel directly — wait returns immediately. ──
   if (onStep) onStep('Waiting for trade-context decision…');
-  await waitForTradeContextDecision(sessionDir);
+  await waitForTradeContextDecision(sessionDir, undefined, abortSignal);
 
   // Load the MockApe data NOW (before rendering the prompt) so the
   // prompt template can embed it as canonical trade context.
@@ -187,6 +199,7 @@ export async function runTradePipeline(
 
   // ── M4: write the extraction prompt + wait for the user's LLM response ──
   if (onStep) onStep('Writing trade extraction prompt…');
+  throwIfAborted(abortSignal);
   const promptText = renderExtractionPrompt(
     transcriptSegments,
     tradeMarkers,
@@ -207,10 +220,27 @@ export async function runTradePipeline(
     const cliCommand = (cfg.geminiCliCommand || 'gemini').trim();
     const cliModel = (cfg.geminiCliModel || 'gemini-2.5-flash').trim();
     try {
-      autoSucceeded = await tryGeminiCli(promptText, responsePath, cliCommand, cliModel, onStep);
+      autoSucceeded = await tryGeminiCli(promptText, responsePath, cliCommand, cliModel, onStep, undefined, abortSignal);
       autoLabel = 'Gemini CLI';
     } catch (err) {
       log('trade-pipeline', 'gemini-cli: unexpected throw', { err: String(err) });
+    }
+    if (!autoSucceeded && cfg.openaiApiKey) {
+      const baseUrl = cfg.openaiBaseUrl || 'https://openrouter.ai/api/v1';
+      const model = cfg.openaiModel || 'google/gemini-2.5-flash';
+      autoLabel = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
+      if (onStep) onStep(`Gemini CLI unavailable; trying ${autoLabel} fallback...`);
+      log('trade-pipeline', 'gemini-cli failed; attempting api fallback', {
+        baseUrl,
+        model,
+      });
+      try {
+        autoSucceeded = await tryOpenAiApi(
+          promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep, undefined, abortSignal
+        );
+      } catch (err) {
+        log('trade-pipeline', 'openai-api fallback: unexpected throw', { err: String(err) });
+      }
     }
   } else {
     // API mode: OpenAI-compatible endpoint (OpenRouter/OpenAI/etc).
@@ -220,7 +250,7 @@ export async function runTradePipeline(
       autoLabel = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
       try {
         autoSucceeded = await tryOpenAiApi(
-          promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep
+          promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep, undefined, abortSignal
         );
       } catch (err) {
         log('trade-pipeline', 'openai-api: unexpected throw', { err: String(err) });
@@ -247,7 +277,27 @@ export async function runTradePipeline(
     if (onStep) onStep('Waiting for LLM response (paste into the response window)…');
   }
 
-  const trades = await waitForExtractionResponse(responsePath);
+  if (!autoSucceeded) {
+    void finalizeTradeOutputsFromResponsePath(
+      responsePath,
+      sessionDir,
+      mockape,
+      input.startedAtMs,
+      abortSignal
+    ).catch((err) => {
+      log('trade-pipeline', 'background finalize failed', { err: String(err), responsePath });
+    });
+    return {
+      extractionPromptPath: promptPath,
+      extractionResponsePath: null,
+      tradeLogCsvPath: null,
+      tradeLogMdPath: null,
+      adherenceReportPath: null,
+      warnings,
+    };
+  }
+
+  const trades = await waitForExtractionResponse(responsePath, undefined, abortSignal);
 
   if (!trades) {
     warnings.push(
@@ -332,9 +382,11 @@ async function tryGeminiCli(
   cliCommand: string,
   model: string,
   onStep?: (step: string) => void,
-  timeoutMs: number = 5 * 60 * 1000
+  timeoutMs: number = 5 * 60 * 1000,
+  abortSignal?: AbortSignal
 ): Promise<boolean> {
   if (!cliCommand) return false;
+  throwIfAborted(abortSignal);
   if (onStep) onStep('Auto-extracting via Gemini CLI…');
   log('trade-pipeline', 'gemini-cli: attempting auto-extraction', { cliCommand, model });
 
@@ -359,6 +411,7 @@ async function tryGeminiCli(
     attempt: 'prompt-flag' | 'prompt-positional'
   ): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> =>
     new Promise((resolve) => {
+      throwIfAborted(abortSignal);
       let stdout = '';
       let stderr = '';
       let timedOut = false;
@@ -382,13 +435,24 @@ async function tryGeminiCli(
         timedOut = true;
         child.kill();
       }, timeoutMs);
+      const onAbort = () => {
+        timedOut = true;
+        try {
+          child.kill();
+        } catch {
+          /* ignore */
+        }
+      };
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
       child.stdout?.on('data', (d) => { stdout += d.toString(); });
       child.stderr?.on('data', (d) => { stderr += d.toString(); });
       child.on('close', (code) => {
+        abortSignal?.removeEventListener('abort', onAbort);
         clearTimeout(timer);
         resolve({ code, stdout, stderr, timedOut });
       });
       child.on('error', (err) => {
+        abortSignal?.removeEventListener('abort', onAbort);
         clearTimeout(timer);
         log('trade-pipeline', 'gemini-cli: process error', { attempt, err: err.message });
         resolve({ code: -1, stdout, stderr, timedOut });
@@ -414,9 +478,11 @@ async function tryGeminiCli(
   }
 
   if (result.timedOut) {
+    throwIfAborted(abortSignal);
     log('trade-pipeline', 'gemini-cli: timeout', { timeoutMs, fallback });
     return false;
   }
+  throwIfAborted(abortSignal);
   if (result.code !== 0) {
     log('trade-pipeline', 'gemini-cli: non-zero exit', {
       code: result.code,
@@ -478,12 +544,14 @@ async function tryOpenAiApi(
   baseUrl: string,
   model: string,
   onStep?: (step: string) => void,
-  timeoutMs: number = 5 * 60 * 1000
+  timeoutMs: number = 5 * 60 * 1000,
+  abortSignal?: AbortSignal
 ): Promise<boolean> {
   if (!apiKey) {
     log('trade-pipeline', 'openai-api: no API key configured, skipping');
     return false;
   }
+  throwIfAborted(abortSignal);
 
   const label = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
   if (onStep) onStep(`Auto-extracting via ${label}…`);
@@ -492,6 +560,8 @@ async function tryOpenAiApi(
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  abortSignal?.addEventListener('abort', onAbort, { once: true });
 
   try {
     const res = await fetch(url, {
@@ -508,6 +578,7 @@ async function tryOpenAiApi(
       signal: controller.signal,
     });
     clearTimeout(timer);
+    abortSignal?.removeEventListener('abort', onAbort);
 
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -528,11 +599,14 @@ async function tryOpenAiApi(
     }
 
     parseAndValidateResponse(rawText);
+    throwIfAborted(abortSignal);
     fs.writeFileSync(responsePath, rawText, 'utf-8');
     log('trade-pipeline', 'openai-api: auto-extraction succeeded', { chars: rawText.length });
     return true;
   } catch (err) {
     clearTimeout(timer);
+    abortSignal?.removeEventListener('abort', onAbort);
+    throwIfAborted(abortSignal);
     log('trade-pipeline', 'openai-api: failed', { err: String(err) });
     return false;
   }
@@ -567,12 +641,14 @@ function formatOffset(ms: number): string {
 async function waitForTradeContextDecision(
   sessionDir: string,
   /** Shorter default so a dismissed/hidden trade window does not block the pipeline for 30 min. */
-  timeoutMs: number = 3 * 60 * 1000
+  timeoutMs: number = 3 * 60 * 1000,
+  abortSignal?: AbortSignal
 ): Promise<void> {
   const dataPath = path.join(sessionDir, 'mockape.json');
   const skipPath = path.join(sessionDir, 'mockape.json.skipped');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    throwIfAborted(abortSignal);
     if (fs.existsSync(dataPath) || fs.existsSync(skipPath)) {
       log('trade-pipeline', 'trade-context decision detected', {
         hasData: fs.existsSync(dataPath),
@@ -582,6 +658,7 @@ async function waitForTradeContextDecision(
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+  throwIfAborted(abortSignal);
   log('trade-pipeline', 'trade-context wait timed out — proceeding without trade data');
 }
 
@@ -696,6 +773,9 @@ Use null for any field the transcript / data genuinely doesn't speak to.
     "trade_id": <SEQUENTIAL_INT_STARTING_AT_1>,
     "token_name": "<TOKEN_NAME_FROM_MOCKAPE_LIST_ABOVE>",
     "mockape_trade_id": ${hasMockape ? '"<EXACT_TRADE_ID_FROM_MOCKAPE_LIST_ABOVE>"' : 'null'},
+    "leg_index": <INT_OR_NULL>,
+    "leg_count": <INT_OR_NULL>,
+    "position_fraction": <NUMBER_0_TO_1_OR_NULL>,
     "pre_call_offset_label": "<M:SS_OF_PRE_CALLOUT_OR_NULL>",
     "pre_call_offset_ms": <SAME_AS_LABEL_IN_MS_OR_NULL>,
     "post_call_offset_label": "<M:SS_OF_POST_CALLOUT_OR_NULL>",
@@ -758,6 +838,16 @@ Rules:
   SAME trade, not separate trades. post_transcript_excerpt should
   combine the partial-exit statements ("selling half now [...] all
   out at 4k") so the trader's full exit narrative is preserved.
+- If the transcript clearly indicates scaling ("half in", "sold half",
+  "trimmed", "took partials", "all out"), you MAY output multiple rows
+  for the same mockape_trade_id instead of flattening everything into one
+  round-trip row.
+- Use leg_index, leg_count, and position_fraction on scaled rows when the
+  transcript makes those details explicit or strongly inferable.
+- If the trader's single spoken exit market cap would imply breakeven but
+  MockApe shows meaningful profit or loss, treat that mismatch as a clue
+  to go back through the transcript and look for partial exits or entries
+  that explain the aggregate P&L.
 
 - **Output ONLY the JSON array.** No prose before or after, no markdown
   code fences, no commentary. The receiving tool parses your output
@@ -882,11 +972,13 @@ The polling timeout is 60 minutes from the moment the recording stopped.
  */
 async function waitForExtractionResponse(
   responsePath: string,
-  timeoutMs: number = 60 * 60 * 1000
+  timeoutMs: number = 60 * 60 * 1000,
+  abortSignal?: AbortSignal
 ): Promise<TradeEvent[] | null> {
   const deadline = Date.now() + timeoutMs;
   const pollInterval = 2000;
   while (Date.now() < deadline) {
+    throwIfAborted(abortSignal);
     if (fs.existsSync(responsePath)) {
       try {
         const raw = fs.readFileSync(responsePath, 'utf-8');
@@ -914,8 +1006,34 @@ async function waitForExtractionResponse(
     }
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
   }
+  throwIfAborted(abortSignal);
   log('trade-pipeline', 'extraction_response.json timeout', { responsePath });
   return null;
+}
+
+async function finalizeTradeOutputsFromResponsePath(
+  responsePath: string,
+  sessionDir: string,
+  mockape: MockApeTrade[] | null,
+  startedAtMs: number,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  const trades = await waitForExtractionResponse(responsePath, undefined, abortSignal);
+  if (!trades) return;
+  throwIfAborted(abortSignal);
+  if (mockape) {
+    joinMockApeById(trades, mockape);
+    const unjoined = trades.filter((t) => !t.mockape_trade_id);
+    if (unjoined.length > 0) {
+      const fuzzy = joinMockApe(unjoined, mockape, startedAtMs);
+      log('trade-pipeline', 'mockape fuzzy fallback applied', fuzzy);
+    }
+  }
+  throwIfAborted(abortSignal);
+  writeTradeLogCsv(sessionDir, trades);
+  writeTradeLogMd(sessionDir, trades);
+  writeAdherenceReport(sessionDir, trades);
+  log('trade-pipeline', 'background finalize complete', { sessionDir, trades: trades.length });
 }
 
 /**
@@ -960,6 +1078,9 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
       post_confidence: confOrNull(e.post_confidence),
       needs_review: typeof e.needs_review === 'boolean' ? e.needs_review : false,
       notes: strOrNull(e.notes),
+      leg_index: numOrNull(e.leg_index),
+      leg_count: numOrNull(e.leg_count),
+      position_fraction: numOrNull(e.position_fraction),
       // LLM-provided alignment to the MockApe canonical trade list.
       // When present, joinMockApeById short-circuits the fuzzy matcher
       // and just enriches with PnL from the matching trade.
@@ -1000,6 +1121,9 @@ function writeTradeLogCsv(sessionDir: string, trades: TradeEvent[]): string {
     return {
       trade_id: t.trade_id,
       token_name: t.token_name,
+      leg_index: t.leg_index ?? '',
+      leg_count: t.leg_count ?? '',
+      position_fraction: t.position_fraction ?? '',
       pre_call_timestamp: t.pre_call_offset_label ?? '',
       post_call_timestamp: t.post_call_offset_label ?? '',
       target_low_mc: t.target_low_mc ?? '',
@@ -1288,18 +1412,32 @@ function joinMockApeById(
   const byId = new Map(mockape.map((m) => [m.id, m]));
   let matched = 0;
   let unmatched = 0;
+  const groups = new Map<string, TradeEvent[]>();
   for (const trade of trades) {
     if (!trade.mockape_trade_id) {
       unmatched++;
       continue;
     }
-    const m = byId.get(trade.mockape_trade_id);
+    const bucket = groups.get(trade.mockape_trade_id) ?? [];
+    bucket.push(trade);
+    groups.set(trade.mockape_trade_id, bucket);
+  }
+  for (const [tradeId, group] of groups.entries()) {
+    const m = byId.get(tradeId);
     if (!m) {
-      unmatched++;
+      unmatched += group.length;
       continue;
     }
-    enrichTradeFromMockape(trade, m, 'high');
-    matched++;
+    if (group.length === 1) {
+      enrichTradeFromMockape(group[0], m, 'high');
+      matched++;
+      continue;
+    }
+    const normalizedShares = normalizeTradeShares(group);
+    for (let i = 0; i < group.length; i++) {
+      enrichTradeFromMockape(group[i], m, 'high', normalizedShares[i]);
+      matched++;
+    }
   }
   return { matched, unmatched };
 }
@@ -1308,15 +1446,16 @@ function joinMockApeById(
 function enrichTradeFromMockape(
   trade: TradeEvent,
   m: MockApeTrade,
-  confidence: 'high' | 'medium' | 'low'
+  confidence: 'high' | 'medium' | 'low',
+  share: number = 1
 ): void {
   trade.mockape_trade_id = m.id;
   trade.mockape_join_confidence = confidence;
   trade.entry_mc_actual = m.entryMarketCap;
   trade.exit_mc_actual = m.exitMarketCap;
-  trade.sol_invested = m.solInvested;
-  trade.sol_received = m.solReceived;
-  trade.pnl_sol = m.pnlSol;
+  trade.sol_invested = roundTo(m.solInvested * share, 6);
+  trade.sol_received = roundTo(m.solReceived * share, 6);
+  trade.pnl_sol = roundTo(m.pnlSol * share, 6);
   trade.pnl_percentage = m.pnlPercentage;
   if (trade.target_low_mc !== null && trade.target_high_mc !== null) {
     const exit = m.exitMarketCap;
@@ -1327,6 +1466,22 @@ function enrichTradeFromMockape(
       exit > trade.target_high_mc ? 'overshoot' :
       'in_range';
   }
+}
+
+function normalizeTradeShares(trades: TradeEvent[]): number[] {
+  const positiveFractions: Array<number | null> = trades.map((t) =>
+    typeof t.position_fraction === 'number' && t.position_fraction > 0 ? t.position_fraction : null
+  );
+  const fractionTotal = positiveFractions.reduce<number>((sum, v) => sum + (v ?? 0), 0);
+  if (fractionTotal > 0) {
+    return positiveFractions.map((v) => (v ?? 0) / fractionTotal);
+  }
+  return trades.map(() => 1 / trades.length);
+}
+
+function roundTo(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
 }
 
 /**

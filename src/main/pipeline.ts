@@ -136,6 +136,8 @@ export interface PipelineInput {
    * pipeline falls back to the disk-poll-only path.
    */
   onTradePromptReady?: (sessionDir: string, responsePath: string, promptPath: string) => void;
+  /** Cancellation signal for an in-flight processing run. */
+  abortSignal?: AbortSignal;
 }
 
 export interface PipelineResult {
@@ -165,8 +167,15 @@ function ensureDir(dir: string): void {
 
 // ─── ffmpeg helpers ──────────────────────────────────────────────────
 
-function runFfmpeg(args: string[], label: string): Promise<void> {
+function throwIfAborted(abortSignal?: AbortSignal): void {
+  if (abortSignal?.aborted) {
+    throw new Error('Processing abandoned.');
+  }
+}
+
+function runFfmpeg(args: string[], label: string, abortSignal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
+    throwIfAborted(abortSignal);
     if (!ffmpegPathRaw) {
       reject(new Error('ffmpeg-static did not resolve a binary path'));
       return;
@@ -174,11 +183,21 @@ function runFfmpeg(args: string[], label: string): Promise<void> {
     log('ffmpeg', label, { args });
     const proc = spawn(ffmpegPathRaw, args, { windowsHide: true });
     let stderr = '';
+    const onAbort = () => {
+      try {
+        proc.kill();
+      } catch {
+        /* ignore */
+      }
+      reject(new Error('Processing abandoned.'));
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
     proc.stderr.on('data', (d) => {
       stderr += d.toString();
     });
     proc.on('error', reject);
     proc.on('exit', (code) => {
+      abortSignal?.removeEventListener('abort', onAbort);
       if (code === 0) {
         resolve();
       } else {
@@ -188,7 +207,7 @@ function runFfmpeg(args: string[], label: string): Promise<void> {
   });
 }
 
-async function webmToMp4(webmPath: string, mp4Path: string): Promise<void> {
+async function webmToMp4(webmPath: string, mp4Path: string, abortSignal?: AbortSignal): Promise<void> {
   // Force CFR 30fps. MediaRecorder emits variable-timestamp webm (timestamps
   // follow wall-clock when chunks finalize, not a clean 30fps cadence).
   // Downstream filters like fps=1 misbehave on VFR input — they either
@@ -224,11 +243,12 @@ async function webmToMp4(webmPath: string, mp4Path: string): Promise<void> {
       '-movflags', '+faststart',
       mp4Path,
     ],
-    'webm→mp4 (CFR 30fps, ≤1080p)'
+    'webm→mp4 (CFR 30fps, ≤1080p)',
+    abortSignal
   );
 }
 
-async function webmToWav(webmPath: string, wavPath: string): Promise<void> {
+async function webmToWav(webmPath: string, wavPath: string, abortSignal?: AbortSignal): Promise<void> {
   // Audio-only extraction directly from webm. Used to feed whisper without
   // waiting on the (slower) video transcode step. The Opus → PCM pass is
   // <1s on a 7-min recording, so this lets whisper kick off almost
@@ -244,14 +264,16 @@ async function webmToWav(webmPath: string, wavPath: string): Promise<void> {
       '-c:a', 'pcm_s16le',
       wavPath,
     ],
-    'webm→wav (16kHz mono, audio-only)'
+    'webm→wav (16kHz mono, audio-only)',
+    abortSignal
   );
 }
 
 async function mp4ToGif(
   mp4Path: string,
   gifPath: string,
-  outputRoot: string
+  outputRoot: string,
+  abortSignal?: AbortSignal
 ): Promise<void> {
   // 12x time-lapse GIF with original-time timecode burned in.
   //
@@ -288,7 +310,8 @@ async function mp4ToGif(
   try {
     await runFfmpeg(
       ['-y', '-i', mp4Path, '-filter_complex', filter, gifPath],
-      'mp4→gif (12x speedup, palette 2-pass)'
+      'mp4→gif (12x speedup, palette 2-pass)',
+      abortSignal
     );
   } finally {
     try {
@@ -302,7 +325,8 @@ async function mp4ToGif(
 async function extractFrameAt(
   mp4Path: string,
   framePath: string,
-  atMs: number
+  atMs: number,
+  abortSignal?: AbortSignal
 ): Promise<void> {
   // Extract a single frame at a specific timestamp. `-ss` before `-i` uses
   // fast (keyframe-aligned) seek; that's accurate enough for our purposes
@@ -317,7 +341,8 @@ async function extractFrameAt(
       '-q:v', '2',
       framePath,
     ],
-    `frame at ${seekSec}s`
+    `frame at ${seekSec}s`,
+    abortSignal
   );
 }
 
@@ -330,7 +355,8 @@ async function extractFrameAt(
 async function extractFrameAtAccurate(
   mp4Path: string,
   framePath: string,
-  atMs: number
+  atMs: number,
+  abortSignal?: AbortSignal
 ): Promise<void> {
   const seekSec = Math.max(0, atMs / 1000).toFixed(3);
   await runFfmpeg(
@@ -342,7 +368,8 @@ async function extractFrameAtAccurate(
       '-q:v', '2',
       framePath,
     ],
-    `frame at ${seekSec}s (accurate)`
+    `frame at ${seekSec}s (accurate)`,
+    abortSignal
   );
 }
 
@@ -437,9 +464,11 @@ function runWhisper(
   exe: string,
   modelPath: string,
   wavPath: string,
-  outPrefix: string
+  outPrefix: string,
+  abortSignal?: AbortSignal
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    throwIfAborted(abortSignal);
     const args = [
       '-m', modelPath,
       '-f', wavPath,
@@ -450,6 +479,15 @@ function runWhisper(
     log('whisper', 'spawn', { exe, args });
     const proc = spawn(exe, args, { windowsHide: true });
     let stderr = '';
+    const onAbort = () => {
+      try {
+        proc.kill();
+      } catch {
+        /* ignore */
+      }
+      reject(new Error('Processing abandoned.'));
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
     proc.stderr.on('data', (d) => {
       stderr += d.toString();
     });
@@ -470,10 +508,12 @@ function runWhisper(
       }, 5000);
     }, maxMs);
     proc.on('error', (err) => {
+      abortSignal?.removeEventListener('abort', onAbort);
       clearTimeout(killTimer);
       reject(err);
     });
     proc.on('exit', (code) => {
+      abortSignal?.removeEventListener('abort', onAbort);
       clearTimeout(killTimer);
       if (code === 0) resolve();
       else reject(new Error(`whisper exited ${code}. stderr tail: ${stderr.slice(-500)}`));
@@ -916,6 +956,8 @@ function buildPromptText(args: {
 
 export async function runPipeline(input: PipelineInput): Promise<PipelineResult> {
   const warnings: string[] = [];
+  const abortSignal = input.abortSignal;
+  throwIfAborted(abortSignal);
   const startedAt = new Date(input.startedAtMs);
   const stamp = formatSessionStamp(startedAt);
   // Folder suffix mirrors the capture mode: 'feedback' for record-mode (the
@@ -948,12 +990,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // Helper: best-effort step notification. UI bookkeeping must never break
   // the pipeline, so any throw inside the callback is silently swallowed.
   const step = (label: string) => {
+    throwIfAborted(abortSignal);
     if (!input.onStep) return;
     try { input.onStep(label); } catch { /* ignore */ }
   };
 
   // 1. Persist the webm buffer.
   step('Saving recording…');
+  throwIfAborted(abortSignal);
   fs.writeFileSync(webmPath, input.webmBuffer);
   log('pipeline', 'wrote webm', { bytes: input.webmBuffer.length });
 
@@ -976,10 +1020,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     }
     try {
       step('Extracting audio…');
-      await webmToWav(webmPath, wavPath);
+      await webmToWav(webmPath, wavPath, abortSignal);
       const whisperOutPrefix = path.join(sessionDir, 'whisper-out');
       step('Transcribing speech (whisper)…');
-      await runWhisper(whisper.exe, whisper.model, wavPath, whisperOutPrefix);
+      await runWhisper(whisper.exe, whisper.model, wavPath, whisperOutPrefix, abortSignal);
       const srtPath = `${whisperOutPrefix}.srt`;
       if (fs.existsSync(srtPath)) {
         const srt = fs.readFileSync(srtPath, 'utf-8');
@@ -1050,7 +1094,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const mp4Promise = (async () => {
     step('Converting video to MP4…');
     try {
-      await webmToMp4(webmPath, mp4Path);
+      await webmToMp4(webmPath, mp4Path, abortSignal);
       log('pipeline', 'mp4 written (latest, parent level)', { mp4Path });
     } catch (err) {
       warnings.push(`mp4 conversion failed: ${(err as Error).message}`);
@@ -1061,7 +1105,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     if (!fs.existsSync(mp4Path)) return;
     try {
       step('Generating GIF preview…');
-      await mp4ToGif(mp4Path, gifPath, input.outputRoot);
+      await mp4ToGif(mp4Path, gifPath, input.outputRoot, abortSignal);
     } catch (err) {
       warnings.push(`gif generation failed: ${(err as Error).message}`);
       log('pipeline', 'gif fail', { err: String(err) });
@@ -1072,6 +1116,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // extraction, and transcriptSegments for slicing. (gif keeps running
   // in the background and we'll await it at the very end.)
   await Promise.all([audioBranch, mp4Promise]);
+  throwIfAborted(abortSignal);
 
   const chapters = input.chapters ?? [];
   const useChapterFlow = chapters.length > 0;
@@ -1152,6 +1197,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       : undefined,
   };
   fs.writeFileSync(annotationsPath, JSON.stringify(annotationsDoc, null, 2), 'utf-8');
+  throwIfAborted(abortSignal);
 
   // 8. prompt.txt + clipboard
   const promptText = useChapterFlow
@@ -1213,6 +1259,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // recording.webm doesn't yank the input out from under it. (gif reads
   // from the mp4, not the webm, but we await for log/error symmetry.)
   await gifPromise;
+  throwIfAborted(abortSignal);
 
   // 9. cleanup intermediate webm (mp4/gif/transcript stay; this is the
   //    only intermediate). At this point the gif promise has resolved
@@ -1231,7 +1278,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   if (mode === 'trade') {
     try {
       const { runTradePipeline } = await import('./trade-pipeline');
-      void runTradePipeline({
+      const tradeResult = await runTradePipeline({
         sessionDir,
         mp4Path,
         transcriptSegments,
@@ -1239,7 +1286,9 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         startedAtMs: input.startedAtMs,
         onStep: input.onStep,
         onPromptReady: input.onTradePromptReady,
+        abortSignal,
       });
+      warnings.push(...tradeResult.warnings);
     } catch (err) {
       warnings.push(`trade-pipeline import/launch failed: ${(err as Error).message}`);
       log('pipeline', 'trade-pipeline launch fail', { err: String(err) });

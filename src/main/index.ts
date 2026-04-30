@@ -246,6 +246,15 @@ let pendingProcessing: PendingProcessing | null = null;
  */
 let pendingDiscard = false;
 
+interface ActiveProcessingRun {
+  mode: 'record' | 'trade';
+  sessionDir: string | null;
+  abortController: AbortController;
+  abandoned: boolean;
+}
+
+let activeProcessingRun: ActiveProcessingRun | null = null;
+
 // ─── window constructors ──────────────────────────────────────────────
 
 function setAppState(next: AppState, why: string): void {
@@ -309,7 +318,10 @@ function estimateProcessingSec(recordingDurationMs: number, mode: 'record' | 'tr
   const videoBranchSec = 0.10 * recordingSec;       // ultrafast libx264
   const gifTailSec = 0.05 * recordingSec;           // sequential after mp4
   const overheadSec = 5;                            // save webm + chapters + prompt + cleanup
-  const tradeExtraSec = mode === 'trade' ? 5 : 0;   // small visible baseline
+  // Trade sessions include an additional LLM extraction leg after the
+  // local media/transcript work. That step is bursty and backend-dependent,
+  // so use a generous baseline plus a small transcript-scaled component.
+  const tradeExtraSec = mode === 'trade' ? Math.max(90, 0.20 * recordingSec) : 0;
   return Math.ceil(
     overheadSec + Math.max(audioBranchSec, videoBranchSec) + gifTailSec + tradeExtraSec
   );
@@ -540,6 +552,7 @@ function broadcastStateToLauncher(): void {
     startTradeHotkey: getConfig().hotkeys.startTrade,
     tradeMarkerHotkey: getConfig().hotkeys.tradeMarker,
     sessionMode: currentSessionMode,
+    canAbandonProcessing: appState === 'processing' && activeProcessingRun !== null,
     processingProgress: computeProcessingProgress(),
   });
 }
@@ -748,11 +761,8 @@ function createLauncherWindow(): BrowserWindow {
   });
   win.once('ready-to-show', () => {
     win.show();
-    // Restore pin state from config — set BEFORE broadcasting state so
-    // the renderer's getPinState() lookup returns the correct value.
-    if (getConfig().launcher.pinnedOnTop) {
-      win.setAlwaysOnTop(true);
-    }
+    // Launcher is a normal desktop window; only the recording HUD is topmost.
+    win.setAlwaysOnTop(false);
     broadcastStateToLauncher();
   });
   win.on('closed', () => {
@@ -849,13 +859,7 @@ let pendingTradeContext: {
   recordingStartedAtMs: number;
   durationMs: number;
 } | null = null;
-/**
- * setInterval handle that keeps the trade-context window above the
- * 'screen-saver'-level overlay. See the matching hudKeepOnTopInterval
- * for context — same z-order race, same fix.
- */
 let tradeContextKeepOnTopInterval: NodeJS.Timeout | null = null;
-
 function openAnnotator(): void {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) {
     annotatorWindow.focus();
@@ -992,6 +996,8 @@ function openTradeContextWindow(
   durationMs: number
 ): void {
   if (tradeContextWindow && !tradeContextWindow.isDestroyed()) {
+    if (tradeContextWindow.isMinimized()) tradeContextWindow.restore();
+    if (!tradeContextWindow.isVisible()) tradeContextWindow.show();
     tradeContextWindow.focus();
     return;
   }
@@ -1009,9 +1015,6 @@ function openTradeContextWindow(
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
     backgroundColor: '#0f1117',
     show: false,
-    alwaysOnTop: true,
-    minimizable: false,
-    maximizable: false,
     webPreferences: {
       preload: path.join(__dirname, '..', 'trade-context', 'preload.js'),
       contextIsolation: true,
@@ -1020,22 +1023,14 @@ function openTradeContextWindow(
   });
   tradeContextWindow.removeMenu();
   tradeContextWindow.loadFile(path.join(__dirname, '..', 'trade-context', 'trade-context.html'));
-  tradeContextWindow.once('ready-to-show', () => {
+  const showTradeContext = () => {
     if (!tradeContextWindow || tradeContextWindow.isDestroyed()) return;
-    tradeContextWindow.show();
-    // Bump to 'screen-saver' level to match the overlays. The constructor
-    // alwaysOnTop:true defaults to 'floating' which is BELOW 'screen-saver',
-    // so the still-open overlays would visually cover this window whenever
-    // focus shifted (e.g. user clicks browser to copy MockApe data, then
-    // the overlay re-stacks on top and the trade-context disappears).
-    tradeContextWindow.setAlwaysOnTop(true, 'screen-saver');
-    tradeContextWindow.moveTop();
+    if (!tradeContextWindow.isVisible()) tradeContextWindow.show();
     tradeContextWindow.focus();
-  });
-  // Defensive: keep trade-context above the overlay through z-order races
-  // (overlay calls setAlwaysOnTop in its own state changes, which can shuffle
-  // same-level windows on Windows). Same pattern as hudKeepOnTopInterval.
-  if (tradeContextKeepOnTopInterval) clearInterval(tradeContextKeepOnTopInterval);
+  };
+  if (tradeContextWindow.webContents.isLoading()) tradeContextWindow.once('ready-to-show', showTradeContext);
+  else showTradeContext();
+  /*
   tradeContextKeepOnTopInterval = setInterval(() => {
     if (
       tradeContextWindow &&
@@ -1050,6 +1045,7 @@ function openTradeContextWindow(
       tradeContextWindow.moveTop();
     }
   }, 1000);
+  */
   tradeContextWindow.on('closed', () => {
     // If the user dismissed the window without submit/skip (e.g. clicked
     // the X), treat as a skip so trade-pipeline can proceed. Write the
@@ -1158,6 +1154,8 @@ function openResponsePasteWindow(
   promptPath: string
 ): void {
   if (responsePasteWindow && !responsePasteWindow.isDestroyed()) {
+    if (responsePasteWindow.isMinimized()) responsePasteWindow.restore();
+    if (!responsePasteWindow.isVisible()) responsePasteWindow.show();
     responsePasteWindow.focus();
     return;
   }
@@ -1175,8 +1173,6 @@ function openResponsePasteWindow(
     minHeight: 400,
     title: 'Snipalot · Paste LLM Response',
     icon: iconPath,
-    frame: false,
-    titleBarStyle: 'hidden',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, '..', 'response-paste', 'preload.js'),
@@ -1188,13 +1184,13 @@ function openResponsePasteWindow(
   responsePasteWindow.loadFile(
     path.join(__dirname, '..', 'response-paste', 'response-paste.html')
   );
-  responsePasteWindow.once('ready-to-show', () => {
+  const showResponsePaste = () => {
     if (!responsePasteWindow || responsePasteWindow.isDestroyed()) return;
-    responsePasteWindow.show();
-    responsePasteWindow.setAlwaysOnTop(true, 'screen-saver');
-    responsePasteWindow.moveTop();
+    if (!responsePasteWindow.isVisible()) responsePasteWindow.show();
     responsePasteWindow.focus();
-  });
+  };
+  if (responsePasteWindow.webContents.isLoading()) responsePasteWindow.once('ready-to-show', showResponsePaste);
+  else showResponsePaste();
   responsePasteWindow.on('closed', () => {
     responsePasteWindow = null;
   });
@@ -2620,6 +2616,55 @@ async function discardRecording(reason: string): Promise<void> {
   showNotification('Snipalot', 'Recording discarded — nothing saved.');
 }
 
+function cleanupSessionDir(sessionDir: string | null): void {
+  if (!sessionDir || !fs.existsSync(sessionDir)) return;
+  try {
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+    log('main', 'session dir removed', { sessionDir });
+  } catch (err) {
+    log('main', 'session dir cleanup failed', {
+      sessionDir,
+      err: (err as Error).message,
+    });
+  }
+}
+
+function abandonProcessing(reason: string): boolean {
+  if (appState !== 'processing' || !activeProcessingRun) {
+    log('state', 'abandonProcessing ignored', { appState, reason });
+    return false;
+  }
+
+  const run = activeProcessingRun;
+  run.abandoned = true;
+  run.abortController.abort();
+
+  if (tradeContextKeepOnTopInterval) {
+    clearInterval(tradeContextKeepOnTopInterval);
+    tradeContextKeepOnTopInterval = null;
+  }
+  if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
+  if (responsePasteWindow && !responsePasteWindow.isDestroyed()) responsePasteWindow.close();
+  pendingTradeContext = null;
+  pendingResponsePaste = null;
+  pendingProcessing = null;
+
+  cleanupSessionDir(run.sessionDir);
+  activeProcessingRun = null;
+  setAppState('idle', `processing abandoned: ${reason}`);
+  broadcastStateToLauncher();
+  showNotification(
+    'Snipalot',
+    'Processing abandoned. Session files were cleared; recording.mp4 was kept.'
+  );
+  log('main', 'processing abandoned', {
+    reason,
+    mode: run.mode,
+    sessionDir: run.sessionDir,
+  });
+  return true;
+}
+
 function stopRecording(reason: string): void {
   if (appState !== 'recording') {
     log('state', 'stopRecording ignored', { appState, reason });
@@ -2703,6 +2748,15 @@ function stopRecording(reason: string): void {
   }
   liveSessionDir = null;
 
+  activeProcessingRun = pendingProcessing
+    ? {
+        mode: pendingProcessing.mode,
+        sessionDir: pendingProcessing.preCreatedSessionDir,
+        abortController: new AbortController(),
+        abandoned: false,
+      }
+    : null;
+
   // Tell the recorder to finalize its stream. The webm buffer arrives
   // later via the save-webm IPC — we don't wait for it here.
   if (recorderWindow) recorderWindow.webContents.send('recorder:stop');
@@ -2737,6 +2791,7 @@ function stopRecording(reason: string): void {
         'Snipalot',
         'Processing is taking too long or stalled. Quit from the tray and try again. Logs: %APPDATA%\\Snipalot\\logs\\snipalot.log'
       );
+      activeProcessingRun = null;
       setAppState('idle', 'processing watchdog');
     }, watchdogMs);
   }
@@ -3012,6 +3067,7 @@ ipcMain.handle(
 
     const fallbackStart = Date.now() - 1000; // arbitrary; used only if snap missing
     const outputRoot = getConfig().outputDir;
+    const run = activeProcessingRun;
 
     // FIRE AND FORGET: pipeline runs in the background. The UI is in
     // 'processing' state from stopRecording(); the .then/.catch below
@@ -3029,8 +3085,13 @@ ipcMain.handle(
       tradeMarkers: snap?.tradeMarkers ?? [],
       onStep: (step) => setProcessingStep(step),
       onTradePromptReady: (sDir, rPath, pPath) => openResponsePasteWindow(sDir, rPath, pPath),
+      abortSignal: run?.abortController.signal,
     })
       .then((result) => {
+        if (run?.abandoned) {
+          cleanupSessionDir(result.sessionDir);
+          return;
+        }
         log('recorder', 'pipeline complete', {
           sessionDir: result.sessionDir,
           warnings: result.warnings,
@@ -3044,12 +3105,18 @@ ipcMain.handle(
           'Snipalot',
           `Ready · prompt on clipboard${warningsLine}. Folder: ${result.sessionDir}`
         );
+        activeProcessingRun = null;
         setAppState('idle', 'pipeline complete');
       })
       .catch((err) => {
         const msg = (err as Error).message;
+        if (run?.abandoned) {
+          cleanupSessionDir(run.sessionDir);
+          return;
+        }
         log('recorder', 'pipeline fail', { err: msg });
         showNotification('Snipalot', `Pipeline failed: ${msg}`);
+        activeProcessingRun = null;
         setAppState('idle', 'pipeline failed');
       });
 
@@ -3148,11 +3215,17 @@ ipcMain.handle(
         .getAllDisplays()
         .find((d) => String(d.id) === activeDisplayId) ?? screen.getPrimaryDisplay();
       if (!hudWindow) hudWindow = createHudWindow(display);
-      hudWindow.once('ready-to-show', () => {
-        hudWindow?.show();
-        hudWindow?.moveTop();
+      const showHud = () => {
+        if (!hudWindow || hudWindow.isDestroyed()) return;
+        if (!hudWindow.isVisible()) hudWindow.show();
+        hudWindow.moveTop();
         broadcastRecordingState();
-      });
+      };
+      if (hudWindow.webContents.isLoading()) {
+        hudWindow.once('ready-to-show', showHud);
+      } else {
+        showHud();
+      }
       broadcastRecordingState();
       // Aggressively keep the HUD above the overlay. See hudKeepOnTopInterval
       // declaration for the rationale (same alwaysOnTop level → racy z-order).
@@ -3373,6 +3446,11 @@ ipcMain.handle('launcher:cancel', () => {
   }
 });
 
+ipcMain.handle('launcher:abandon-processing', () => {
+  log('launcher', 'abandon-processing click', { appState });
+  return abandonProcessing('launcher button');
+});
+
 ipcMain.handle('launcher:screenshot', () => {
   log('launcher', 'screenshot click', { appState });
   if (appState === 'idle') enterSelectingScreenshot();
@@ -3398,16 +3476,16 @@ ipcMain.handle('launcher:quit', () => {
 let hideToTrayNotificationShown = false;
 ipcMain.handle('launcher:toggle-pin', () => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return false;
-  const next = !launcherWindow.isAlwaysOnTop();
-  launcherWindow.setAlwaysOnTop(next);
-  saveConfig({ launcher: { pinnedOnTop: next } } as never);
-  log('launcher', 'pin toggled', { pinnedOnTop: next });
-  return next;
+  launcherWindow.setAlwaysOnTop(false);
+  saveConfig({ launcher: { pinnedOnTop: false } } as never);
+  log('launcher', 'pin ignored; launcher remains normal window');
+  return false;
 });
 
 ipcMain.handle('launcher:get-pin-state', () => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return false;
-  return launcherWindow.isAlwaysOnTop();
+  launcherWindow.setAlwaysOnTop(false);
+  return false;
 });
 
 /**

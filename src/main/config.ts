@@ -166,7 +166,7 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     openaiModel: 'google/gemini-2.5-flash',
     llmMode: 'gemini-cli',
     geminiCliCommand: 'gemini',
-    geminiCliModel: 'gemini-2.5-flash',
+    geminiCliModel: 'gemini-3.1-pro-preview',
   },
   launcher: {
     pinnedOnTop: false,

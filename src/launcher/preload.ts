@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
   screenshot: () => ipcRenderer.invoke('launcher:screenshot'),
   trade: () => ipcRenderer.invoke('launcher:trade'),
   cancel: () => ipcRenderer.invoke('launcher:cancel'),
+  abandonProcessing: () => ipcRenderer.invoke('launcher:abandon-processing'),
   quit: () => ipcRenderer.invoke('launcher:quit'),
   /** Legacy hide-to-tray IPC, retained for compatibility with older renderer code. */
   closeToTray: () => ipcRenderer.invoke('launcher:close-to-tray'),
@@ -40,6 +41,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
       snapshotHotkey?: string;
       startTradeHotkey?: string;
       tradeMarkerHotkey?: string;
+      canAbandonProcessing?: boolean;
     }) => void
   ) => ipcRenderer.on('launcher:state', (_evt, state) => cb(state)),
 });

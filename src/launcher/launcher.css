@@ -81,6 +81,10 @@ body {
   color: #f59e0b;
 }
 
+.tb-pin {
+  display: none;
+}
+
 .tb-pin.active svg path {
   fill: currentColor;
   stroke: currentColor;
@@ -278,6 +282,14 @@ body {
 .btn-primary.processing:hover {
   background: #1e3a5f;
   border-color: #2c5d8a;
+}
+
+.btn-primary.processing-abandon,
+.btn-primary.processing-abandon:hover {
+  background: #7f1d1d;
+  border-color: #b91c1c;
+  color: #fecaca;
+  cursor: pointer;
 }
 
 .btn-primary:disabled {

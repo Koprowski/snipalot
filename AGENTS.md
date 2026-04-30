@@ -62,6 +62,19 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
   - Gemini command parsing now strips wrapping quotes from user-entered command paths, and Gemini spawn helpers guard sync `spawn()` exceptions so IPC returns actionable launch errors instead of crashing with raw `spawn EINVAL`.
 - **Settings close semantics corrected (local branch):** Settings window `X`/Cancel now only closes Settings and refocuses launcher; full process shutdown remains tied to the primary launcher `X`/quit path.
 - **Windows quit-cleanup PowerShell fix (local branch):** Corrected sibling `electron.exe` filter command generation in `killSiblingSnipalotElectronProcesses()` to avoid `-and` parser errors; shutdown cleanup now uses a valid single-clause `Where-Object` predicate.
+- **Processing escape hatch + window show-race hardening (local branch):**
+  - Launcher now exposes **Abandon** during post-stop `processing`. It cancels the in-flight pipeline/trade pipeline, closes any trade-context / response-paste windows, deletes the current session folder, and resets Snipalot to idle.
+  - The latest parent-level `recording.mp4` is intentionally preserved when abandoning; session-folder artifacts are cleared.
+  - Main now passes an abort signal through ffmpeg / whisper / Gemini / API extraction waits so abandoned sessions do not continue recreating outputs in the background.
+  - Recorder HUD visibility is more reliable: if the HUD window has already finished loading before the show hook is attached, main now shows it immediately instead of waiting forever on a missed `ready-to-show`.
+  - Trade-context and response-paste windows got the same show-race hardening so they do not stay invisible when the renderer loads unusually quickly.
+- **Trade helper windows normalized (local branch):**
+  - The post-trade **Add trade data** window and **Paste LLM Response** window were previously forced to `alwaysOnTop` / `screen-saver` z-order, and trade-context also had a keep-bringing-to-front timer. This made them behave unlike normal Windows app windows.
+  - They now behave like ordinary windows again: clicking another app puts them behind it, minimizing/restoring works normally, and clicking them again brings them back to front through standard focus behavior.
+  - Response-paste also uses a normal framed window again instead of a frameless always-on-top helper surface.
+- **Window topmost policy clarified (local branch):**
+  - The main launcher window (Record / Screenshot / Trade) should always behave like a normal desktop window. The old launcher pin/topmost behavior is disabled and hidden, and startup forces launcher `alwaysOnTop=false` even if an older config has `launcher.pinnedOnTop=true`.
+  - The recording HUD remains intentionally topmost at `screen-saver` level while recording, with the existing keep-on-top interval, because it is the user's stop/pause/snapshot/annotation control surface.
 - **Gemini CLI settings-test fallback + diagnostics (local branch):**
  - `settings:test-llm-connection` now retries the prompt probe with a positional prompt when Gemini returns the known "`--prompt` + positional" parser conflict, preventing false negatives from runtime argv quirks.
  - Added structured, non-secret `settings` logs for each Gemini test stage (launch/version/prompt/fallback success/failure) with sanitized stderr tails for faster root-cause support.
@@ -93,6 +106,12 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Launcher X copy and README/install-guide upgrade text now match current behavior: launcher X exits Snipalot; minimize keeps the launcher/taskbar path.
  - `saveConfig()` is now transactional: it writes the merged config to disk before replacing in-memory config, throws on filesystem errors, and Settings keeps the window open with an error instead of reporting a false successful save.
  - Added `npm test` with `tests/config-persistence.test.mjs` covering successful config writes and disk-write failure behavior.
+- **Trade extraction UX + scale-out prompt hardening (v1.0.8 local branch):**
+ - `src/main/pipeline.ts` now `await`s `runTradePipeline()` for trade sessions, so launcher processing state and step text stay active through Gemini/API auto-extraction instead of dropping to idle before `trade_log.csv` exists.
+ - Trade processing ETA in `src/main/index.ts` now budgets a real LLM extraction window for trade mode (instead of a 5-second placeholder), so the progress bar no longer races to the end before Gemini finishes.
+ - Gemini CLI default model moved from `gemini-2.5-flash` to `gemini-3-pro-preview` in config/settings defaults and settings helper text.
+ - Trade extraction schema/prompt now includes `leg_index`, `leg_count`, and `position_fraction`, with explicit instructions to split scaled entries/exits into multiple rows when the transcript indicates partial fills/trims.
+ - `joinMockApeById()` now apportions aggregate MockApe size/P&L across multiple rows sharing the same `mockape_trade_id` using `position_fraction` when provided, or equal shares as fallback.
 
 ## Packaged app logs
 

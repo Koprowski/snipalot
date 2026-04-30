@@ -76,7 +76,7 @@ let editedOpenaiBaseUrl = '';
 let editedOpenaiModel = '';
 let editedLlmMode: 'gemini-cli' | 'api' = 'gemini-cli';
 let editedGeminiCliCommand = 'gemini';
-let editedGeminiCliModel = 'gemini-2.5-flash';
+let editedGeminiCliModel = 'gemini-3.1-pro-preview';
 let fetchedGeminiCliModels: Array<{ id: string; createdAtMs: number }> = [];
 let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostPer1M: number }> = [];
 // Working copy of the capture mode + countdown duration.
@@ -166,7 +166,7 @@ async function init(): Promise<void> {
   editedOpenaiModel = cfgTrade?.openaiModel ?? 'google/gemini-2.5-flash';
   editedLlmMode = cfgTrade?.llmMode ?? 'gemini-cli';
   editedGeminiCliCommand = cfgTrade?.geminiCliCommand ?? 'gemini';
-  editedGeminiCliModel = cfgTrade?.geminiCliModel ?? 'gemini-2.5-flash';
+  editedGeminiCliModel = cfgTrade?.geminiCliModel ?? 'gemini-3.1-pro-preview';
 
   const llmModeSelect = document.getElementById('trade-llm-mode') as HTMLSelectElement;
   llmModeSelect.value = editedLlmMode;
@@ -468,7 +468,7 @@ btnTestLlmConnection.addEventListener('click', async () => {
   const baseUrl = editedOpenaiBaseUrl.trim() || 'https://openrouter.ai/api/v1';
   const model = editedOpenaiModel.trim() || 'google/gemini-2.5-flash';
   const cliCommand = editedGeminiCliCommand.trim() || 'gemini';
-  const cliModel = editedGeminiCliModel.trim() || 'gemini-2.5-flash';
+  const cliModel = editedGeminiCliModel.trim() || 'gemini-3.1-pro-preview';
 
   if (editedLlmMode === 'api' && !openaiKey) {
     setStatus('API mode: enter OpenRouter/OpenAI API key first.', true);

@@ -11,7 +11,7 @@ const root = join(__dirname, '..');
 const srcRoot = join(root, 'src');
 const distRoot = join(root, 'dist');
 
-const COPY_EXTENSIONS = new Set(['.html', '.css', '.png', '.svg', '.ico', '.json']);
+const COPY_EXTENSIONS = new Set(['.html', '.css', '.png', '.svg', '.ico', '.json', '.mjs']);
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });

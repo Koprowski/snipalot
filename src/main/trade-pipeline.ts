@@ -349,6 +349,9 @@ async function tryGeminiCli(
     // electron.exe (process.execPath under Electron) needs this to behave
     // as a Node runtime when running the gemini-cli JS bundle.
     ELECTRON_RUN_AS_NODE: '1',
+    // Skip the gemini-cli self-respawn — it bypasses our argv shim and
+    // re-triggers the yargs phantom-positional bug under Electron.
+    GEMINI_CLI_NO_RELAUNCH: 'true',
   };
   delete env.GEMINI_API_KEY;
   const result = await new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {

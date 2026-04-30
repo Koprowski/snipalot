@@ -13,6 +13,15 @@ export interface GeminiCliSpawnTarget {
   prefixArgs: string[];
 }
 
+/**
+ * Path to our ESM shim that fixes up process.argv + process.defaultApp
+ * before delegating to gemini-cli's bundle. This avoids the yargs
+ * "phantom positional" bug that triggers when running through electron.exe
+ * with ELECTRON_RUN_AS_NODE=1. The shim lives next to this compiled JS
+ * file in dist/main/.
+ */
+const SHIM_PATH = path.join(__dirname, 'gemini-cli-shim.mjs');
+
 export function resolveGeminiCliExecutable(cliCommand: string): GeminiCliSpawnTarget {
   const raw = (cliCommand || 'gemini').trim() || 'gemini';
   // Users sometimes paste quoted paths in settings; spawn() expects raw path.
@@ -20,6 +29,15 @@ export function resolveGeminiCliExecutable(cliCommand: string): GeminiCliSpawnTa
   const asTarget = (command: string, prefixArgs: string[] = []): GeminiCliSpawnTarget => ({ command, prefixArgs });
   const ext = path.extname(trimmed).toLowerCase();
   const cmdLikeExt = ext === '.cmd' || ext === '.bat';
+
+  // When running via process.execPath we want: [shim, geminiBundle, ...args].
+  // The shim path is prepended only when it actually exists on disk (it
+  // ships in dist/main/ via copy-assets.mjs but a stale build could miss it).
+  const wrapWithShim = (geminiEntry: string): GeminiCliSpawnTarget =>
+    fs.existsSync(SHIM_PATH)
+      ? asTarget(process.execPath, [SHIM_PATH, geminiEntry])
+      : asTarget(process.execPath, [geminiEntry]);
+
   const tryNodeEntryFromShim = (shimPath: string): GeminiCliSpawnTarget | null => {
     const shimDir = path.dirname(shimPath);
     const pkgRoot = path.join(shimDir, 'node_modules', '@google', 'gemini-cli');
@@ -42,7 +60,7 @@ export function resolveGeminiCliExecutable(cliCommand: string): GeminiCliSpawnTa
         if (binEntry) {
           const resolved = path.join(pkgRoot, binEntry);
           if (fs.existsSync(resolved)) {
-            return asTarget(process.execPath, [resolved]);
+            return wrapWithShim(resolved);
           }
         }
       }
@@ -58,7 +76,7 @@ export function resolveGeminiCliExecutable(cliCommand: string): GeminiCliSpawnTa
     ];
     const entry = candidates.find((p) => fs.existsSync(p));
     if (!entry) return null;
-    return asTarget(process.execPath, [entry]);
+    return wrapWithShim(entry);
   };
 
   if (path.isAbsolute(trimmed)) {

@@ -1482,6 +1482,13 @@ async function testGeminiCliConnection(
     // the .cmd shim's EINVAL on Node 22+. Inside Electron, process.execPath
     // is electron.exe — it only behaves like Node when this env var is set.
     ELECTRON_RUN_AS_NODE: '1',
+    // Gemini CLI relaunches itself on startup for heap-size tuning. The
+    // relaunch bypasses our shim (calls spawn(process.execPath, ...) with
+    // the original argv), so the child process triggers yargs's
+    // "phantom positional" bug under Electron all over again. Disabling
+    // the relaunch keeps everything in the shim'd parent process. We pay
+    // a default-heap-size penalty, irrelevant for short test prompts.
+    GEMINI_CLI_NO_RELAUNCH: 'true',
   };
   delete env.GEMINI_API_KEY;
   const runGemini = (
@@ -1790,6 +1797,9 @@ ipcMain.handle(
       // empty Electron window instead of running the script — browser
       // never opens, OAuth flow never starts.
       ELECTRON_RUN_AS_NODE: '1',
+      // Skip the gemini-cli self-respawn — it bypasses our argv shim and
+      // re-triggers the yargs phantom-positional bug under Electron.
+      GEMINI_CLI_NO_RELAUNCH: 'true',
     };
     delete env.GEMINI_API_KEY;
 

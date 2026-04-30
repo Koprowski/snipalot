@@ -56,6 +56,10 @@ const overlayWindows = new Map<string, BrowserWindow>();
 /** Nested prepare/restore pairs from recorder around getDisplayMedia. */
 let overlayPrecaptureDepth = 0;
 let recorderWindow: BrowserWindow | null = null;
+/** True once recorder renderer sends recorder:ready. */
+let recorderRendererReady = false;
+/** Deferred start region if recorder:start fires before recorder renderer boot. */
+let pendingRecorderStart: RegionSelection | null = null;
 let hudWindow: BrowserWindow | null = null;
 let launcherWindow: BrowserWindow | null = null;
 /**
@@ -591,7 +595,20 @@ function createRecorderWindow(): BrowserWindow {
       nodeIntegration: false,
     },
   });
-  win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html'));
+  win.webContents.on('did-fail-load', (_evt, code, desc, validatedURL) => {
+    log('recorder', 'did-fail-load', { code, desc, validatedURL });
+    recorderRendererReady = false;
+  });
+  win.webContents.on('render-process-gone', (_evt, details) => {
+    log('recorder', 'render-process-gone', details);
+    recorderRendererReady = false;
+  });
+  win.webContents.on('unresponsive', () => {
+    log('recorder', 'renderer unresponsive');
+  });
+  win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html')).catch((err) => {
+    log('recorder', 'loadFile failed', { err: (err as Error).message });
+  });
   if (isDebug) win.webContents.openDevTools({ mode: 'detach' });
   return win;
 }
@@ -1850,7 +1867,15 @@ ipcMain.handle(
     // Tell the active display's overlay to draw the region outline + receive annotations.
     targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
 
-    if (recorderWindow) recorderWindow.webContents.send('recorder:start', region);
+    if (recorderWindow) {
+      if (recorderRendererReady) {
+        log('recorder', 'sending recorder:start', { region });
+        recorderWindow.webContents.send('recorder:start', region);
+      } else {
+        pendingRecorderStart = region;
+        log('recorder', 'recorder renderer not ready; queued start', { region });
+      }
+    }
   }
 );
 
@@ -2086,6 +2111,7 @@ ipcMain.handle(
       // didn't stop manually, we still need to clean up here.
       if (appState === 'recording') {
         recorderMediaReady = false;
+        pendingRecorderStart = null;
         log('state', 'recorder stopped unexpectedly; cleaning up');
         // Take a snapshot for the pipeline (save-webm will arrive next).
         if (recordingStartedAt !== null && !pendingProcessing) {
@@ -2121,6 +2147,7 @@ ipcMain.handle(
       }
     } else if (state === 'error') {
       recorderMediaReady = false;
+      pendingRecorderStart = null;
       setAppState('idle', `recorder error: ${detail ?? '?'}`);
       pendingRegion = null;
       activeDisplayId = null;
@@ -2517,6 +2544,8 @@ app.whenReady().then(() => {
 
   rebuildOverlays();
   recorderWindow = createRecorderWindow();
+  recorderRendererReady = false;
+  pendingRecorderStart = null;
   launcherWindow = createLauncherWindow();
 
   // System tray — persistent access point independent of the launcher.

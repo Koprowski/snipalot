@@ -9,6 +9,7 @@ export interface RegionSelection {
 }
 
 contextBridge.exposeInMainWorld('snipalotRecorder', {
+  ready: () => ipcRenderer.invoke('recorder:ready'),
   /** Lines land in main snipalot.log (same file as other scopes). */
   mainLog: (line: string) => ipcRenderer.invoke('log', 'recorder', line),
   /** Lower fullscreen overlays so Windows' screen-share picker is not hidden behind them. */

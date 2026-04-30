@@ -1,0 +1,41 @@
+# Build the Windows NSIS installer and attach it to a GitHub Release when a version tag is pushed (e.g. v1.0.1).
+# Requires: tag points at a commit on default branch (or workflow file present in that commit).
+
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install and package
+        run: |
+          npm ci
+          npm run package
+
+      - name: List release artifacts
+        run: Get-ChildItem -Path release -Filter *.exe | Format-Table Name, Length
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/Snipalot-*-setup.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

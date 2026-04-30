@@ -30,9 +30,9 @@ Var pid
 
       !ifdef INSTALL_MODE_PER_ALL_USERS
         nsExec::Exec `taskkill /im "${APP_EXECUTABLE_FILENAME}" /fi "PID ne $pid"`
-      ${else}
+      !else
         nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /im "${APP_EXECUTABLE_FILENAME}" /fi "PID ne $pid" /fi "USERNAME eq %USERNAME%"`
-      ${endif}
+      !endif
       Sleep 500
 
       StrCpy $R1 0
@@ -45,11 +45,11 @@ Var pid
           Sleep 1500
           !ifdef INSTALL_MODE_PER_ALL_USERS
             nsExec::Exec `taskkill /f /im "${APP_EXECUTABLE_FILENAME}" /fi "PID ne $pid"`
-          ${else}
+          !else
             nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /f /im "${APP_EXECUTABLE_FILENAME}" /fi "PID ne $pid" /fi "USERNAME eq %USERNAME%"`
-          ${endif}
+          !endif
           !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
-          ${If} $R0 == 0
+          ${if} $R0 == 0
             DetailPrint `Waiting for "${PRODUCT_NAME}" to close ($R1/15)...`
             Sleep 2000
           ${else}

@@ -7,6 +7,10 @@
   "license": "MIT",
   "private": true,
   "scripts": {
+    "kill:stale": "node scripts/kill-stale-processes.mjs",
+    "prestart": "npm run kill:stale",
+    "predev": "npm run kill:stale",
+    "predebug": "npm run kill:stale",
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/make-icon.mjs",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron . --dev",
@@ -16,12 +20,13 @@
     "package:nopublish": "npm run build && electron-builder --publish never",
     "package:portable": "npm run build && electron-builder --win portable",
     "fetch-resources": "node scripts/fetch-resources.mjs",
-    "clean": "node scripts/clean.mjs"
+    "clean": "node scripts/clean.mjs",
+    "install:safe": "npm run kill:stale && npm install"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.0",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
     "typescript": "^5.4.0"
   },
   "dependencies": {

@@ -501,13 +501,13 @@ function formatOffset(ms: number): string {
  * session folder. The trade-context window writes one of these when the
  * user clicks Continue/Skip, OR main writes the .skipped sentinel
  * directly when autoPromptForTradeData is off. Polls every 1s; max wait
- * 30 minutes (defensive against the user closing the window without any
- * action — closed-window-handler in main also writes the sentinel, but
- * we time out as a final safety net).
+ * a few minutes (defensive if the window is dismissed without writing
+ * files — closed-window-handler in main also writes the sentinel).
  */
 async function waitForTradeContextDecision(
   sessionDir: string,
-  timeoutMs: number = 30 * 60 * 1000
+  /** Shorter default so a dismissed/hidden trade window does not block the pipeline for 30 min. */
+  timeoutMs: number = 3 * 60 * 1000
 ): Promise<void> {
   const dataPath = path.join(sessionDir, 'mockape.json');
   const skipPath = path.join(sessionDir, 'mockape.json.skipped');

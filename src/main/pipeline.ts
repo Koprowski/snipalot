@@ -450,8 +450,28 @@ function runWhisper(
     proc.stderr.on('data', (d) => {
       stderr += d.toString();
     });
-    proc.on('error', reject);
+    const maxMs = 25 * 60 * 1000;
+    const killTimer = setTimeout(() => {
+      log('whisper', 'timeout — killing hung process', { maxMs });
+      try {
+        proc.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+      setTimeout(() => {
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          /* ignore */
+        }
+      }, 5000);
+    }, maxMs);
+    proc.on('error', (err) => {
+      clearTimeout(killTimer);
+      reject(err);
+    });
     proc.on('exit', (code) => {
+      clearTimeout(killTimer);
       if (code === 0) resolve();
       else reject(new Error(`whisper exited ${code}. stderr tail: ${stderr.slice(-500)}`));
     });

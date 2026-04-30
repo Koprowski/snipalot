@@ -96,8 +96,12 @@ let processingEstimatedTotalSec: number | null = null;
 /** 250ms tick that re-broadcasts state so the launcher's progress bar
  *  animates smoothly while the pipeline runs. */
 let processingTickInterval: NodeJS.Timeout | null = null;
+/** Fires if we stay in `processing` without completing (e.g. save-webm never arrives). */
+let processingWatchdog: NodeJS.Timeout | null = null;
 
 let recordingStartedAt: number | null = null;
+/** True only after recorder:state 'started' (MediaRecorder actually running). */
+let recorderMediaReady = false;
 let recordingPaused = false;
 let pausedAt: number | null = null;
 let totalPausedMs = 0;
@@ -196,6 +200,10 @@ function setAppState(next: AppState, why: string): void {
   if (next !== 'processing') {
     processingStep = null;
     stopProcessingProgressTick();
+    if (processingWatchdog) {
+      clearTimeout(processingWatchdog);
+      processingWatchdog = null;
+    }
   }
 
   // Annotate + snapshot + trade-marker hotkeys are registered ONLY while
@@ -1530,6 +1538,7 @@ async function discardRecording(reason: string): Promise<void> {
   // it shortly after we send recorder:stop below; the handler checks this
   // flag and bins the buffer instead of running the pipeline.
   pendingDiscard = true;
+  recorderMediaReady = false;
   // Skip the pendingProcessing snapshot — pipeline never runs in discard
   // mode, so there's nothing for it to consume.
   pendingProcessing = null;
@@ -1577,6 +1586,34 @@ function stopRecording(reason: string): void {
     return;
   }
   log('main', 'stop initiated', { reason });
+
+  // If the recorder never reached MediaRecorder.start(), we never got
+  // recorder:state 'started' — pendingProcessing would be empty and we'd
+  // sit in 'processing' forever waiting for save-webm. Bail out cleanly.
+  if (!recorderMediaReady) {
+    log('main', 'stopRecording: recorder never reported started — cannot finalize');
+    showNotification(
+      'Snipalot',
+      'Recording did not start (screen/mic permission or display capture failed). Check that you allowed capture when prompted, then try again.'
+    );
+    setAppState('idle', 'stop aborted: recorder never started');
+    pendingRegion = null;
+    activeDisplayId = null;
+    activeSourceId = null;
+    currentAnnotations = [];
+    currentRecordingRegionLocal = null;
+    currentChapters = [];
+    pendingChapterPngs.clear();
+    if (hudKeepOnTopInterval) {
+      clearInterval(hudKeepOnTopInterval);
+      hudKeepOnTopInterval = null;
+    }
+    if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+    broadcastOverlay('overlay:recording-stopped');
+    if (recorderWindow) recorderWindow.webContents.send('recorder:stop');
+    recorderMediaReady = false;
+    return;
+  }
 
   // Snapshot the data the pipeline will need, BEFORE we clear state.
   if (recordingStartedAt !== null) {
@@ -1642,12 +1679,30 @@ function stopRecording(reason: string): void {
   // toggles state back to 'idle' (which also stops the tick via the
   // setAppState side-effect below).
   if (pendingProcessing) {
-    startProcessingProgressTick(
-      estimateProcessingSec(pendingProcessing.durationMs, pendingProcessing.mode)
+    const estSec = estimateProcessingSec(
+      pendingProcessing.durationMs,
+      pendingProcessing.mode
     );
+    startProcessingProgressTick(estSec);
+    if (processingWatchdog) clearTimeout(processingWatchdog);
+    const watchdogMs = Math.min(
+      45 * 60 * 1000,
+      Math.max(10 * 60 * 1000, Math.ceil(estSec * 2) * 1000)
+    );
+    processingWatchdog = setTimeout(() => {
+      processingWatchdog = null;
+      if (appState !== 'processing') return;
+      log('main', 'processing watchdog fired — save-webm or pipeline hung', { watchdogMs });
+      showNotification(
+        'Snipalot',
+        'Processing is taking too long or stalled. Quit from the tray and try again. Logs: %APPDATA%\\Snipalot\\logs\\snipalot.log'
+      );
+      setAppState('idle', 'processing watchdog');
+    }, watchdogMs);
   }
   broadcastStateToLauncher();
   recordingStartedAt = null;
+  recorderMediaReady = false;
   recordingPaused = false;
   pausedAt = null;
   totalPausedMs = 0;
@@ -1787,6 +1842,7 @@ ipcMain.handle(
     pendingRegion = region;
     currentSessionMode = intent === 'trade' ? 'trade' : 'record';
     currentTradeMarkers = [];
+    recorderMediaReady = false;
     setAppState('recording', `region confirmed (mode=${currentSessionMode})`);
     broadcastOverlay('overlay:exit-region-select');
     // Tell the active display's overlay to draw the region outline + receive annotations.
@@ -1936,6 +1992,7 @@ ipcMain.handle(
     if (state === 'started') {
       // Confirm transition (we already moved to 'recording' on region-confirmed).
       if (appState !== 'recording') setAppState('recording', 'recorder reported started');
+      recorderMediaReady = true;
       recordingStartedAt = Date.now();
       recordingPaused = false;
       pausedAt = null;
@@ -2000,6 +2057,7 @@ ipcMain.handle(
       // on its own (e.g., the user closed the captured window) and we
       // didn't stop manually, we still need to clean up here.
       if (appState === 'recording') {
+        recorderMediaReady = false;
         log('state', 'recorder stopped unexpectedly; cleaning up');
         // Take a snapshot for the pipeline (save-webm will arrive next).
         if (recordingStartedAt !== null && !pendingProcessing) {
@@ -2034,6 +2092,7 @@ ipcMain.handle(
         log('recorder', 'stopped confirmed (UI already cleaned)');
       }
     } else if (state === 'error') {
+      recorderMediaReady = false;
       setAppState('idle', `recorder error: ${detail ?? '?'}`);
       pendingRegion = null;
       activeDisplayId = null;

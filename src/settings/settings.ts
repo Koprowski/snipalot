@@ -10,6 +10,7 @@ const btnBrowse = document.getElementById('btn-browse') as HTMLButtonElement;
 const btnSave = document.getElementById('btn-save') as HTMLButtonElement;
 const btnCancel = document.getElementById('btn-cancel') as HTMLButtonElement;
 const btnClose = document.getElementById('btn-close') as HTMLButtonElement;
+const btnTestApi = document.getElementById('btn-test-api') as HTMLButtonElement;
 const settingsStatusEl = document.getElementById('status') as HTMLElement;
 const hotkeysBody = document.getElementById('hotkeys-body') as HTMLTableSectionElement;
 const firstRunBanner = document.getElementById('first-run-banner') as HTMLElement;
@@ -313,6 +314,59 @@ btnBrowse.addEventListener('click', async () => {
   if (picked) {
     dirInput.value = picked;
     setStatus('');
+  }
+});
+
+// ─── test API keys (no save required) ──────────────────────────────────
+
+btnTestApi.addEventListener('click', async () => {
+  const geminiKey = editedGeminiApiKey.trim();
+  const openaiKey = editedOpenaiApiKey.trim();
+  const baseUrl = editedOpenaiBaseUrl.trim() || 'https://openrouter.ai/api/v1';
+  const model = editedOpenaiModel.trim() || 'google/gemini-2.0-flash-exp:free';
+
+  if (!geminiKey && !openaiKey) {
+    setStatus('Enter Gemini and/or OpenRouter/OpenAI API key first.', true);
+    return;
+  }
+
+  btnTestApi.disabled = true;
+  const prevSaveDisabled = btnSave.disabled;
+  btnSave.disabled = true;
+  setStatus('Testing API key(s)…');
+  try {
+    const result = await api.testTradeApiKeys({
+      geminiApiKey: geminiKey || undefined,
+      openaiApiKey: openaiKey || undefined,
+      openaiBaseUrl: baseUrl,
+      openaiModel: model,
+    });
+    if (!result.triedAny) {
+      setStatus('No API keys provided to test.', true);
+      return;
+    }
+    const parts: string[] = [];
+    if (result.geminiTried) {
+      parts.push(
+        result.geminiOk
+          ? 'Gemini: OK'
+          : `Gemini: FAIL${result.geminiMessage ? ` (${result.geminiMessage})` : ''}`
+      );
+    }
+    if (result.openaiTried) {
+      parts.push(
+        result.openaiOk
+          ? 'OpenRouter/OpenAI: OK'
+          : `OpenRouter/OpenAI: FAIL${result.openaiMessage ? ` (${result.openaiMessage})` : ''}`
+      );
+    }
+    const msg = parts.join(' · ');
+    setStatus(msg, !result.anyOk);
+  } catch (err) {
+    setStatus(`API test failed: ${(err as Error).message}`, true);
+  } finally {
+    btnTestApi.disabled = false;
+    btnSave.disabled = prevSaveDisabled;
   }
 });
 

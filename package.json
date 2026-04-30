@@ -1,6 +1,6 @@
 {
   "name": "snipalot",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Portable Windows screen-feedback tool: record, annotate live, transcribe, and hand an LLM-ready prompt to your clipboard.",
   "main": "dist/main/index.js",
   "author": "Jason Koprowski",
@@ -13,6 +13,7 @@
     "debug": "npm run build && electron . --dev --debug",
     "spike:m1": "npm run build && electron . --spike=m1",
     "package": "npm run build && electron-builder",
+    "package:nopublish": "npm run build && electron-builder --publish never",
     "package:portable": "npm run build && electron-builder --win portable",
     "fetch-resources": "node scripts/fetch-resources.mjs",
     "clean": "node scripts/clean.mjs"

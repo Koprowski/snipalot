@@ -7,12 +7,12 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Stack:** Electron 30, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
 - **Windows installer (local):** On a Windows machine, `npm run package` produces **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe.
-- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.1`) runs **`.github/workflows/release-windows.yml`**, which builds on `windows-latest` and uploads **`Snipalot-*-setup.exe`** to a **GitHub Release** for that tag (`softprops/action-gh-release`). Bump **`package.json` `version`** before tagging so the filename matches the release.
+- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.2`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm run package:nopublish`** on `windows-latest` (build only — avoids electron-builder’s GitHub publish step, which needs `GH_TOKEN` during build), then **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
 - **Linux:** `npm run package` on Linux produces AppImage/Snap only, not the Windows setup exe.
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini walkthrough: **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** (update the pinned download link there when you ship a new version).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1+)
+## Recent improvements (v1.0.1 onward; current release v1.0.2)
 
 - **`mic_diagnostics.json`** in each **record/trade** session folder when recording starts: `getUserMedia` success/failure, active audio track label + `deviceId` (when exposed), `enumerateDevices` snapshot for `audioinput`. Main logs a one-line **`recorder` / `mic capture summary`**. Use for “no audio” / wrong-default-mic support (Snipalot still uses OS default input; no in-app mic picker yet).
 - **Frame picker:** Export uses `recording.mp4` inside the session directory (not the parent folder).

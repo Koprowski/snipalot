@@ -27,7 +27,9 @@ jobs:
       - name: Install and package
         run: |
           npm ci
-          npm run package
+          # --publish never: electron-builder.yml sets publish.github; without a token
+          # the build fails. Upload is done in the next step (action-gh-release).
+          npm run package:nopublish
 
       - name: List release artifacts
         run: Get-ChildItem -Path release -Filter *.exe | Format-Table Name, Length

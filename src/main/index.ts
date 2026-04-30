@@ -74,6 +74,8 @@ let launcherWindow: BrowserWindow | null = null;
 let hudKeepOnTopInterval: NodeJS.Timeout | null = null;
 let quitCleanupRan = false;
 let appExitRequested = false;
+let recorderRendererReady = false;
+let pendingRecorderStartRegion: RegionSelection | null = null;
 
 function killSiblingSnipalotElectronProcesses(): void {
   if (process.platform !== 'win32') return;
@@ -628,6 +630,7 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
 }
 
 function createRecorderWindow(): BrowserWindow {
+  recorderRendererReady = false;
   const win = new BrowserWindow({
     width: 420,
     height: 300,
@@ -639,6 +642,28 @@ function createRecorderWindow(): BrowserWindow {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html'));
+  win.webContents.on('did-finish-load', () => {
+    log('recorder', 'window finished load');
+  });
+  win.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      log('recorder', 'window failed load', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      });
+    }
+  );
+  win.webContents.on('render-process-gone', (_event, details) => {
+    recorderRendererReady = false;
+    log('recorder', 'renderer process gone', details);
+  });
+  win.on('closed', () => {
+    recorderRendererReady = false;
+    pendingRecorderStartRegion = null;
+  });
   if (isDebug) win.webContents.openDevTools({ mode: 'detach' });
   return win;
 }
@@ -1543,11 +1568,36 @@ async function testGeminiCliConnection(
       });
     });
 
+  const cleanStderrTail = (stderr: string, max = 500): string =>
+    stderr
+      .split('\n')
+      .filter((line) => !/crashpad/i.test(line))
+      .join('\n')
+      .trim()
+      .slice(0, max);
+
+  log('settings', 'gemini-cli test start', {
+    cliCommand,
+    resolvedCommand: resolvedCli.command,
+    hasPrefixArgs: resolvedCli.prefixArgs.length > 0,
+    model: cliModel,
+  });
+
   const versionProbe = await runGemini(['--version'], 10_000);
   if (versionProbe.launchError) {
+    log('settings', 'gemini-cli test launch failed', {
+      step: 'version',
+      err: versionProbe.launchError,
+      resolvedCommand: resolvedCli.command,
+    });
     return { ok: false, message: `Gemini CLI launch failed: ${versionProbe.launchError}` };
   }
   if (versionProbe.code !== 0) {
+    log('settings', 'gemini-cli test step failed', {
+      step: 'version',
+      code: versionProbe.code,
+      stderrTail: cleanStderrTail(versionProbe.stderr, 400),
+    });
     return {
       ok: false,
       message: `Gemini CLI --version failed (code ${versionProbe.code}). ${versionProbe.stderr.trim().slice(0, 400)}`,
@@ -1563,21 +1613,90 @@ async function testGeminiCliConnection(
     ['--model', cliModel, '--output-format', 'json', '--prompt', 'Reply with exactly: ok'],
     30_000
   );
+
   if (promptProbe.timedOut) {
+    log('settings', 'gemini-cli test step failed', {
+      step: 'prompt-flag',
+      reason: 'timeout',
+      code: promptProbe.code,
+    });
     return {
       ok: false,
       message: 'Gemini CLI prompt test timed out after 30s.',
     };
   }
   if (promptProbe.code !== 0) {
+    const promptFlagErr = cleanStderrTail(promptProbe.stderr);
+    const positionalConflict = /Cannot use both a positional prompt and the --prompt flag together/i.test(promptProbe.stderr);
+    if (positionalConflict) {
+      // Some Gemini CLI + runtime combos still surface a phantom positional
+      // prompt. Retry without --prompt so the test succeeds on either parser.
+      log('settings', 'gemini-cli test retrying positional prompt', {
+        code: promptProbe.code,
+        stderrTail: promptFlagErr,
+      });
+      const positionalProbe = await runGemini(
+        ['--model', cliModel, '--output-format', 'json', 'Reply with exactly: ok'],
+        30_000
+      );
+      if (positionalProbe.timedOut) {
+        log('settings', 'gemini-cli test step failed', {
+          step: 'prompt-positional',
+          reason: 'timeout',
+          code: positionalProbe.code,
+        });
+        return { ok: false, message: 'Gemini CLI prompt test timed out after 30s.' };
+      }
+      if (positionalProbe.code !== 0) {
+        log('settings', 'gemini-cli test step failed', {
+          step: 'prompt-positional',
+          code: positionalProbe.code,
+          stderrTail: cleanStderrTail(positionalProbe.stderr),
+        });
+        return {
+          ok: false,
+          message: `Gemini CLI prompt test failed (code ${positionalProbe.code}). ${cleanStderrTail(positionalProbe.stderr)}`,
+        };
+      }
+      if (!positionalProbe.stdout.trim()) {
+        log('settings', 'gemini-cli test step failed', {
+          step: 'prompt-positional',
+          reason: 'empty-stdout',
+        });
+        return { ok: false, message: 'Gemini CLI prompt test returned empty output.' };
+      }
+      log('settings', 'gemini-cli test success', {
+        fallback: 'positional-prompt',
+        resolvedCommand: resolvedCli.command,
+        model: cliModel,
+      });
+      return {
+        ok: true,
+        message: `Gemini CLI connection OK (command: ${resolvedCli.command}, model: ${cliModel}).`,
+      };
+    }
+    log('settings', 'gemini-cli test step failed', {
+      step: 'prompt-flag',
+      code: promptProbe.code,
+      stderrTail: promptFlagErr,
+    });
     return {
       ok: false,
-      message: `Gemini CLI prompt test failed (code ${promptProbe.code}). ${promptProbe.stderr.trim().slice(0, 500)}`,
+      message: `Gemini CLI prompt test failed (code ${promptProbe.code}). ${promptFlagErr}`,
     };
   }
   if (!promptProbe.stdout.trim()) {
+    log('settings', 'gemini-cli test step failed', {
+      step: 'prompt-flag',
+      reason: 'empty-stdout',
+    });
     return { ok: false, message: 'Gemini CLI prompt test returned empty output.' };
   }
+  log('settings', 'gemini-cli test success', {
+    fallback: 'none',
+    resolvedCommand: resolvedCli.command,
+    model: cliModel,
+  });
   return {
     ok: true,
     message: `Gemini CLI connection OK (command: ${resolvedCli.command}, model: ${cliModel}).`,
@@ -2583,6 +2702,21 @@ ipcMain.handle('log', (_evt, scope: string, ...args: unknown[]) => {
 
 // ─── IPC: overlay ↔ main ──────────────────────────────────────────────
 
+function dispatchRecorderStart(region: RegionSelection): void {
+  if (!recorderWindow || recorderWindow.isDestroyed()) {
+    recorderWindow = createRecorderWindow();
+    log('recorder', 'recorder window recreated before start dispatch');
+  }
+  if (!recorderRendererReady) {
+    pendingRecorderStartRegion = region;
+    log('recorder', 'queued start; recorder renderer not ready yet');
+    return;
+  }
+  pendingRecorderStartRegion = null;
+  recorderWindow.webContents.send('recorder:start', region);
+  log('recorder', 'dispatched start to recorder renderer');
+}
+
 ipcMain.handle('overlay:set-interactive', (_evt, displayId: string, interactive: boolean) => {
   const win = overlayWindows.get(displayId);
   if (!win || win.isDestroyed()) return;
@@ -2704,7 +2838,7 @@ ipcMain.handle(
     // Tell the active display's overlay to draw the region outline + receive annotations.
     targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
 
-    if (recorderWindow) recorderWindow.webContents.send('recorder:start', region);
+    dispatchRecorderStart(region);
   }
 );
 
@@ -2714,6 +2848,17 @@ ipcMain.handle('overlay:region-cancelled', (_evt, displayId: string) => {
 });
 
 // ─── IPC: recorder ↔ main ─────────────────────────────────────────────
+
+ipcMain.handle('recorder:ready', () => {
+  recorderRendererReady = true;
+  log('recorder', 'renderer signaled ready');
+  if (pendingRecorderStartRegion && recorderWindow && !recorderWindow.isDestroyed()) {
+    const queued = pendingRecorderStartRegion;
+    pendingRecorderStartRegion = null;
+    recorderWindow.webContents.send('recorder:start', queued);
+    log('recorder', 'flushed queued start to recorder renderer');
+  }
+});
 
 // Kept for back-compat with the recorder renderer, but the path is no longer
 // where we save the final mp4 — we just need a temp webm target. We'll

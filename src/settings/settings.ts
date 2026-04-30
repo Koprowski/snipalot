@@ -10,6 +10,9 @@ const btnBrowse = document.getElementById('btn-browse') as HTMLButtonElement;
 const btnSave = document.getElementById('btn-save') as HTMLButtonElement;
 const btnCancel = document.getElementById('btn-cancel') as HTMLButtonElement;
 const btnClose = document.getElementById('btn-close') as HTMLButtonElement;
+const btnTestApi = document.getElementById('btn-test-api-keys') as HTMLButtonElement;
+const btnCheckUpdates = document.getElementById('btn-check-updates') as HTMLButtonElement;
+const versionLabelEl = document.getElementById('settings-version-label') as HTMLElement;
 const settingsStatusEl = document.getElementById('status') as HTMLElement;
 const hotkeysBody = document.getElementById('hotkeys-body') as HTMLTableSectionElement;
 const firstRunBanner = document.getElementById('first-run-banner') as HTMLElement;
@@ -58,9 +61,23 @@ let editedOpenaiModel = '';
 let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 let editedCountdownSec = 3;
 
+function maskTradeSecrets<T extends { trade?: { geminiApiKey?: string; openaiApiKey?: string } }>(cfg: T): T {
+  const trade = cfg.trade;
+  if (!trade) return cfg;
+  return {
+    ...cfg,
+    trade: {
+      ...trade,
+      geminiApiKey: trade.geminiApiKey ? '[REDACTED]' : '',
+      openaiApiKey: trade.openaiApiKey ? '[REDACTED]' : '',
+    },
+  } as T;
+}
+
 async function init(): Promise<void> {
   const config = await api.getConfig();
-  api.log('settings', 'loaded config', config);
+  api.log('settings', 'loaded config', maskTradeSecrets(config));
+  await refreshVersionAndUpdateStatus();
 
   // Output dir
   dirInput.value = config.outputDir ?? '';
@@ -162,6 +179,25 @@ async function init(): Promise<void> {
   const openaiModelInput = document.getElementById('input-openai-model') as HTMLInputElement;
   openaiModelInput.value = editedOpenaiModel;
   openaiModelInput.addEventListener('input', () => { editedOpenaiModel = openaiModelInput.value.trim(); });
+}
+
+async function refreshVersionAndUpdateStatus(): Promise<void> {
+  try {
+    const info = await api.getAppInfo();
+    versionLabelEl.textContent = `Version ${info.version}`;
+    const update = await api.checkForUpdates();
+    if (!update.ok) {
+      versionLabelEl.textContent = `Version ${info.version} · Update check unavailable`;
+      return;
+    }
+    if (update.updateAvailable && update.latestVersion) {
+      versionLabelEl.textContent = `Version ${info.version} · Update available (${update.latestVersion})`;
+      return;
+    }
+    versionLabelEl.textContent = `Version ${info.version} · Up to date`;
+  } catch {
+    // Keep UI usable even if update check fails.
+  }
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────
@@ -300,6 +336,87 @@ btnBrowse.addEventListener('click', async () => {
   if (picked) {
     dirInput.value = picked;
     setStatus('');
+  }
+});
+
+// ─── test API keys (no save required) ──────────────────────────────────
+
+btnTestApi.addEventListener('click', async () => {
+  const geminiKey = editedGeminiApiKey.trim();
+  const openaiKey = editedOpenaiApiKey.trim();
+  const baseUrl = editedOpenaiBaseUrl.trim() || 'https://openrouter.ai/api/v1';
+  const model = editedOpenaiModel.trim() || 'google/gemini-2.0-flash-exp:free';
+
+  if (!geminiKey && !openaiKey) {
+    setStatus('Enter Gemini and/or OpenRouter/OpenAI API key first.', true);
+    return;
+  }
+
+  btnTestApi.disabled = true;
+  const prevSaveDisabled = btnSave.disabled;
+  btnSave.disabled = true;
+  setStatus('Testing API key(s)…');
+  try {
+    const result = await api.testApiKeys({
+      geminiApiKey: geminiKey || undefined,
+      openaiApiKey: openaiKey || undefined,
+      openaiBaseUrl: baseUrl,
+      openaiModel: model,
+    });
+    if (!result.triedAny) {
+      setStatus('No API keys provided to test.', true);
+      return;
+    }
+    const parts: string[] = [];
+    if (result.geminiTried) {
+      parts.push(
+        result.geminiOk
+          ? 'Gemini: OK'
+          : `Gemini: FAIL${result.geminiMessage ? ` (${result.geminiMessage})` : ''}`
+      );
+    }
+    if (result.openaiTried) {
+      parts.push(
+        result.openaiOk
+          ? 'OpenRouter/OpenAI: OK'
+          : `OpenRouter/OpenAI: FAIL${result.openaiMessage ? ` (${result.openaiMessage})` : ''}`
+      );
+    }
+    const msg = parts.join(' · ');
+    setStatus(msg, !result.anyOk);
+  } catch (err) {
+    setStatus(`API test failed: ${(err as Error).message}`, true);
+  } finally {
+    btnTestApi.disabled = false;
+    btnSave.disabled = prevSaveDisabled;
+  }
+});
+
+btnCheckUpdates.addEventListener('click', async () => {
+  btnCheckUpdates.disabled = true;
+  const prevSaveDisabled = btnSave.disabled;
+  btnSave.disabled = true;
+  setStatus('Checking for updates…');
+  try {
+    const result = await api.checkForUpdates();
+    if (!result.ok) {
+      setStatus(`Update check failed: ${result.message}`, true);
+      return;
+    }
+    const info = await api.getAppInfo();
+    if (!result.updateAvailable || !result.latestVersion || !result.releaseUrl) {
+      versionLabelEl.textContent = `Version ${info.version} · Up to date`;
+      setStatus(`Up to date (${info.version})`);
+      return;
+    }
+    versionLabelEl.textContent = `Version ${info.version} · Update available (${result.latestVersion})`;
+    setStatus(`Update available: ${result.latestVersion} — opening download page…`);
+    await api.openLatestRelease();
+  } catch (err) {
+    setStatus(`Update check failed: ${(err as Error).message}`, true);
+  } finally {
+    btnCheckUpdates.disabled = false;
+    btnSave.disabled = prevSaveDisabled;
   }
 });
 

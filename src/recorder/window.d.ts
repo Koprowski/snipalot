@@ -9,6 +9,7 @@ interface RecorderRegion {
 
 interface Window {
   snipalotRecorder: {
+    ready: () => Promise<void>;
     mainLog: (line: string) => Promise<void>;
     prepareDisplayCapture: () => Promise<void>;
     restoreDisplayCapture: () => Promise<void>;

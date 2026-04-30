@@ -31,6 +31,38 @@ const isDebug = process.argv.includes('--debug');
 // screenshot it for debugging. Don't use in normal recording runs.
 const disableContentProtection = process.argv.includes('--no-protect');
 
+function resolveGitShortSha(): string | null {
+  // Prefer explicit env injection (e.g. CI/build pipeline).
+  const envSha = process.env.SNIPALOT_GIT_SHA?.trim();
+  if (envSha) return envSha.slice(0, 12);
+  // Dev/local fallback: resolve from .git metadata if present.
+  try {
+    const gitDir = path.join(process.cwd(), '.git');
+    const headPath = path.join(gitDir, 'HEAD');
+    if (!fs.existsSync(headPath)) return null;
+    const head = fs.readFileSync(headPath, 'utf-8').trim();
+    if (head.startsWith('ref: ')) {
+      const ref = head.slice(5).trim();
+      const refPath = path.join(gitDir, ref);
+      if (fs.existsSync(refPath)) {
+        return fs.readFileSync(refPath, 'utf-8').trim().slice(0, 12);
+      }
+      const packedRefs = path.join(gitDir, 'packed-refs');
+      if (fs.existsSync(packedRefs)) {
+        const line = fs
+          .readFileSync(packedRefs, 'utf-8')
+          .split('\n')
+          .find((l) => l.endsWith(` ${ref}`));
+        if (line) return line.split(' ')[0].trim().slice(0, 12);
+      }
+      return null;
+    }
+    return head.slice(0, 12);
+  } catch {
+    return null;
+  }
+}
+
 // Prevent multiple instances of Snipalot from running simultaneously.
 // If we can't acquire the lock, a previous instance is still alive — bail
 // out so we don't spawn a second launcher/HUD/overlay set.
@@ -56,6 +88,10 @@ const overlayWindows = new Map<string, BrowserWindow>();
 /** Nested prepare/restore pairs from recorder around getDisplayMedia. */
 let overlayPrecaptureDepth = 0;
 let recorderWindow: BrowserWindow | null = null;
+/** True once recorder renderer sends recorder:ready. */
+let recorderRendererReady = false;
+/** Deferred start region if recorder:start fires before recorder renderer boot. */
+let pendingRecorderStart: RegionSelection | null = null;
 let hudWindow: BrowserWindow | null = null;
 let launcherWindow: BrowserWindow | null = null;
 /**
@@ -591,7 +627,20 @@ function createRecorderWindow(): BrowserWindow {
       nodeIntegration: false,
     },
   });
-  win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html'));
+  win.webContents.on('did-fail-load', (_evt, code, desc, validatedURL) => {
+    log('recorder', 'did-fail-load', { code, desc, validatedURL });
+    recorderRendererReady = false;
+  });
+  win.webContents.on('render-process-gone', (_evt, details) => {
+    log('recorder', 'render-process-gone', details);
+    recorderRendererReady = false;
+  });
+  win.webContents.on('unresponsive', () => {
+    log('recorder', 'renderer unresponsive');
+  });
+  win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html')).catch((err) => {
+    log('recorder', 'loadFile failed', { err: (err as Error).message });
+  });
   if (isDebug) win.webContents.openDevTools({ mode: 'detach' });
   return win;
 }
@@ -1198,6 +1247,265 @@ function openSettings(isFirstRun = false): void {
 }
 
 ipcMain.handle('settings:get-config', () => getConfig());
+ipcMain.handle('settings:get-app-info', () => ({
+  version: app.getVersion(),
+  releasePageUrl: 'https://github.com/Koprowski/snipalot/releases/latest',
+}));
+
+interface SettingsUpdateCheckResult {
+  ok: boolean;
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string;
+  message: string;
+}
+
+function parseSemverParts(v: string): number[] | null {
+  const clean = v.trim().replace(/^v/i, '');
+  const m = clean.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function isRemoteVersionNewer(current: string, latest: string): boolean {
+  const a = parseSemverParts(current);
+  const b = parseSemverParts(latest);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (b[i] > a[i]) return true;
+    if (b[i] < a[i]) return false;
+  }
+  return false;
+}
+
+ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
+  const currentVersion = app.getVersion();
+  const fallbackUrl = 'https://github.com/Koprowski/snipalot/releases/latest';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch('https://api.github.com/repos/Koprowski/snipalot/releases/latest', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `snipalot/${currentVersion}`,
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      log('settings', 'check-for-updates http fail', { status: res.status });
+      return {
+        ok: false,
+        currentVersion,
+        latestVersion: null,
+        updateAvailable: false,
+        releaseUrl: fallbackUrl,
+        message: `Update check failed (HTTP ${res.status}).`,
+      };
+    }
+    const json = await res.json() as {
+      tag_name?: string;
+      html_url?: string;
+      name?: string;
+    };
+    const latestTag = (json.tag_name ?? json.name ?? '').trim();
+    const latestVersion = latestTag.replace(/^v/i, '');
+    const releaseUrl = json.html_url || fallbackUrl;
+    if (!latestVersion) {
+      return {
+        ok: false,
+        currentVersion,
+        latestVersion: null,
+        updateAvailable: false,
+        releaseUrl,
+        message: 'Update check failed (invalid release metadata).',
+      };
+    }
+    const updateAvailable = isRemoteVersionNewer(currentVersion, latestVersion);
+    return {
+      ok: true,
+      currentVersion,
+      latestVersion,
+      updateAvailable,
+      releaseUrl,
+      message: updateAvailable
+        ? `Update available: v${latestVersion} (installed v${currentVersion}).`
+        : `You are up to date (v${currentVersion}).`,
+    };
+  } catch (err) {
+    log('settings', 'check-for-updates threw', { err: (err as Error).message });
+    return {
+      ok: false,
+      currentVersion,
+      latestVersion: null,
+      updateAvailable: false,
+      releaseUrl: fallbackUrl,
+      message: `Update check failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
+  const target = url && /^https?:\/\//i.test(url)
+    ? url
+    : 'https://github.com/Koprowski/snipalot/releases/latest';
+  await shell.openExternal(target);
+});
+
+function sanitizeSettingsPartialForLog(
+  partial: Partial<SnipalotConfig>
+): Partial<SnipalotConfig> & { redactedKeys?: string[] } {
+  const clone: Partial<SnipalotConfig> & { redactedKeys?: string[] } = JSON.parse(
+    JSON.stringify(partial)
+  );
+  const redacted: string[] = [];
+  if (clone.trade) {
+    if (typeof clone.trade.geminiApiKey === 'string' && clone.trade.geminiApiKey.length > 0) {
+      clone.trade.geminiApiKey = '[REDACTED]';
+      redacted.push('trade.geminiApiKey');
+    }
+    if (typeof clone.trade.openaiApiKey === 'string' && clone.trade.openaiApiKey.length > 0) {
+      clone.trade.openaiApiKey = '[REDACTED]';
+      redacted.push('trade.openaiApiKey');
+    }
+  }
+  if (redacted.length > 0) clone.redactedKeys = redacted;
+  return clone;
+}
+
+type TradeProvider = 'gemini' | 'openai';
+interface TradeApiTestRequest {
+  provider: TradeProvider;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
+interface TradeApiTestResult {
+  ok: boolean;
+  provider: TradeProvider;
+  status: number | null;
+  message: string;
+}
+
+async function testGeminiApiKey(apiKey: string): Promise<TradeApiTestResult> {
+  if (!apiKey) {
+    return { ok: false, provider: 'gemini', status: null, message: 'API key is required.' };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const model = 'gemini-2.0-flash';
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: 'Return exactly: {"ok":true}' }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 20 },
+      }),
+      signal: controller.signal,
+    });
+    const body = await res.text().catch(() => '');
+    if (!res.ok) {
+      log('settings', 'test-api-key gemini HTTP error', {
+        status: res.status,
+        bodyPreview: body.slice(0, 300),
+      });
+      return {
+        ok: false,
+        provider: 'gemini',
+        status: res.status,
+        message: `Gemini auth/test failed (HTTP ${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      provider: 'gemini',
+      status: res.status,
+      message: 'Gemini API key is valid.',
+    };
+  } catch (err) {
+    log('settings', 'test-api-key gemini failed', { err: (err as Error).message });
+    return {
+      ok: false,
+      provider: 'gemini',
+      status: null,
+      message: `Gemini test request failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function testOpenAiCompatibleApiKey(
+  apiKey: string,
+  baseUrl: string,
+  model: string
+): Promise<TradeApiTestResult> {
+  if (!apiKey) {
+    return { ok: false, provider: 'openai', status: null, message: 'API key is required.' };
+  }
+  const normalizedBase = (baseUrl || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+  const useModel = model || 'google/gemini-2.0-flash-exp:free';
+  const url = `${normalizedBase}/chat/completions`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: useModel,
+        messages: [{ role: 'user', content: 'Reply with OK only.' }],
+        max_tokens: 6,
+        temperature: 0,
+      }),
+      signal: controller.signal,
+    });
+    const body = await res.text().catch(() => '');
+    if (!res.ok) {
+      log('settings', 'test-api-key openai-compatible HTTP error', {
+        status: res.status,
+        baseUrl: normalizedBase,
+        model: useModel,
+        bodyPreview: body.slice(0, 300),
+      });
+      return {
+        ok: false,
+        provider: 'openai',
+        status: res.status,
+        message: `OpenAI-compatible auth/test failed (HTTP ${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      provider: 'openai',
+      status: res.status,
+      message: 'OpenAI-compatible API key is valid.',
+    };
+  } catch (err) {
+    log('settings', 'test-api-key openai-compatible failed', {
+      baseUrl: normalizedBase,
+      model: useModel,
+      err: (err as Error).message,
+    });
+    return {
+      ok: false,
+      provider: 'openai',
+      status: null,
+      message: `OpenAI-compatible test request failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
   // Detect a hotkey change so we know whether to re-register globalShortcuts.
@@ -1210,7 +1518,153 @@ ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
     log('hotkey', 'config changed; reloading global shortcuts');
     reloadGlobalHotkeys();
   }
-  log('settings', 'config saved via IPC', partial);
+  log('settings', 'config saved via IPC', sanitizeSettingsPartialForLog(partial));
+});
+
+type ProviderUnderTest = 'gemini' | 'openai-compatible';
+
+interface ApiKeyTestPayload {
+  provider: ProviderUnderTest;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+function normalizeProviderLabel(payload: ApiKeyTestPayload): string {
+  if (payload.provider === 'gemini') return 'Gemini';
+  const base = (payload.baseUrl ?? '').toLowerCase();
+  if (base.includes('openrouter')) return 'OpenRouter';
+  return 'OpenAI-compatible';
+}
+
+ipcMain.handle('settings:test-api-key', async (_evt, payload: ApiKeyTestPayload) => {
+  const provider = payload.provider;
+  const apiKey = payload.apiKey?.trim() ?? '';
+  const label = normalizeProviderLabel(payload);
+  if (!apiKey) {
+    return {
+      ok: false,
+      provider,
+      message: `${label}: API key is empty.`,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = 20000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    if (provider === 'gemini') {
+      const model = 'gemini-2.0-flash';
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Reply with exactly: ok' }] }],
+          generationConfig: { temperature: 0 },
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        log('settings', 'api-key-test failed', {
+          provider,
+          label,
+          status: res.status,
+          body: body.slice(0, 200),
+        });
+        return {
+          ok: false,
+          provider,
+          message: `${label} test failed (HTTP ${res.status}).`,
+        };
+      }
+      return {
+        ok: true,
+        provider,
+        message: `${label} key is valid.`,
+      };
+    }
+
+    const baseUrl = (payload.baseUrl || 'https://openrouter.ai/api/v1').trim();
+    const model = (payload.model || 'google/gemini-2.0-flash-exp:free').trim();
+    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
+        temperature: 0,
+        max_tokens: 4,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      log('settings', 'api-key-test failed', {
+        provider,
+        label,
+        status: res.status,
+        baseUrl,
+        model,
+        body: body.slice(0, 200),
+      });
+      return {
+        ok: false,
+        provider,
+        message: `${label} test failed (HTTP ${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      provider,
+      message: `${label} key works for model "${model}".`,
+    };
+  } catch (err) {
+    log('settings', 'api-key-test threw', {
+      provider,
+      label,
+      err: (err as Error).message,
+    });
+    return {
+      ok: false,
+      provider,
+      message: `${label} test failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+ipcMain.handle('settings:test-trade-api-key', async (_evt, req: TradeApiTestRequest) => {
+  const provider = req?.provider;
+  log('settings', 'test-api-key request', {
+    provider,
+    hasApiKey: !!req?.apiKey,
+    baseUrl: req?.baseUrl ?? null,
+    model: req?.model ?? null,
+  });
+  if (provider !== 'gemini' && provider !== 'openai') {
+    return {
+      ok: false,
+      provider: 'gemini',
+      status: null,
+      message: 'Unknown provider.',
+    } satisfies TradeApiTestResult;
+  }
+  if (provider === 'gemini') {
+    return testGeminiApiKey(req.apiKey ?? '');
+  }
+  return testOpenAiCompatibleApiKey(
+    req.apiKey ?? '',
+    req.baseUrl ?? 'https://openrouter.ai/api/v1',
+    req.model ?? 'google/gemini-2.0-flash-exp:free'
+  );
 });
 
 ipcMain.handle('settings:pick-folder', async () => {
@@ -1850,7 +2304,15 @@ ipcMain.handle(
     // Tell the active display's overlay to draw the region outline + receive annotations.
     targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
 
-    if (recorderWindow) recorderWindow.webContents.send('recorder:start', region);
+    if (recorderWindow) {
+      if (recorderRendererReady) {
+        log('recorder', 'sending recorder:start', { region });
+        recorderWindow.webContents.send('recorder:start', region);
+      } else {
+        pendingRecorderStart = region;
+        log('recorder', 'recorder renderer not ready; queued start', { region });
+      }
+    }
   }
 );
 
@@ -2086,6 +2548,7 @@ ipcMain.handle(
       // didn't stop manually, we still need to clean up here.
       if (appState === 'recording') {
         recorderMediaReady = false;
+        pendingRecorderStart = null;
         log('state', 'recorder stopped unexpectedly; cleaning up');
         // Take a snapshot for the pipeline (save-webm will arrive next).
         if (recordingStartedAt !== null && !pendingProcessing) {
@@ -2121,6 +2584,7 @@ ipcMain.handle(
       }
     } else if (state === 'error') {
       recorderMediaReady = false;
+      pendingRecorderStart = null;
       setAppState('idle', `recorder error: ${detail ?? '?'}`);
       pendingRegion = null;
       activeDisplayId = null;
@@ -2517,6 +2981,8 @@ app.whenReady().then(() => {
 
   rebuildOverlays();
   recorderWindow = createRecorderWindow();
+  recorderRendererReady = false;
+  pendingRecorderStart = null;
   launcherWindow = createLauncherWindow();
 
   // System tray — persistent access point independent of the launcher.

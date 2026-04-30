@@ -637,6 +637,10 @@ function renderOpenrouterModelOptions(): void {
     opt.textContent = `${model.id}  (${priceLabel})`;
     openrouterModelsSelect.appendChild(opt);
   }
+  // Auto-size: shrink the listbox to whatever's visible (max 5 rows, min 1)
+  // so an empty list takes minimal space and a small list doesn't leave a
+  // big empty rectangle behind.
+  openrouterModelsSelect.size = Math.max(1, Math.min(5, filtered.length));
 }
 
 function renderGeminiCliModelOptions(): void {
@@ -651,6 +655,7 @@ function renderGeminiCliModelOptions(): void {
     opt.textContent = model.id;
     geminiCliModelsSelect.appendChild(opt);
   }
+  geminiCliModelsSelect.size = Math.max(1, Math.min(5, filtered.length));
 }
 
 // ─── boot ──────────────────────────────────────────────────────────────

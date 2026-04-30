@@ -1547,37 +1547,10 @@ async function testGeminiCliConnection(
     };
   }
 
-  let modelsProbe = await runGemini(['models', '--json'], 20_000);
-  if (modelsProbe.code !== 0 && /unknown argument:\s*json/i.test(modelsProbe.stderr)) {
-    modelsProbe = await runGemini(['models'], 20_000);
-  }
-  if (modelsProbe.timedOut) {
-    return { ok: false, message: 'Gemini CLI model listing timed out after 20s.' };
-  }
-  if (modelsProbe.code === 0 && modelsProbe.stdout.trim()) {
-    try {
-      const parsed = JSON.parse(modelsProbe.stdout) as
-        | { models?: Array<{ id?: string; name?: string }> }
-        | Array<{ id?: string; name?: string }>;
-      const arr = Array.isArray(parsed) ? parsed : (parsed.models ?? []);
-      const ids = arr.map((m) => String(m.id ?? m.name ?? '').trim()).filter(Boolean);
-      if (ids.length > 0 && !ids.includes(cliModel)) {
-        return {
-          ok: false,
-          message: `Gemini CLI is reachable, but model "${cliModel}" is unavailable. Choose one from Fetch Models.`,
-        };
-      }
-    } catch {
-      const ids = Array.from(new Set((modelsProbe.stdout.match(/\bgemini-[a-z0-9.-]+\b/gi) ?? [])
-        .map((s) => s.toLowerCase())));
-      if (ids.length > 0 && !ids.includes(cliModel.toLowerCase())) {
-        return {
-          ok: false,
-          message: `Gemini CLI is reachable, but model "${cliModel}" is unavailable. Choose one from Fetch Models.`,
-        };
-      }
-    }
-  }
+// Skip the model-listing probe — `gemini models` is not a real subcommand
+  // (CLI parses it as a positional query and enters interactive mode → 20s
+  // hang every time). The actual prompt probe below catches an unavailable
+  // model with a useful error from the API anyway.
 
   const promptProbe = await runGemini(
     ['--model', cliModel, '--output-format', 'json', '--prompt', 'Reply with exactly: ok'],
@@ -1628,10 +1601,6 @@ function getOpenRouterModelsCachePath(): string {
   return path.join(app.getPath('userData'), 'openrouter-models-cache.json');
 }
 
-function getGeminiCliModelsCachePath(): string {
-  return path.join(app.getPath('userData'), 'gemini-cli-models-cache.json');
-}
-
 async function listOpenRouterModelsWithCache(): Promise<OpenRouterModelSummary[]> {
   const cachePath = getOpenRouterModelsCachePath();
   try {
@@ -1677,101 +1646,12 @@ async function listOpenRouterModelsWithCache(): Promise<OpenRouterModelSummary[]
   }
 }
 
-async function listGeminiCliModelsWithCache(command: string): Promise<GeminiCliModelSummary[]> {
-  const cliCommand = (command || 'gemini').trim() || 'gemini';
-  const resolvedCli = resolveGeminiCliExecutable(cliCommand);
-  const cachePath = getGeminiCliModelsCachePath();
-  const readCache = (): GeminiCliModelSummary[] => {
-    const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as { models?: GeminiCliModelSummary[] };
-    return Array.isArray(cached.models) ? cached.models : [];
-  };
-  try {
-    const { spawn } = require('node:child_process') as typeof import('node:child_process');
-    // Use whatever auth Gemini CLI has configured (OAuth or API key in
-    // ~/.gemini/settings.json) — strip stale env var that can force
-    // api-key mode unintentionally.
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
-      // electron.exe spawned with this flag behaves like node.exe.
-      ELECTRON_RUN_AS_NODE: '1',
-    };
-    delete env.GEMINI_API_KEY;
-    const runModelsCmd = (args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> =>
-      new Promise((resolve, reject) => {
-        let stdout = '';
-        let stderr = '';
-        let child: ReturnType<typeof spawn>;
-        try {
-          child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs, ...args], {
-            windowsHide: true,
-            shell: false,
-            env,
-            stdio: ['ignore', 'pipe', 'pipe'],
-          });
-        } catch (err) {
-          reject(err);
-          return;
-        }
-        const timer = setTimeout(() => {
-          child.kill();
-          reject(new Error('Gemini CLI model listing timed out.'));
-        }, 20_000);
-        child.stdout?.on('data', (d) => { stdout += String(d); });
-        child.stderr?.on('data', (d) => { stderr += String(d); });
-        child.on('error', (err) => {
-          clearTimeout(timer);
-          reject(err);
-        });
-        child.on('close', (code) => {
-          clearTimeout(timer);
-          resolve({ code, stdout, stderr });
-        });
-      });
-
-    let raw = await runModelsCmd(['models', '--json']);
-    if (raw.code !== 0 && /unknown argument:\s*json/i.test(raw.stderr)) {
-      raw = await runModelsCmd(['models']);
-    }
-    if (raw.code !== 0) {
-      throw new Error(raw.stderr.trim() || `Gemini CLI exited with code ${raw.code}.`);
-    }
-    let models: GeminiCliModelSummary[] = [];
-    try {
-      const parsed = JSON.parse(raw.stdout) as
-        | { models?: Array<{ name?: string; id?: string; createdAt?: string; created_at?: string }> }
-        | Array<{ name?: string; id?: string; createdAt?: string; created_at?: string }>;
-      const arr = Array.isArray(parsed) ? parsed : (parsed.models ?? []);
-      models = arr
-        .map((m) => {
-          const id = String(m.id ?? m.name ?? '').trim();
-          const createdRaw = m.createdAt ?? m.created_at ?? '';
-          return { id, createdAtMs: Date.parse(String(createdRaw)) || 0 };
-        })
-        .filter((m) => !!m.id)
-        .sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
-    } catch {
-      const ids = Array.from(new Set((raw.stdout.match(/\bgemini-[a-z0-9.-]+\b/gi) ?? [])
-        .map((s) => s.toLowerCase())));
-      models = ids.map((id) => ({ id, createdAtMs: 0 }));
-    }
-    if (models.length > 0) {
-      fs.writeFileSync(cachePath, JSON.stringify({ updatedAtMs: Date.now(), models }, null, 2), 'utf8');
-      return models;
-    }
-    throw new Error('Gemini CLI returned no models.');
-  } catch (err) {
-    try {
-      const cached = readCache();
-      if (cached.length > 0) {
-        log('settings', 'gemini cli model fetch failed, using cache', { err: (err as Error).message });
-        return cached;
-      }
-    } catch {
-      // ignore cache parse failures
-    }
-    return [...GEMINI_CLI_FALLBACK_MODELS].sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
-  }
+async function listGeminiCliModelsWithCache(_command: string): Promise<GeminiCliModelSummary[]> {
+  // Note: Gemini CLI has no `models` subcommand — passing it makes the CLI
+  // treat "models" as a positional query and hang in interactive REPL mode.
+  // Just return the curated static list. Users can still type any model
+  // name into the input field manually if they want something off-list.
+  return [...GEMINI_CLI_FALLBACK_MODELS].sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
 }
 
 ipcMain.handle(

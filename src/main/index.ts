@@ -1199,6 +1199,157 @@ function openSettings(isFirstRun = false): void {
 
 ipcMain.handle('settings:get-config', () => getConfig());
 
+function sanitizeSettingsPartialForLog(
+  partial: Partial<SnipalotConfig>
+): Partial<SnipalotConfig> & { redactedKeys?: string[] } {
+  const clone: Partial<SnipalotConfig> & { redactedKeys?: string[] } = JSON.parse(
+    JSON.stringify(partial)
+  );
+  const redacted: string[] = [];
+  if (clone.trade) {
+    if (typeof clone.trade.geminiApiKey === 'string' && clone.trade.geminiApiKey.length > 0) {
+      clone.trade.geminiApiKey = '[REDACTED]';
+      redacted.push('trade.geminiApiKey');
+    }
+    if (typeof clone.trade.openaiApiKey === 'string' && clone.trade.openaiApiKey.length > 0) {
+      clone.trade.openaiApiKey = '[REDACTED]';
+      redacted.push('trade.openaiApiKey');
+    }
+  }
+  if (redacted.length > 0) clone.redactedKeys = redacted;
+  return clone;
+}
+
+type TradeProvider = 'gemini' | 'openai';
+interface TradeApiTestRequest {
+  provider: TradeProvider;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
+interface TradeApiTestResult {
+  ok: boolean;
+  provider: TradeProvider;
+  status: number | null;
+  message: string;
+}
+
+async function testGeminiApiKey(apiKey: string): Promise<TradeApiTestResult> {
+  if (!apiKey) {
+    return { ok: false, provider: 'gemini', status: null, message: 'API key is required.' };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const model = 'gemini-2.0-flash';
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: 'Return exactly: {"ok":true}' }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 20 },
+      }),
+      signal: controller.signal,
+    });
+    const body = await res.text().catch(() => '');
+    if (!res.ok) {
+      log('settings', 'test-api-key gemini HTTP error', {
+        status: res.status,
+        bodyPreview: body.slice(0, 300),
+      });
+      return {
+        ok: false,
+        provider: 'gemini',
+        status: res.status,
+        message: `Gemini auth/test failed (HTTP ${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      provider: 'gemini',
+      status: res.status,
+      message: 'Gemini API key is valid.',
+    };
+  } catch (err) {
+    log('settings', 'test-api-key gemini failed', { err: (err as Error).message });
+    return {
+      ok: false,
+      provider: 'gemini',
+      status: null,
+      message: `Gemini test request failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function testOpenAiCompatibleApiKey(
+  apiKey: string,
+  baseUrl: string,
+  model: string
+): Promise<TradeApiTestResult> {
+  if (!apiKey) {
+    return { ok: false, provider: 'openai', status: null, message: 'API key is required.' };
+  }
+  const normalizedBase = (baseUrl || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+  const useModel = model || 'google/gemini-2.0-flash-exp:free';
+  const url = `${normalizedBase}/chat/completions`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: useModel,
+        messages: [{ role: 'user', content: 'Reply with OK only.' }],
+        max_tokens: 6,
+        temperature: 0,
+      }),
+      signal: controller.signal,
+    });
+    const body = await res.text().catch(() => '');
+    if (!res.ok) {
+      log('settings', 'test-api-key openai-compatible HTTP error', {
+        status: res.status,
+        baseUrl: normalizedBase,
+        model: useModel,
+        bodyPreview: body.slice(0, 300),
+      });
+      return {
+        ok: false,
+        provider: 'openai',
+        status: res.status,
+        message: `OpenAI-compatible auth/test failed (HTTP ${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      provider: 'openai',
+      status: res.status,
+      message: 'OpenAI-compatible API key is valid.',
+    };
+  } catch (err) {
+    log('settings', 'test-api-key openai-compatible failed', {
+      baseUrl: normalizedBase,
+      model: useModel,
+      err: (err as Error).message,
+    });
+    return {
+      ok: false,
+      provider: 'openai',
+      status: null,
+      message: `OpenAI-compatible test request failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
   // Detect a hotkey change so we know whether to re-register globalShortcuts.
   // We compare the partial.hotkeys keys against current to avoid the cost
@@ -1211,6 +1362,152 @@ ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
     reloadGlobalHotkeys();
   }
   log('settings', 'config saved via IPC', partial);
+});
+
+type ProviderUnderTest = 'gemini' | 'openai-compatible';
+
+interface ApiKeyTestPayload {
+  provider: ProviderUnderTest;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+function normalizeProviderLabel(payload: ApiKeyTestPayload): string {
+  if (payload.provider === 'gemini') return 'Gemini';
+  const base = (payload.baseUrl ?? '').toLowerCase();
+  if (base.includes('openrouter')) return 'OpenRouter';
+  return 'OpenAI-compatible';
+}
+
+ipcMain.handle('settings:test-api-key', async (_evt, payload: ApiKeyTestPayload) => {
+  const provider = payload.provider;
+  const apiKey = payload.apiKey?.trim() ?? '';
+  const label = normalizeProviderLabel(payload);
+  if (!apiKey) {
+    return {
+      ok: false,
+      provider,
+      message: `${label}: API key is empty.`,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = 20000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    if (provider === 'gemini') {
+      const model = 'gemini-2.0-flash';
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Reply with exactly: ok' }] }],
+          generationConfig: { temperature: 0 },
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        log('settings', 'api-key-test failed', {
+          provider,
+          label,
+          status: res.status,
+          body: body.slice(0, 200),
+        });
+        return {
+          ok: false,
+          provider,
+          message: `${label} test failed (HTTP ${res.status}).`,
+        };
+      }
+      return {
+        ok: true,
+        provider,
+        message: `${label} key is valid.`,
+      };
+    }
+
+    const baseUrl = (payload.baseUrl || 'https://openrouter.ai/api/v1').trim();
+    const model = (payload.model || 'google/gemini-2.0-flash-exp:free').trim();
+    const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
+        temperature: 0,
+        max_tokens: 4,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      log('settings', 'api-key-test failed', {
+        provider,
+        label,
+        status: res.status,
+        baseUrl,
+        model,
+        body: body.slice(0, 200),
+      });
+      return {
+        ok: false,
+        provider,
+        message: `${label} test failed (HTTP ${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      provider,
+      message: `${label} key works for model "${model}".`,
+    };
+  } catch (err) {
+    log('settings', 'api-key-test threw', {
+      provider,
+      label,
+      err: (err as Error).message,
+    });
+    return {
+      ok: false,
+      provider,
+      message: `${label} test failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+ipcMain.handle('settings:test-trade-api-key', async (_evt, req: TradeApiTestRequest) => {
+  const provider = req?.provider;
+  log('settings', 'test-api-key request', {
+    provider,
+    hasApiKey: !!req?.apiKey,
+    baseUrl: req?.baseUrl ?? null,
+    model: req?.model ?? null,
+  });
+  if (provider !== 'gemini' && provider !== 'openai') {
+    return {
+      ok: false,
+      provider: 'gemini',
+      status: null,
+      message: 'Unknown provider.',
+    } satisfies TradeApiTestResult;
+  }
+  if (provider === 'gemini') {
+    return testGeminiApiKey(req.apiKey ?? '');
+  }
+  return testOpenAiCompatibleApiKey(
+    req.apiKey ?? '',
+    req.baseUrl ?? 'https://openrouter.ai/api/v1',
+    req.model ?? 'google/gemini-2.0-flash-exp:free'
+  );
 });
 
 ipcMain.handle('settings:pick-folder', async () => {

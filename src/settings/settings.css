@@ -450,6 +450,10 @@ body {
   color: var(--accent);
 }
 
+.footer .status.warn {
+  color: #facc15;
+}
+
 /* ── first-run banner ── */
 
 .first-run-banner {

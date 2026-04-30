@@ -129,10 +129,12 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **End users** (no Node.js or Git required):
 
-1. **Download the installer** (current release **v1.0.3**):
-   - **Direct:** [Snipalot-1.0.3-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.3/Snipalot-1.0.3-setup.exe)
+1. **Download the installer** (current release **v1.0.4**):
+   - **Direct:** [Snipalot-1.0.4-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.4/Snipalot-1.0.4-setup.exe)
    - Or open **[Releases](https://github.com/Koprowski/snipalot/releases)** and grab the latest **`Snipalot-*-setup.exe`** (NSIS installer, Windows x64).
 2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
+
+**Upgrading or reinstalling:** Snipalot keeps running in the **system tray** after you close the launcher (the **X** only hides the window). Before running a new installer, **quit fully**: right-click the **Snipalot tray icon** (near the clock) → **Quit Snipalot**. If the setup still says the app cannot be closed, click **Retry** after quitting (the installer retries several times).
 
 **Trade mode + Gemini / API keys:** step-by-step guide in **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)** (same content as **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)**; the doc in `docs/` carries the current download URL).
 

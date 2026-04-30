@@ -129,10 +129,14 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **End users** (no Node.js or Git required):
 
-1. Open **[Releases](https://github.com/Koprowski/snipalot/releases)** and download the latest **`Snipalot-*-setup.exe`** (NSIS installer for Windows x64).
+1. **Download the installer** (current release **v1.0.2**):
+   - **Direct:** [Snipalot-1.0.2-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.2/Snipalot-1.0.2-setup.exe)
+   - Or open **[Releases](https://github.com/Koprowski/snipalot/releases)** and grab the latest **`Snipalot-*-setup.exe`** (NSIS installer, Windows x64).
 2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
 
-A full walkthrough for Trade mode plus **Gemini CLI / API keys** is in **[Issue #2 — Installation Guide: Snipalot + Gemini CLI on Windows](https://github.com/Koprowski/snipalot/issues/2)**. The same guide (with an up-to-date download link) lives in the repo as **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)**.
+**Trade mode + Gemini / API keys:** step-by-step guide in **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)** (same content as **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)**; the doc in `docs/` carries the current download URL).
+
+**No audio after recording?** Each session folder can include **`mic_diagnostics.json`** (which microphone was used and any capture errors). See the troubleshooting table in the install guide above.
 
 ---
 

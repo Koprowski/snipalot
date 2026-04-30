@@ -15,11 +15,13 @@ import {
 } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { execSync } from 'node:child_process';
 import { log } from './logger';
 import { runPipeline, AnnotationRecord, ChapterRecord, formatSessionStamp } from './pipeline';
 import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
+import { resolveGeminiCliExecutable } from './gemini-cli-exec';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
@@ -69,6 +71,48 @@ let launcherWindow: BrowserWindow | null = null;
  * is already on top.
  */
 let hudKeepOnTopInterval: NodeJS.Timeout | null = null;
+let quitCleanupRan = false;
+let appExitRequested = false;
+
+function killSiblingSnipalotElectronProcesses(): void {
+  if (process.platform !== 'win32') return;
+  const repoPath = process.cwd().replace(/\\/g, '\\\\');
+  const ps = [
+    '$self = $PID',
+    `$procs = Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq 'electron.exe' -and $_.ProcessId -ne $self -and $_.CommandLine -like '*${repoPath}*' }`,
+    'foreach ($p in $procs) {',
+    '  try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop } catch {}',
+    '}',
+  ].join(' ; ');
+  try {
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${ps}"`, {
+      windowsHide: true,
+      stdio: 'pipe',
+    });
+    log('main', 'quit cleanup: attempted sibling electron kill', { repoPath });
+  } catch (err) {
+    log('main', 'quit cleanup: sibling electron kill failed', {
+      err: (err as Error).message,
+    });
+  }
+}
+
+function requestAppExit(reason: string): boolean {
+  if (appExitRequested) {
+    log('main', 'app exit already in progress', { reason });
+    return true;
+  }
+  appExitRequested = true;
+  log('main', 'app exit requested', { reason });
+  killSiblingSnipalotElectronProcesses();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.close();
+  }
+  // Force exit shortly after quit to avoid hanging renderer/process states.
+  setTimeout(() => app.exit(0), 300);
+  app.quit();
+  return true;
+}
 
 type AppState =
   | 'idle'
@@ -481,6 +525,8 @@ function broadcastStateToLauncher(): void {
     appState,
     processingStep,
     startStopHotkey: getConfig().hotkeys.startStop,
+    snapshotHotkey: getConfig().hotkeys.snapshot,
+    startTradeHotkey: getConfig().hotkeys.startTrade,
     tradeMarkerHotkey: getConfig().hotkeys.tradeMarker,
     sessionMode: currentSessionMode,
     processingProgress: computeProcessingProgress(),
@@ -605,7 +651,7 @@ function createLauncherWindow(): BrowserWindow {
   // 140 total) makes room for the progress bar block under the hint that
   // shows during the 'processing' state. Hidden during idle but reserves
   // the layout space so transitions don't cause window-size jumps.
-  const h = 170;
+  const h = 156;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;
@@ -645,6 +691,11 @@ function createLauncherWindow(): BrowserWindow {
   // content protection on it. Keeping it off means Print Screen / OS-level
   // screen capture still works when debugging the launcher's appearance.
   win.loadFile(path.join(__dirname, '..', 'launcher', 'launcher.html'));
+  win.on('close', (event) => {
+    if (appExitRequested) return;
+    event.preventDefault();
+    requestAppExit('launcher window close');
+  });
   win.once('ready-to-show', () => {
     win.show();
     // Restore pin state from config — set BEFORE broadcasting state so
@@ -1156,8 +1207,8 @@ function openSettings(isFirstRun = false): void {
     return;
   }
   const primary = screen.getPrimaryDisplay();
-  const w = 480;
-  const h = 520;
+  const w = 760;
+  const h = 700;
   const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
   const win = new BrowserWindow({
     width: w,
@@ -1167,7 +1218,9 @@ function openSettings(isFirstRun = false): void {
     title: 'Snipalot · Settings',
     frame: false,
     transparent: false,
-    resizable: false,
+    resizable: true,
+    minWidth: 700,
+    minHeight: 620,
     maximizable: false,
     minimizable: false,
     skipTaskbar: false,
@@ -1184,6 +1237,9 @@ function openSettings(isFirstRun = false): void {
   });
   win.setAlwaysOnTop(true, 'screen-saver');
   win.loadFile(path.join(__dirname, '..', 'settings', 'settings.html'));
+  win.on('close', (event) => {
+    if (appExitRequested) return;
+  });
   win.once('ready-to-show', () => {
     win.show();
     win.moveTop();
@@ -1192,6 +1248,10 @@ function openSettings(isFirstRun = false): void {
   });
   win.on('closed', () => {
     settingsWindow = null;
+    if (launcherWindow && !launcherWindow.isDestroyed()) {
+      if (!launcherWindow.isVisible()) launcherWindow.show();
+      launcherWindow.focus();
+    }
     log('settings', 'window closed');
   });
   settingsWindow = win;
@@ -1314,10 +1374,6 @@ function sanitizeSettingsPartialForLog(
   );
   const redacted: string[] = [];
   if (clone.trade) {
-    if (typeof clone.trade.geminiApiKey === 'string' && clone.trade.geminiApiKey.length > 0) {
-      clone.trade.geminiApiKey = '[REDACTED]';
-      redacted.push('trade.geminiApiKey');
-    }
     if (typeof clone.trade.openaiApiKey === 'string' && clone.trade.openaiApiKey.length > 0) {
       clone.trade.openaiApiKey = '[REDACTED]';
       redacted.push('trade.openaiApiKey');
@@ -1327,7 +1383,7 @@ function sanitizeSettingsPartialForLog(
   return clone;
 }
 
-type TradeProvider = 'gemini' | 'openai';
+type TradeProvider = 'openai';
 interface TradeApiTestRequest {
   provider: TradeProvider;
   apiKey: string;
@@ -1341,57 +1397,6 @@ interface TradeApiTestResult {
   message: string;
 }
 
-async function testGeminiApiKey(apiKey: string): Promise<TradeApiTestResult> {
-  if (!apiKey) {
-    return { ok: false, provider: 'gemini', status: null, message: 'API key is required.' };
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
-  const model = 'gemini-2.0-flash';
-  const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: 'Return exactly: {"ok":true}' }] }],
-        generationConfig: { temperature: 0, maxOutputTokens: 20 },
-      }),
-      signal: controller.signal,
-    });
-    const body = await res.text().catch(() => '');
-    if (!res.ok) {
-      log('settings', 'test-api-key gemini HTTP error', {
-        status: res.status,
-        bodyPreview: body.slice(0, 300),
-      });
-      return {
-        ok: false,
-        provider: 'gemini',
-        status: res.status,
-        message: `Gemini auth/test failed (HTTP ${res.status}).`,
-      };
-    }
-    return {
-      ok: true,
-      provider: 'gemini',
-      status: res.status,
-      message: 'Gemini API key is valid.',
-    };
-  } catch (err) {
-    log('settings', 'test-api-key gemini failed', { err: (err as Error).message });
-    return {
-      ok: false,
-      provider: 'gemini',
-      status: null,
-      message: `Gemini test request failed: ${(err as Error).message}`,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function testOpenAiCompatibleApiKey(
   apiKey: string,
   baseUrl: string,
@@ -1401,7 +1406,7 @@ async function testOpenAiCompatibleApiKey(
     return { ok: false, provider: 'openai', status: null, message: 'API key is required.' };
   }
   const normalizedBase = (baseUrl || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
-  const useModel = model || 'google/gemini-2.0-flash-exp:free';
+  const useModel = model || 'google/gemini-2.5-flash';
   const url = `${normalizedBase}/chat/completions`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
@@ -1457,6 +1462,401 @@ async function testOpenAiCompatibleApiKey(
     clearTimeout(timeout);
   }
 }
+
+async function testGeminiCliConnection(
+  command: string,
+  model: string
+): Promise<{ ok: boolean; message: string }> {
+  const cliCommand = (command || 'gemini').trim();
+  const resolvedCli = resolveGeminiCliExecutable(cliCommand);
+  const cliModel = (model || 'gemini-2.5-flash').trim();
+  // Strip GEMINI_API_KEY from the spawn env so the CLI uses whatever
+  // auth method is configured in ~/.gemini/settings.json (OAuth via
+  // Google account = free tier, vs. paid API key auth). Without this,
+  // a stale env var forces api-key mode and triggers expired-key errors.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+  };
+  delete env.GEMINI_API_KEY;
+  const runGemini = (
+    args: string[],
+    timerMs: number
+  ): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean; launchError?: string }> =>
+    new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      const { spawn } = require('node:child_process') as typeof import('node:child_process');
+      // Windows + shell:true runs through cmd.exe and breaks argv quoting for
+      // multi-word --prompt values, which makes Gemini CLI see both -p and a
+      // positional prompt ("Cannot use both..."). Prefer direct CreateProcess.
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs, ...args], {
+          windowsHide: true,
+          shell: false,
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (err) {
+        resolve({
+          code: -1,
+          stdout,
+          stderr,
+          timedOut,
+          launchError: (err as Error).message,
+        });
+        return;
+      }
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, timerMs);
+      child.stdout?.on('data', (d) => { stdout += String(d); });
+      child.stderr?.on('data', (d) => { stderr += String(d); });
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        resolve({
+          code: -1,
+          stdout,
+          stderr,
+          timedOut,
+          launchError: (err as Error).message,
+        });
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({ code, stdout, stderr, timedOut });
+      });
+    });
+
+  const versionProbe = await runGemini(['--version'], 10_000);
+  if (versionProbe.launchError) {
+    return { ok: false, message: `Gemini CLI launch failed: ${versionProbe.launchError}` };
+  }
+  if (versionProbe.code !== 0) {
+    return {
+      ok: false,
+      message: `Gemini CLI --version failed (code ${versionProbe.code}). ${versionProbe.stderr.trim().slice(0, 400)}`,
+    };
+  }
+
+  let modelsProbe = await runGemini(['models', '--json'], 20_000);
+  if (modelsProbe.code !== 0 && /unknown argument:\s*json/i.test(modelsProbe.stderr)) {
+    modelsProbe = await runGemini(['models'], 20_000);
+  }
+  if (modelsProbe.timedOut) {
+    return { ok: false, message: 'Gemini CLI model listing timed out after 20s.' };
+  }
+  if (modelsProbe.code === 0 && modelsProbe.stdout.trim()) {
+    try {
+      const parsed = JSON.parse(modelsProbe.stdout) as
+        | { models?: Array<{ id?: string; name?: string }> }
+        | Array<{ id?: string; name?: string }>;
+      const arr = Array.isArray(parsed) ? parsed : (parsed.models ?? []);
+      const ids = arr.map((m) => String(m.id ?? m.name ?? '').trim()).filter(Boolean);
+      if (ids.length > 0 && !ids.includes(cliModel)) {
+        return {
+          ok: false,
+          message: `Gemini CLI is reachable, but model "${cliModel}" is unavailable. Choose one from Fetch Models.`,
+        };
+      }
+    } catch {
+      const ids = Array.from(new Set((modelsProbe.stdout.match(/\bgemini-[a-z0-9.-]+\b/gi) ?? [])
+        .map((s) => s.toLowerCase())));
+      if (ids.length > 0 && !ids.includes(cliModel.toLowerCase())) {
+        return {
+          ok: false,
+          message: `Gemini CLI is reachable, but model "${cliModel}" is unavailable. Choose one from Fetch Models.`,
+        };
+      }
+    }
+  }
+
+  const promptProbe = await runGemini(
+    ['--model', cliModel, '--output-format', 'json', '--prompt', 'Reply with exactly: ok'],
+    30_000
+  );
+  if (promptProbe.timedOut) {
+    return {
+      ok: false,
+      message: 'Gemini CLI prompt test timed out after 30s.',
+    };
+  }
+  if (promptProbe.code !== 0) {
+    return {
+      ok: false,
+      message: `Gemini CLI prompt test failed (code ${promptProbe.code}). ${promptProbe.stderr.trim().slice(0, 500)}`,
+    };
+  }
+  if (!promptProbe.stdout.trim()) {
+    return { ok: false, message: 'Gemini CLI prompt test returned empty output.' };
+  }
+  return {
+    ok: true,
+    message: `Gemini CLI connection OK (command: ${resolvedCli.command}, model: ${cliModel}).`,
+  };
+}
+
+interface OpenRouterModelSummary {
+  id: string;
+  createdAtMs: number;
+  inputCostPer1M: number;
+}
+
+interface GeminiCliModelSummary {
+  id: string;
+  createdAtMs: number;
+}
+
+const GEMINI_CLI_FALLBACK_MODELS: GeminiCliModelSummary[] = [
+  { id: 'gemini-2.5-pro', createdAtMs: Date.parse('2025-03-01') || 0 },
+  { id: 'gemini-2.5-flash', createdAtMs: Date.parse('2025-03-01') || 0 },
+  { id: 'gemini-2.0-flash', createdAtMs: Date.parse('2024-12-01') || 0 },
+  { id: 'gemini-2.0-flash-lite', createdAtMs: Date.parse('2024-12-01') || 0 },
+  { id: 'gemini-1.5-pro', createdAtMs: Date.parse('2024-02-01') || 0 },
+  { id: 'gemini-1.5-flash', createdAtMs: Date.parse('2024-02-01') || 0 },
+];
+
+function getOpenRouterModelsCachePath(): string {
+  return path.join(app.getPath('userData'), 'openrouter-models-cache.json');
+}
+
+function getGeminiCliModelsCachePath(): string {
+  return path.join(app.getPath('userData'), 'gemini-cli-models-cache.json');
+}
+
+async function listOpenRouterModelsWithCache(): Promise<OpenRouterModelSummary[]> {
+  const cachePath = getOpenRouterModelsCachePath();
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/models');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = await res.json() as {
+      data?: Array<{
+        id?: string;
+        created_at?: number | string | null;
+        createdAt?: number | string | null;
+        pricing?: {
+          prompt?: string | number | null;
+          input?: string | number | null;
+        } | null;
+      }>;
+    };
+    const models = (raw.data ?? [])
+      .filter((m) => typeof m.id === 'string' && m.id.length > 0)
+      .map((m) => {
+        const createdRaw = m.created_at ?? m.createdAt ?? 0;
+        const createdAtMs = typeof createdRaw === 'number'
+          ? (createdRaw > 1_000_000_000_000 ? createdRaw : createdRaw * 1000)
+          : (Date.parse(String(createdRaw)) || 0);
+        const rawInputCost = m.pricing?.prompt ?? m.pricing?.input ?? 0;
+        const inputCostPerToken = Number(rawInputCost) || 0;
+        const inputCostPer1M = inputCostPerToken * 1_000_000;
+        return { id: String(m.id), createdAtMs, inputCostPer1M };
+      })
+      .sort((a, b) => b.createdAtMs - a.createdAtMs);
+    fs.writeFileSync(cachePath, JSON.stringify({ updatedAtMs: Date.now(), models }, null, 2), 'utf8');
+    return models;
+  } catch (err) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as { models?: OpenRouterModelSummary[] };
+      if (Array.isArray(cached.models) && cached.models.length > 0) {
+        log('settings', 'openrouter model fetch failed, using cache', { err: (err as Error).message });
+        return cached.models;
+      }
+    } catch {
+      // no cache available
+    }
+    throw err;
+  }
+}
+
+async function listGeminiCliModelsWithCache(command: string): Promise<GeminiCliModelSummary[]> {
+  const cliCommand = (command || 'gemini').trim() || 'gemini';
+  const resolvedCli = resolveGeminiCliExecutable(cliCommand);
+  const cachePath = getGeminiCliModelsCachePath();
+  const readCache = (): GeminiCliModelSummary[] => {
+    const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as { models?: GeminiCliModelSummary[] };
+    return Array.isArray(cached.models) ? cached.models : [];
+  };
+  try {
+    const { spawn } = require('node:child_process') as typeof import('node:child_process');
+    // Use whatever auth Gemini CLI has configured (OAuth or API key in
+    // ~/.gemini/settings.json) — strip stale env var that can force
+    // api-key mode unintentionally.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+    };
+    delete env.GEMINI_API_KEY;
+    const runModelsCmd = (args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> =>
+      new Promise((resolve, reject) => {
+        let stdout = '';
+        let stderr = '';
+        let child: ReturnType<typeof spawn>;
+        try {
+          child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs, ...args], {
+            windowsHide: true,
+            shell: false,
+            env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+        } catch (err) {
+          reject(err);
+          return;
+        }
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(new Error('Gemini CLI model listing timed out.'));
+        }, 20_000);
+        child.stdout?.on('data', (d) => { stdout += String(d); });
+        child.stderr?.on('data', (d) => { stderr += String(d); });
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          resolve({ code, stdout, stderr });
+        });
+      });
+
+    let raw = await runModelsCmd(['models', '--json']);
+    if (raw.code !== 0 && /unknown argument:\s*json/i.test(raw.stderr)) {
+      raw = await runModelsCmd(['models']);
+    }
+    if (raw.code !== 0) {
+      throw new Error(raw.stderr.trim() || `Gemini CLI exited with code ${raw.code}.`);
+    }
+    let models: GeminiCliModelSummary[] = [];
+    try {
+      const parsed = JSON.parse(raw.stdout) as
+        | { models?: Array<{ name?: string; id?: string; createdAt?: string; created_at?: string }> }
+        | Array<{ name?: string; id?: string; createdAt?: string; created_at?: string }>;
+      const arr = Array.isArray(parsed) ? parsed : (parsed.models ?? []);
+      models = arr
+        .map((m) => {
+          const id = String(m.id ?? m.name ?? '').trim();
+          const createdRaw = m.createdAt ?? m.created_at ?? '';
+          return { id, createdAtMs: Date.parse(String(createdRaw)) || 0 };
+        })
+        .filter((m) => !!m.id)
+        .sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
+    } catch {
+      const ids = Array.from(new Set((raw.stdout.match(/\bgemini-[a-z0-9.-]+\b/gi) ?? [])
+        .map((s) => s.toLowerCase())));
+      models = ids.map((id) => ({ id, createdAtMs: 0 }));
+    }
+    if (models.length > 0) {
+      fs.writeFileSync(cachePath, JSON.stringify({ updatedAtMs: Date.now(), models }, null, 2), 'utf8');
+      return models;
+    }
+    throw new Error('Gemini CLI returned no models.');
+  } catch (err) {
+    try {
+      const cached = readCache();
+      if (cached.length > 0) {
+        log('settings', 'gemini cli model fetch failed, using cache', { err: (err as Error).message });
+        return cached;
+      }
+    } catch {
+      // ignore cache parse failures
+    }
+    return [...GEMINI_CLI_FALLBACK_MODELS].sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
+  }
+}
+
+ipcMain.handle(
+  'settings:test-llm-connection',
+  async (
+    _evt,
+    payload: {
+      llmMode?: 'gemini-cli' | 'api';
+      geminiCliCommand?: string;
+      geminiCliModel?: string;
+      openaiApiKey?: string;
+      openaiBaseUrl?: string;
+      openaiModel?: string;
+    }
+  ): Promise<{ ok: boolean; mode: 'gemini-cli' | 'api'; message: string }> => {
+    const mode = payload?.llmMode === 'api' ? 'api' : 'gemini-cli';
+    if (mode === 'gemini-cli') {
+      const result = await testGeminiCliConnection(
+        payload?.geminiCliCommand ?? 'gemini',
+        payload?.geminiCliModel ?? 'gemini-2.5-flash'
+      );
+      return { ok: result.ok, mode, message: result.message };
+    }
+
+    const apiKey = payload?.openaiApiKey?.trim() ?? '';
+    if (!apiKey) {
+      return {
+        ok: false,
+        mode,
+        message: 'API mode: OpenRouter/OpenAI API key is required.',
+      };
+    }
+    const baseUrl = payload?.openaiBaseUrl ?? 'https://openrouter.ai/api/v1';
+    const model = payload?.openaiModel ?? 'google/gemini-2.5-flash';
+    const result = await testOpenAiCompatibleApiKey(apiKey, baseUrl, model);
+    return {
+      ok: result.ok,
+      mode,
+      message: result.ok
+        ? `API connection OK (${baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI-compatible'}).`
+        : result.message,
+    };
+  }
+);
+
+ipcMain.handle('settings:list-openrouter-models', async (): Promise<OpenRouterModelSummary[]> => {
+  return listOpenRouterModelsWithCache();
+});
+
+ipcMain.handle('settings:list-gemini-cli-models', async (_evt, command?: string): Promise<GeminiCliModelSummary[]> => {
+  return listGeminiCliModelsWithCache(command ?? 'gemini');
+});
+
+ipcMain.handle(
+  'settings:test-api-keys',
+  async (
+    _evt,
+    payload: {
+      openaiApiKey?: string;
+      openaiBaseUrl?: string;
+      openaiModel?: string;
+    }
+  ) => {
+    const openaiApiKey = payload?.openaiApiKey?.trim() ?? '';
+    const openaiBaseUrl = payload?.openaiBaseUrl?.trim() || 'https://openrouter.ai/api/v1';
+    const openaiModel = payload?.openaiModel?.trim() || 'google/gemini-2.5-flash';
+    const openaiLabel = openaiBaseUrl.toLowerCase().includes('openrouter')
+      ? 'OpenRouter'
+      : 'OpenAI-compatible';
+
+    const openaiTried = openaiApiKey.length > 0;
+
+    let openaiOk = false;
+    let openaiMessage = '';
+
+    if (openaiTried) {
+      const res = await testOpenAiCompatibleApiKey(openaiApiKey, openaiBaseUrl, openaiModel);
+      openaiOk = res.ok;
+      openaiMessage = res.message;
+    }
+
+    return {
+      triedAny: openaiTried,
+      openaiTried,
+      openaiOk,
+      openaiLabel,
+      openaiMessage,
+      anyOk: openaiTried && openaiOk,
+    };
+  }
+);
+
 ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
   // Detect a hotkey change so we know whether to re-register globalShortcuts.
   // We compare the partial.hotkeys keys against current to avoid the cost
@@ -1471,7 +1871,7 @@ ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
   log('settings', 'config saved via IPC', partial);
 });
 
-type ProviderUnderTest = 'gemini' | 'openai-compatible';
+type ProviderUnderTest = 'openai-compatible';
 
 interface ApiKeyTestPayload {
   provider: ProviderUnderTest;
@@ -1481,7 +1881,6 @@ interface ApiKeyTestPayload {
 }
 
 function normalizeProviderLabel(payload: ApiKeyTestPayload): string {
-  if (payload.provider === 'gemini') return 'Gemini';
   const base = (payload.baseUrl ?? '').toLowerCase();
   if (base.includes('openrouter')) return 'OpenRouter';
   return 'OpenAI-compatible';
@@ -1503,42 +1902,8 @@ ipcMain.handle('settings:test-api-key', async (_evt, payload: ApiKeyTestPayload)
   const timeoutMs = 20000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    if (provider === 'gemini') {
-      const model = 'gemini-2.0-flash';
-      const url =
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: 'Reply with exactly: ok' }] }],
-          generationConfig: { temperature: 0 },
-        }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        log('settings', 'api-key-test failed', {
-          provider,
-          label,
-          status: res.status,
-          body: body.slice(0, 200),
-        });
-        return {
-          ok: false,
-          provider,
-          message: `${label} test failed (HTTP ${res.status}).`,
-        };
-      }
-      return {
-        ok: true,
-        provider,
-        message: `${label} key is valid.`,
-      };
-    }
-
     const baseUrl = (payload.baseUrl || 'https://openrouter.ai/api/v1').trim();
-    const model = (payload.model || 'google/gemini-2.0-flash-exp:free').trim();
+    const model = (payload.model || 'google/gemini-2.5-flash').trim();
     const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
     const res = await fetch(url, {
       method: 'POST',
@@ -1599,21 +1964,18 @@ ipcMain.handle('settings:test-trade-api-key', async (_evt, req: TradeApiTestRequ
     baseUrl: req?.baseUrl ?? null,
     model: req?.model ?? null,
   });
-  if (provider !== 'gemini' && provider !== 'openai') {
+  if (provider !== 'openai') {
     return {
       ok: false,
-      provider: 'gemini',
+      provider: 'openai',
       status: null,
       message: 'Unknown provider.',
     } satisfies TradeApiTestResult;
   }
-  if (provider === 'gemini') {
-    return testGeminiApiKey(req.apiKey ?? '');
-  }
   return testOpenAiCompatibleApiKey(
     req.apiKey ?? '',
     req.baseUrl ?? 'https://openrouter.ai/api/v1',
-    req.model ?? 'google/gemini-2.0-flash-exp:free'
+    req.model ?? 'google/gemini-2.5-flash'
   );
 });
 
@@ -1639,6 +2001,15 @@ ipcMain.handle('settings:pick-folder', async () => {
 
 ipcMain.handle('settings:close', () => {
   if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+  if (launcherWindow && !launcherWindow.isDestroyed()) {
+    if (!launcherWindow.isVisible()) launcherWindow.show();
+    launcherWindow.focus();
+  }
+});
+
+ipcMain.handle('settings:exit-app', () => {
+  log('settings', 'exit requested from settings');
+  return requestAppExit('settings exit button');
 });
 
 function openFramePicker(mp4Path: string, sessionDir: string): void {
@@ -2702,7 +3073,7 @@ ipcMain.handle('launcher:trade', () => {
 
 ipcMain.handle('launcher:quit', () => {
   log('launcher', 'quit click');
-  app.quit();
+  return requestAppExit('launcher quit action');
 });
 
 /**
@@ -2928,7 +3299,7 @@ app.whenReady().then(() => {
     onStartStop: () => handleToggleHotkey(),
     onSettings: () => openSettings(),
     onOpenAnnotator: () => openAnnotator(),
-    onQuit: () => app.quit(),
+    onQuit: () => requestAppExit('tray quit menu'),
     onShowLauncher: () => {
       if (launcherWindow && !launcherWindow.isDestroyed()) {
         if (!launcherWindow.isVisible()) launcherWindow.show();
@@ -2972,6 +3343,10 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  if (!quitCleanupRan) {
+    quitCleanupRan = true;
+    killSiblingSnipalotElectronProcesses();
+  }
   globalShortcut.unregisterAll();
   destroyTray();
   log('main', 'will-quit');

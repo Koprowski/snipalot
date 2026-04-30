@@ -95,10 +95,10 @@ body {
 
 .content {
   flex: 1;
-  padding: 12px 14px;
+  padding: 10px 14px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .header {
@@ -339,8 +339,22 @@ body {
   color: #8b92a0;
   font-size: 11px;
   text-align: center;
-  padding: 2px 0 0;
+  padding: 0;
   font-style: italic;
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.shortcut-chip {
+  text-align: center;
+  color: #8b92a0;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
 }
 
 /* Progress bar shown only during 'processing' state. Track is the dim

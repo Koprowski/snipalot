@@ -10,9 +10,17 @@ const btnBrowse = document.getElementById('btn-browse') as HTMLButtonElement;
 const btnSave = document.getElementById('btn-save') as HTMLButtonElement;
 const btnCancel = document.getElementById('btn-cancel') as HTMLButtonElement;
 const btnClose = document.getElementById('btn-close') as HTMLButtonElement;
-const btnTestApi = document.getElementById('btn-test-api-keys') as HTMLButtonElement;
+const btnTestLlmConnection = document.getElementById('btn-test-llm-connection') as HTMLButtonElement;
+const btnFetchOpenRouterModels = document.getElementById('btn-fetch-openrouter-models') as HTMLButtonElement;
+const btnFetchGeminiCliModels = document.getElementById('btn-fetch-gemini-cli-models') as HTMLButtonElement;
 const btnCheckUpdates = document.getElementById('btn-check-updates') as HTMLButtonElement;
-const versionLabelEl = document.getElementById('settings-version-label') as HTMLElement;
+const openrouterModelFilterInput = document.getElementById('input-openrouter-model-filter') as HTMLInputElement;
+const openrouterModelsSelect = document.getElementById('select-openrouter-models') as HTMLSelectElement;
+const openrouterFreeOnlyCheckbox = document.getElementById('checkbox-openrouter-free-only') as HTMLInputElement;
+const openrouterMaxCostInput = document.getElementById('input-openrouter-max-cost') as HTMLInputElement;
+const geminiCliModelFilterInput = document.getElementById('input-gemini-cli-model-filter') as HTMLInputElement;
+const geminiCliModelsSelect = document.getElementById('select-gemini-cli-models') as HTMLSelectElement;
+const versionLabelEl = document.getElementById('settings-version') as HTMLElement | null;
 const settingsStatusEl = document.getElementById('status') as HTMLElement;
 const hotkeysBody = document.getElementById('hotkeys-body') as HTMLTableSectionElement;
 const firstRunBanner = document.getElementById('first-run-banner') as HTMLElement;
@@ -53,10 +61,14 @@ const editedHotkeys: Record<string, string> = {};
 // radio; flushed on Save.
 let editedSnapClearAfter = true;
 // Working copies of LLM API keys + OpenAI-compatible settings.
-let editedGeminiApiKey = '';
 let editedOpenaiApiKey = '';
 let editedOpenaiBaseUrl = '';
 let editedOpenaiModel = '';
+let editedLlmMode: 'gemini-cli' | 'api' = 'gemini-cli';
+let editedGeminiCliCommand = 'gemini';
+let editedGeminiCliModel = 'gemini-2.5-flash';
+let fetchedGeminiCliModels: Array<{ id: string; createdAtMs: number }> = [];
+let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostPer1M: number }> = [];
 // Working copy of the capture mode + countdown duration.
 let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 let editedCountdownSec = 3;
@@ -129,25 +141,45 @@ async function init(): Promise<void> {
   // LLM API key fields.
   const cfgTrade = (config as unknown as {
     trade?: {
-      geminiApiKey?: string;
       openaiApiKey?: string;
       openaiBaseUrl?: string;
       openaiModel?: string;
+      llmMode?: 'gemini-cli' | 'api';
+      geminiCliCommand?: string;
+      geminiCliModel?: string;
     }
   }).trade;
 
-  editedGeminiApiKey = cfgTrade?.geminiApiKey ?? '';
   editedOpenaiApiKey = cfgTrade?.openaiApiKey ?? '';
   editedOpenaiBaseUrl = cfgTrade?.openaiBaseUrl ?? 'https://openrouter.ai/api/v1';
-  editedOpenaiModel = cfgTrade?.openaiModel ?? 'google/gemini-2.0-flash-exp:free';
+  editedOpenaiModel = cfgTrade?.openaiModel ?? 'google/gemini-2.5-flash';
+  editedLlmMode = cfgTrade?.llmMode ?? 'gemini-cli';
+  editedGeminiCliCommand = cfgTrade?.geminiCliCommand ?? 'gemini';
+  editedGeminiCliModel = cfgTrade?.geminiCliModel ?? 'gemini-2.5-flash';
 
-  const geminiKeyInput = document.getElementById('input-gemini-key') as HTMLInputElement;
-  const btnShowGeminiKey = document.getElementById('btn-show-gemini-key') as HTMLButtonElement;
-  geminiKeyInput.value = editedGeminiApiKey;
-  geminiKeyInput.addEventListener('input', () => { editedGeminiApiKey = geminiKeyInput.value.trim(); });
-  btnShowGeminiKey.addEventListener('click', () => {
-    geminiKeyInput.type = geminiKeyInput.type === 'password' ? 'text' : 'password';
-    btnShowGeminiKey.textContent = geminiKeyInput.type === 'password' ? 'Show' : 'Hide';
+  const llmModeSelect = document.getElementById('trade-llm-mode') as HTMLSelectElement;
+  llmModeSelect.value = editedLlmMode;
+  llmModeSelect.addEventListener('change', () => {
+    editedLlmMode = llmModeSelect.value === 'api' ? 'api' : 'gemini-cli';
+  });
+
+  const geminiCliCommandInput = document.getElementById('input-gemini-cli-command') as HTMLInputElement;
+  geminiCliCommandInput.value = editedGeminiCliCommand;
+  geminiCliCommandInput.addEventListener('input', () => {
+    editedGeminiCliCommand = geminiCliCommandInput.value.trim();
+  });
+
+  const geminiCliModelInput = document.getElementById('input-gemini-cli-model') as HTMLInputElement;
+  geminiCliModelInput.value = editedGeminiCliModel;
+  geminiCliModelInput.addEventListener('input', () => {
+    editedGeminiCliModel = geminiCliModelInput.value.trim();
+  });
+  geminiCliModelFilterInput.addEventListener('input', () => renderGeminiCliModelOptions());
+  geminiCliModelsSelect.addEventListener('change', () => {
+    const chosen = geminiCliModelsSelect.value;
+    if (!chosen) return;
+    editedGeminiCliModel = chosen;
+    geminiCliModelInput.value = chosen;
   });
 
   const openaiKeyInput = document.getElementById('input-openai-key') as HTMLInputElement;
@@ -166,22 +198,33 @@ async function init(): Promise<void> {
   const openaiModelInput = document.getElementById('input-openai-model') as HTMLInputElement;
   openaiModelInput.value = editedOpenaiModel;
   openaiModelInput.addEventListener('input', () => { editedOpenaiModel = openaiModelInput.value.trim(); });
+  openrouterModelFilterInput.addEventListener('input', () => renderOpenrouterModelOptions());
+  openrouterFreeOnlyCheckbox.addEventListener('change', () => renderOpenrouterModelOptions());
+  openrouterMaxCostInput.addEventListener('input', () => renderOpenrouterModelOptions());
+  openrouterModelsSelect.addEventListener('change', () => {
+    const chosen = openrouterModelsSelect.value;
+    if (!chosen) return;
+    editedOpenaiModel = chosen;
+    openaiModelInput.value = chosen;
+  });
+  renderOpenrouterModelOptions();
+  renderGeminiCliModelOptions();
 }
 
 async function refreshVersionAndUpdateStatus(): Promise<void> {
   try {
     const info = await api.getAppInfo();
-    versionLabelEl.textContent = `Version ${info.version}`;
+    if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version}`;
     const update = await api.checkForUpdates();
     if (!update.ok) {
-      versionLabelEl.textContent = `Version ${info.version} · Update check unavailable`;
+      if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Update check unavailable`;
       return;
     }
     if (update.updateAvailable && update.latestVersion) {
-      versionLabelEl.textContent = `Version ${info.version} · Update available (${update.latestVersion})`;
+      if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Update available (${update.latestVersion})`;
       return;
     }
-    versionLabelEl.textContent = `Version ${info.version} · Up to date`;
+    if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Up to date`;
   } catch {
     // Keep UI usable even if update check fails.
   }
@@ -326,56 +369,80 @@ btnBrowse.addEventListener('click', async () => {
   }
 });
 
-// ─── test API keys (no save required) ──────────────────────────────────
+// ─── test LLM connection (no save required) ────────────────────────────
 
-btnTestApi.addEventListener('click', async () => {
-  const geminiKey = editedGeminiApiKey.trim();
+btnTestLlmConnection.addEventListener('click', async () => {
   const openaiKey = editedOpenaiApiKey.trim();
   const baseUrl = editedOpenaiBaseUrl.trim() || 'https://openrouter.ai/api/v1';
-  const model = editedOpenaiModel.trim() || 'google/gemini-2.0-flash-exp:free';
+  const model = editedOpenaiModel.trim() || 'google/gemini-2.5-flash';
+  const cliCommand = editedGeminiCliCommand.trim() || 'gemini';
+  const cliModel = editedGeminiCliModel.trim() || 'gemini-2.5-flash';
 
-  if (!geminiKey && !openaiKey) {
-    setStatus('Enter Gemini and/or OpenRouter/OpenAI API key first.', true);
+  if (editedLlmMode === 'api' && !openaiKey) {
+    setStatus('API mode: enter OpenRouter/OpenAI API key first.', true);
     return;
   }
 
-  btnTestApi.disabled = true;
+  btnTestLlmConnection.disabled = true;
   const prevSaveDisabled = btnSave.disabled;
   btnSave.disabled = true;
-  setStatus('Testing API key(s)…');
+  setStatus(editedLlmMode === 'gemini-cli' ? 'Testing Gemini CLI connection…' : 'Testing API connection…');
   try {
-    const result = await api.testApiKeys({
-      geminiApiKey: geminiKey || undefined,
+    const result = await api.testLlmConnection({
+      llmMode: editedLlmMode,
+      geminiCliCommand: cliCommand,
+      geminiCliModel: cliModel,
       openaiApiKey: openaiKey || undefined,
       openaiBaseUrl: baseUrl,
       openaiModel: model,
     });
-    if (!result.triedAny) {
-      setStatus('No API keys provided to test.', true);
-      return;
-    }
-    const parts: string[] = [];
-    if (result.geminiTried) {
-      parts.push(
-        result.geminiOk
-          ? 'Gemini: OK'
-          : `Gemini: FAIL${result.geminiMessage ? ` (${result.geminiMessage})` : ''}`
-      );
-    }
-    if (result.openaiTried) {
-      parts.push(
-        result.openaiOk
-          ? 'OpenRouter/OpenAI: OK'
-          : `OpenRouter/OpenAI: FAIL${result.openaiMessage ? ` (${result.openaiMessage})` : ''}`
-      );
-    }
-    const msg = parts.join(' · ');
-    setStatus(msg, !result.anyOk);
+    if (result.ok) setStatus(result.message);
+    else setStatus(result.message, true);
   } catch (err) {
-    setStatus(`API test failed: ${(err as Error).message}`, true);
+    setStatus(`LLM connection test failed: ${(err as Error).message}`, true);
   } finally {
-    btnTestApi.disabled = false;
+    btnTestLlmConnection.disabled = false;
     btnSave.disabled = prevSaveDisabled;
+  }
+});
+
+btnFetchOpenRouterModels.addEventListener('click', async () => {
+  btnFetchOpenRouterModels.disabled = true;
+  setStatus('Fetching latest OpenRouter models…');
+  try {
+    const models = await api.listOpenRouterModels();
+    fetchedOpenrouterModels = models
+      .filter((m) => !!m.id)
+      .map((m) => ({
+        id: m.id,
+        createdAtMs: m.createdAtMs ?? 0,
+        inputCostPer1M: Number.isFinite(m.inputCostPer1M) ? m.inputCostPer1M : 0,
+      }))
+      .sort((a, b) => b.createdAtMs - a.createdAtMs);
+    renderOpenrouterModelOptions();
+    setStatus(`Fetched ${fetchedOpenrouterModels.length} OpenRouter models.`);
+  } catch (err) {
+    setStatus(`Failed to fetch OpenRouter models: ${(err as Error).message}`, true);
+  } finally {
+    btnFetchOpenRouterModels.disabled = false;
+  }
+});
+
+btnFetchGeminiCliModels.addEventListener('click', async () => {
+  btnFetchGeminiCliModels.disabled = true;
+  setStatus('Fetching latest Gemini CLI models…');
+  try {
+    const models = await api.listGeminiCliModels(editedGeminiCliCommand.trim() || 'gemini');
+    fetchedGeminiCliModels = models
+      .filter((m) => !!m.id)
+      .map((m) => ({ id: m.id, createdAtMs: m.createdAtMs ?? 0 }))
+      .sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
+    renderGeminiCliModelOptions();
+    setStatus(`Fetched ${fetchedGeminiCliModels.length} Gemini CLI models.`);
+  } catch (err) {
+    setStatus(`Failed to fetch Gemini CLI models: ${(err as Error).message}`, true);
+  } finally {
+    btnFetchGeminiCliModels.disabled = false;
   }
 });
 
@@ -392,11 +459,11 @@ btnCheckUpdates.addEventListener('click', async () => {
     }
     const info = await api.getAppInfo();
     if (!result.updateAvailable || !result.latestVersion || !result.releaseUrl) {
-      versionLabelEl.textContent = `Version ${info.version} · Up to date`;
+      if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Up to date`;
       setStatus(`Up to date (${info.version})`);
       return;
     }
-    versionLabelEl.textContent = `Version ${info.version} · Update available (${result.latestVersion})`;
+    if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Update available (${result.latestVersion})`;
     setStatus(`Update available: ${result.latestVersion} — opening download page…`);
     await api.openLatestRelease();
   } catch (err) {
@@ -434,7 +501,9 @@ btnSave.addEventListener('click', async () => {
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
       capture: { mode: editedCaptureMode, countdownSec: editedCountdownSec } as never,
       trade: {
-        geminiApiKey: editedGeminiApiKey,
+        llmMode: editedLlmMode,
+        geminiCliCommand: editedGeminiCliCommand,
+        geminiCliModel: editedGeminiCliModel,
         openaiApiKey: editedOpenaiApiKey,
         openaiBaseUrl: editedOpenaiBaseUrl,
         openaiModel: editedOpenaiModel,
@@ -453,7 +522,9 @@ btnSave.addEventListener('click', async () => {
 // ─── cancel / close ────────────────────────────────────────────────────
 
 btnCancel.addEventListener('click', () => api.close());
-btnClose.addEventListener('click', () => api.close());
+btnClose.addEventListener('click', () => {
+  api.close();
+});
 
 // ─── helpers ───────────────────────────────────────────────────────────
 
@@ -464,6 +535,41 @@ function setStatus(msg: string, isError = false): void {
 
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderOpenrouterModelOptions(): void {
+  const q = (openrouterModelFilterInput.value || '').toLowerCase().trim();
+  const freeOnly = openrouterFreeOnlyCheckbox.checked;
+  const maxCost = Number(openrouterMaxCostInput.value);
+  const hasMaxCost = Number.isFinite(maxCost) && maxCost >= 0;
+  const filtered = fetchedOpenrouterModels.filter((m) => {
+    if (q && !m.id.toLowerCase().includes(q)) return false;
+    if (freeOnly && m.inputCostPer1M > 0) return false;
+    if (hasMaxCost && m.inputCostPer1M > maxCost) return false;
+    return true;
+  });
+  openrouterModelsSelect.innerHTML = '';
+  for (const model of filtered) {
+    const opt = document.createElement('option');
+    opt.value = model.id;
+    const priceLabel = model.inputCostPer1M <= 0 ? 'free' : `$${model.inputCostPer1M.toFixed(2)}/1M in`;
+    opt.textContent = `${model.id}  (${priceLabel})`;
+    openrouterModelsSelect.appendChild(opt);
+  }
+}
+
+function renderGeminiCliModelOptions(): void {
+  const q = (geminiCliModelFilterInput.value || '').toLowerCase().trim();
+  const filtered = q
+    ? fetchedGeminiCliModels.filter((m) => m.id.toLowerCase().includes(q))
+    : fetchedGeminiCliModels;
+  geminiCliModelsSelect.innerHTML = '';
+  for (const model of filtered) {
+    const opt = document.createElement('option');
+    opt.value = model.id;
+    opt.textContent = model.id;
+    geminiCliModelsSelect.appendChild(opt);
+  }
 }
 
 // ─── boot ──────────────────────────────────────────────────────────────

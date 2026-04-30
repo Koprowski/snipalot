@@ -87,7 +87,8 @@ body {
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 20px 8px;
+  overflow-x: hidden;
+  padding: 20px 24px 20px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -97,6 +98,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  width: 100%;
+  min-width: 0;
 }
 
 .section-title {
@@ -126,6 +129,14 @@ body {
   display: flex;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+}
+
+.field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
 .input-row input[type='text'] {
@@ -140,6 +151,24 @@ body {
   outline: none;
   transition: border-color 0.15s;
   min-width: 0;
+}
+
+input[type='text'],
+input[type='password'],
+input[type='number'],
+select {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  outline: none;
+}
+
+input[type='text']:focus,
+input[type='password']:focus,
+input[type='number']:focus,
+select:focus {
+  border-color: var(--accent);
 }
 
 .input-row input[type='text']:focus {
@@ -423,6 +452,7 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 /* ── footer ── */
@@ -440,6 +470,9 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .footer .status.ok {

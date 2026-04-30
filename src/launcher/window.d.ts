@@ -15,6 +15,7 @@ interface Window {
       | { ok: false; error: string }
     >;
     settings: () => Promise<void>;
+    exitApp: () => Promise<boolean>;
     toggleMinimize: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;
     onState: (
@@ -28,6 +29,8 @@ interface Window {
           | 'processing';
         processingStep: string | null;
         startStopHotkey?: string;
+        snapshotHotkey?: string;
+        startTradeHotkey?: string;
         tradeMarkerHotkey?: string;
         sessionMode?: 'record' | 'trade';
         processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;

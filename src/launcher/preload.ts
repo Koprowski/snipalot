@@ -6,9 +6,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
   trade: () => ipcRenderer.invoke('launcher:trade'),
   cancel: () => ipcRenderer.invoke('launcher:cancel'),
   quit: () => ipcRenderer.invoke('launcher:quit'),
-  /** Hide launcher to tray (app keeps running, hotkeys stay live).
-      The X button on the launcher routes here, not to quit, so users
-      who hit X expecting "minimize" don't accidentally kill the app. */
+  /** Hide launcher to tray (app keeps running, hotkeys stay live). */
   closeToTray: () => ipcRenderer.invoke('launcher:close-to-tray'),
   /** Toggle launcher's alwaysOnTop pin. Returns the new state so the
       renderer can sync its visual indicator. */
@@ -22,6 +20,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     | { ok: false; error: string }
   > => ipcRenderer.invoke('launcher:copy-last-prompt'),
   settings: () => ipcRenderer.invoke('launcher:settings'),
+  exitApp: (): Promise<boolean> => ipcRenderer.invoke('settings:exit-app'),
   toggleMinimize: () => ipcRenderer.invoke('launcher:toggle-minimize'),
   log: (scope: string, ...args: unknown[]) =>
     ipcRenderer.invoke('log', `launcher:${scope}`, ...args),
@@ -38,6 +37,8 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
       processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;
       processingStep: string | null;
       startStopHotkey?: string;
+      snapshotHotkey?: string;
+      startTradeHotkey?: string;
       tradeMarkerHotkey?: string;
     }) => void
   ) => ipcRenderer.on('launcher:state', (_evt, state) => cb(state)),

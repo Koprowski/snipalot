@@ -56,18 +56,10 @@ export interface SnipalotConfig {
      */
     autoPromptForTradeData: boolean;
     /**
-     * Gemini API key used for automatic trade extraction after each session.
-     * Obtained from https://aistudio.google.com/apikey (free tier covers
-     * 1,500 requests/day). When empty, Snipalot tries the OpenAI key (if
-     * set) then falls back to the response-paste window.
-     */
-    geminiApiKey: string;
-    /**
      * OpenAI-compatible API key for automatic trade extraction. Works with:
      *   - OpenAI directly (api.openai.com) — use model gpt-4o-mini
-     *   - OpenRouter (openrouter.ai/api/v1) — free tier has Gemini Flash,
-     *     Llama 3.3 70B, and others at $0. Get a key at openrouter.ai/keys.
-     * When set, used as a fallback if geminiApiKey is empty.
+     *   - OpenRouter (openrouter.ai/api/v1) — set a compatible model id
+     *     and use OpenRouter-managed billing/free-tier behavior.
      */
     openaiApiKey: string;
     /**
@@ -78,10 +70,20 @@ export interface SnipalotConfig {
     openaiBaseUrl: string;
     /**
      * Model to use with the OpenAI-compatible API.
-     * OpenRouter free: "google/gemini-2.0-flash-exp:free" or "meta-llama/llama-3.3-70b-instruct:free"
+     * OpenRouter examples: "google/gemini-2.5-flash" or a ":free" model
      * OpenAI: "gpt-4o-mini"
      */
     openaiModel: string;
+    /**
+     * Extraction backend for Trade mode:
+     * - 'gemini-cli': local Gemini CLI headless invocation (preferred no-cost mode)
+     * - 'api': OpenRouter/OpenAI-compatible HTTP API via key below
+     */
+    llmMode: 'gemini-cli' | 'api';
+    /** Command used to invoke Gemini CLI (binary name or absolute path). */
+    geminiCliCommand: string;
+    /** Gemini model passed to CLI with --model. */
+    geminiCliModel: string;
   };
   launcher: {
     /**
@@ -159,10 +161,12 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   trade: {
     autoPromptForTradeData: true,
-    geminiApiKey: '',
     openaiApiKey: '',
     openaiBaseUrl: 'https://openrouter.ai/api/v1',
-    openaiModel: 'google/gemini-2.0-flash-exp:free',
+    openaiModel: 'google/gemini-2.5-flash',
+    llmMode: 'gemini-cli',
+    geminiCliCommand: 'gemini',
+    geminiCliModel: 'gemini-2.5-flash',
   },
   launcher: {
     pinnedOnTop: false,

@@ -16,10 +16,12 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import { clipboard, Notification, shell } from 'electron';
 import { stringify as csvStringify } from 'csv-stringify/sync';
 import { log } from './logger';
 import { getConfig } from './config';
+import { resolveGeminiCliExecutable } from './gemini-cli-exec';
 import { TranscriptSegment } from './pipeline';
 
 /**
@@ -193,36 +195,36 @@ export async function runTradePipeline(
   );
   const { promptPath, responsePath } = writeExtractionPrompt(sessionDir, promptText);
 
-  // ── Auto-extraction: call Gemini API directly ───────────────────────
-  // If an API key is configured in Settings, call the Gemini REST API
-  // directly (no CLI or Node.js required on the end user's machine).
-  // On any failure (no key, HTTP error, invalid JSON, timeout), fall
-  // through to the response-paste window for manual paste.
+  // ── Auto-extraction backend selection ───────────────────────────────
+  // Preferred mode is Gemini CLI (local command invocation, no API key).
+  // API mode remains available for Gemini/OpenRouter/OpenAI flows.
   const cfg = getConfig().trade;
-  const geminiApiKey = cfg.geminiApiKey || process.env.GEMINI_API_KEY || '';
+  const llmMode = cfg.llmMode ?? 'gemini-cli';
   let autoSucceeded = false;
-  let autoLabel = 'Gemini';
+  let autoLabel = llmMode === 'gemini-cli' ? 'Gemini CLI' : 'OpenAI-compatible API';
 
-  // Try Gemini first (if key is set), then OpenAI/OpenRouter as fallback.
-  if (geminiApiKey) {
+  if (llmMode === 'gemini-cli') {
+    const cliCommand = (cfg.geminiCliCommand || 'gemini').trim();
+    const cliModel = (cfg.geminiCliModel || 'gemini-2.5-flash').trim();
     try {
-      autoSucceeded = await tryGeminiApi(promptText, responsePath, geminiApiKey, onStep);
-      autoLabel = 'Gemini';
+      autoSucceeded = await tryGeminiCli(promptText, responsePath, cliCommand, cliModel, onStep);
+      autoLabel = 'Gemini CLI';
     } catch (err) {
-      log('trade-pipeline', 'gemini-api: unexpected throw', { err: String(err) });
+      log('trade-pipeline', 'gemini-cli: unexpected throw', { err: String(err) });
     }
-  }
-
-  if (!autoSucceeded && cfg.openaiApiKey) {
-    const baseUrl = cfg.openaiBaseUrl || 'https://openrouter.ai/api/v1';
-    const model = cfg.openaiModel || 'google/gemini-2.0-flash-exp:free';
-    autoLabel = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
-    try {
-      autoSucceeded = await tryOpenAiApi(
-        promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep
-      );
-    } catch (err) {
-      log('trade-pipeline', 'openai-api: unexpected throw', { err: String(err) });
+  } else {
+    // API mode: OpenAI-compatible endpoint (OpenRouter/OpenAI/etc).
+    if (cfg.openaiApiKey) {
+      const baseUrl = cfg.openaiBaseUrl || 'https://openrouter.ai/api/v1';
+      const model = cfg.openaiModel || 'google/gemini-2.5-flash';
+      autoLabel = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
+      try {
+        autoSucceeded = await tryOpenAiApi(
+          promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep
+        );
+      } catch (err) {
+        log('trade-pipeline', 'openai-api: unexpected throw', { err: String(err) });
+      }
     }
   }
 
@@ -322,85 +324,112 @@ export async function runTradePipeline(
   };
 }
 
-// ─── Gemini API auto-extraction ──────────────────────────────────────
+// ─── Auto-extraction backends ───────────────────────────────────────
 
-/**
- * Attempt to auto-extract trade events by calling the Gemini REST API
- * directly via `fetch`. No external CLI or Node.js install required on the
- * end user's machine — the API key is stored in Snipalot's settings and
- * passed here by the caller.
- *
- * On success, writes the JSON response to `responsePath` and returns true.
- * On any failure (no key, HTTP error, invalid JSON, timeout), logs a
- * warning and returns false so the caller falls back to the response-paste
- * window.
- */
-async function tryGeminiApi(
+async function tryGeminiCli(
   promptText: string,
   responsePath: string,
-  apiKey: string,
+  cliCommand: string,
+  model: string,
   onStep?: (step: string) => void,
   timeoutMs: number = 5 * 60 * 1000
 ): Promise<boolean> {
-  if (!apiKey) {
-    log('trade-pipeline', 'gemini-api: no API key configured, skipping');
+  if (!cliCommand) return false;
+  if (onStep) onStep('Auto-extracting via Gemini CLI…');
+  log('trade-pipeline', 'gemini-cli: attempting auto-extraction', { cliCommand, model });
+
+  const args = ['--model', model, '--output-format', 'json', '--prompt', promptText];
+  const resolvedCli = resolveGeminiCliExecutable(cliCommand);
+  // Use Gemini CLI's own auth method (OAuth via Google account, or whatever
+  // is in ~/.gemini/settings.json). Strip GEMINI_API_KEY env var so a stale
+  // value can't force paid API-key auth.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+  };
+  delete env.GEMINI_API_KEY;
+  const result = await new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    // shell:false on Windows keeps multi-word --prompt as a single argv token;
+    // shell:true via cmd.exe splits on spaces and triggers Gemini's
+    // "positional prompt and --prompt together" error.
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs, ...args], {
+        windowsHide: true,
+        shell: false,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch {
+      resolve({ code: -1, stdout, stderr, timedOut });
+      return;
+    }
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+    child.stdout?.on('data', (d) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr, timedOut });
+    });
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr, timedOut });
+    });
+  });
+
+  if (result.timedOut) {
+    log('trade-pipeline', 'gemini-cli: timeout', { timeoutMs });
+    return false;
+  }
+  if (result.code !== 0) {
+    log('trade-pipeline', 'gemini-cli: non-zero exit', {
+      code: result.code,
+      stderr: result.stderr.slice(0, 500),
+    });
     return false;
   }
 
-  if (onStep) onStep('Auto-extracting via Gemini API…');
-  log('trade-pipeline', 'gemini-api: attempting auto-extraction');
-
-  const model = 'gemini-2.0-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: promptText }] }],
-        generationConfig: { temperature: 0.1 },
-      }),
-      signal: controller.signal,
+  const rawText = extractGeminiCliResponseText(result.stdout);
+  if (!rawText) {
+    log('trade-pipeline', 'gemini-cli: empty response text', {
+      stdoutPreview: result.stdout.slice(0, 500),
+      stderrPreview: result.stderr.slice(0, 500),
     });
-    clearTimeout(timer);
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      log('trade-pipeline', 'gemini-api: HTTP error', {
-        status: res.status,
-        body: errBody.slice(0, 400),
-      });
-      return false;
-    }
-
-    const data = await res.json() as Record<string, unknown>;
-    const candidates = (data?.candidates as Array<Record<string, unknown>>);
-    const text = (candidates?.[0]?.content as Record<string, unknown>)
-      ?.parts as Array<Record<string, unknown>>;
-    const rawText = text?.[0]?.text as string | undefined;
-
-    if (!rawText) {
-      log('trade-pipeline', 'gemini-api: empty response body', { data: JSON.stringify(data).slice(0, 300) });
-      return false;
-    }
-
-    // Validate + write
+    return false;
+  }
+  try {
     parseAndValidateResponse(rawText);
     fs.writeFileSync(responsePath, rawText, 'utf-8');
-    log('trade-pipeline', 'gemini-api: auto-extraction succeeded', {
-      chars: rawText.length,
-      responsePath,
-    });
+    log('trade-pipeline', 'gemini-cli: auto-extraction succeeded', { chars: rawText.length });
     return true;
   } catch (err) {
-    clearTimeout(timer);
-    log('trade-pipeline', 'gemini-api: failed', { err: String(err) });
+    log('trade-pipeline', 'gemini-cli: invalid response JSON', {
+      err: (err as Error).message,
+      preview: rawText.slice(0, 300),
+    });
     return false;
   }
+}
+
+function extractGeminiCliResponseText(stdout: string): string {
+  const trimmed = stdout.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (typeof parsed.response === 'string' && parsed.response.trim()) return parsed.response.trim();
+    if (typeof parsed.text === 'string' && parsed.text.trim()) return parsed.text.trim();
+    const content = parsed.content as Record<string, unknown> | undefined;
+    if (content && typeof content.text === 'string' && content.text.trim()) return content.text.trim();
+  } catch {
+    // If CLI returned plain text instead of JSON, treat it as response content.
+  }
+  return trimmed;
 }
 
 /**
@@ -408,8 +437,8 @@ async function tryGeminiApi(
  * or any other provider that speaks the chat completions format). Falls back
  * to the response-paste window on any failure.
  *
- * OpenRouter free tier: set baseUrl=https://openrouter.ai/api/v1 and model=
- * google/gemini-2.0-flash-exp:free — zero cost within rate limits.
+ * OpenRouter usage: set baseUrl=https://openrouter.ai/api/v1 and choose a
+ * supported model (including any ":free" model if you want zero-cost limits).
  */
 async function tryOpenAiApi(
   promptText: string,

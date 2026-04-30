@@ -21,6 +21,9 @@ const btnSettingsEl = document.getElementById('btn-settings') as HTMLButtonEleme
 const btnMinimizeEl = document.getElementById('btn-minimize') as HTMLButtonElement;
 const btnQuitEl = document.getElementById('btn-quit') as HTMLButtonElement;
 const hintEl = document.getElementById('hint')!;
+const hkRecordEl = document.getElementById('hk-record')!;
+const hkScreenshotEl = document.getElementById('hk-screenshot')!;
+const hkTradeEl = document.getElementById('hk-trade')!;
 
 let currentState:
   | 'idle'
@@ -36,6 +39,8 @@ let currentProcessingProgress:
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
 // idle hint always reflects the current binding (default: Ctrl+Shift+S).
 let currentStartStopHotkey = 'Ctrl+Shift+S';
+let currentSnapshotHotkey = 'Ctrl+Shift+P';
+let currentStartTradeHotkey = 'Ctrl+Shift+T';
 // Mirrors config.hotkeys.tradeMarker. Used in the trade-recording hint only.
 let currentTradeMarkerHotkey = 'Ctrl+Shift+M';
 // Tracks whether the active recording is record-mode or trade-mode (both
@@ -78,6 +83,9 @@ function renderLauncherImpl(): void {
   btnTradeEl.disabled =
     currentState === 'processing' || isSelectingRecord || isSelectingScreenshot ||
     (isRecording && !isTrading);
+  hkRecordEl.textContent = currentStartStopHotkey;
+  hkScreenshotEl.textContent = currentSnapshotHotkey;
+  hkTradeEl.textContent = currentStartTradeHotkey;
 
   if (currentState === 'idle') {
     btnPrimaryLabelEl.textContent = 'Record';
@@ -86,7 +94,7 @@ function renderLauncherImpl(): void {
     btnScreenshotEl.title = 'Screenshot — capture a region for annotation';
     btnTradeLabelEl.textContent = 'Trade';
     btnTradeEl.title = 'Trade — record a session for trade-log extraction';
-    hintEl.textContent = `Record / capture / track trades · ${currentStartStopHotkey}`;
+    hintEl.textContent = 'Use the keyboard shortcuts above to run these actions.';
   } else if (currentState === 'selecting') {
     btnPrimaryLabelEl.textContent = 'Cancel';
     btnScreenshotLabelEl.textContent = 'Screenshot';
@@ -186,10 +194,9 @@ btnMinimizeEl.addEventListener('click', () => {
 });
 
 btnQuitEl.addEventListener('click', () => {
-  // X = hide to tray, NOT quit. Snipalot stays running in the background
-  // so hotkeys (Ctrl+Shift+S, Ctrl+Shift+T, etc.) keep firing globally.
-  // To fully exit, use the tray menu's "Quit Snipalot" option.
-  window.snipalotLauncher.closeToTray();
+  // X triggers full app exit (same path as Settings -> Exit Snipalot),
+  // including main-process shutdown cleanup.
+  void window.snipalotLauncher.exitApp();
 });
 
 // ── Copy last prompt ─────────────────────────────────────────────────
@@ -252,6 +259,8 @@ window.snipalotLauncher.onState((state) => {
   currentState = state.appState;
   currentProcessingStep = state.processingStep;
   if (state.startStopHotkey) currentStartStopHotkey = state.startStopHotkey;
+  if (state.snapshotHotkey) currentSnapshotHotkey = state.snapshotHotkey;
+  if (state.startTradeHotkey) currentStartTradeHotkey = state.startTradeHotkey;
   if (state.tradeMarkerHotkey) currentTradeMarkerHotkey = state.tradeMarkerHotkey;
   if (state.sessionMode) currentSessionMode = state.sessionMode;
   currentProcessingProgress = state.processingProgress ?? null;

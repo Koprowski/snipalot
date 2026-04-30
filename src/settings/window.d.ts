@@ -40,6 +40,10 @@ interface Window {
       id: string;
       createdAtMs: number;
     }>>;
+    geminiCliSigninStatus: () => Promise<{ signedIn: boolean; subject?: string | null }>;
+    geminiCliSignin: (payload: { command?: string }) => Promise<{ ok: boolean; message: string; subject?: string }>;
+    geminiCliSigninCancel: () => Promise<{ ok: boolean; message?: string }>;
+    geminiCliSignout: () => Promise<{ ok: boolean; message?: string }>;
     pickFolder: () => Promise<string | null>;
     close: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;

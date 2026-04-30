@@ -147,6 +147,20 @@
           </p>
         </div>
 
+        <!-- Gemini CLI sign-in (only relevant in CLI mode) -->
+        <div class="field-row" id="gemini-signin-row" style="margin-top:14px;padding:10px;background:var(--surface,#1a1a1f);border-radius:6px;border:1px solid var(--border,#333)">
+          <label style="font-weight:600">Google account</label>
+          <p class="info" id="gemini-signin-status" style="margin-top:2px">Checking sign-in status…</p>
+          <div class="input-row" style="margin-top:8px;gap:8px">
+            <button class="btn" id="btn-gemini-signin">Sign in with Google</button>
+            <button class="btn" id="btn-gemini-signout" style="display:none">Sign out</button>
+            <button class="btn" id="btn-gemini-signin-cancel" style="display:none;background:#7a2222;color:#fff">Cancel</button>
+          </div>
+          <p class="info" style="margin-top:6px;font-size:11px">
+            Free Gemini Code Assist quota — no API key, no per-token charges. Your browser opens for a one-time Google login; Snipalot detects when it's done.
+          </p>
+        </div>
+
         <div class="field-row" style="margin-top:10px">
           <label for="input-gemini-cli-model">Gemini CLI model</label>
           <div class="input-row">

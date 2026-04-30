@@ -209,6 +209,87 @@ async function init(): Promise<void> {
   });
   renderOpenrouterModelOptions();
   renderGeminiCliModelOptions();
+
+  // ── Gemini CLI Google sign-in wiring ─────────────────────────────
+  initGeminiSignin();
+}
+
+/**
+ * Wire up the "Sign in with Google" / "Sign out" controls. Polls status
+ * on Settings open and after each sign-in/out completes. Only the relevant
+ * buttons are visible at any time.
+ */
+function initGeminiSignin(): void {
+  const statusEl = document.getElementById('gemini-signin-status') as HTMLElement;
+  const btnIn = document.getElementById('btn-gemini-signin') as HTMLButtonElement;
+  const btnOut = document.getElementById('btn-gemini-signout') as HTMLButtonElement;
+  const btnCancel = document.getElementById('btn-gemini-signin-cancel') as HTMLButtonElement;
+
+  const setIdleState = (signedIn: boolean, subject?: string | null): void => {
+    btnIn.disabled = false;
+    btnOut.disabled = false;
+    btnCancel.style.display = 'none';
+    btnIn.style.display = signedIn ? 'none' : 'inline-block';
+    btnOut.style.display = signedIn ? 'inline-block' : 'none';
+    statusEl.textContent = signedIn
+      ? `Signed in${subject ? ` as ${subject}` : ''}.`
+      : 'Not signed in. Click below to sign in with your Google account.';
+    statusEl.style.color = signedIn ? 'var(--success, #16a34a)' : 'var(--muted)';
+  };
+
+  const refreshStatus = async (): Promise<void> => {
+    try {
+      const result = await api.geminiCliSigninStatus();
+      setIdleState(result.signedIn, result.subject);
+    } catch (err) {
+      api.log('settings', 'gemini signin status failed', String(err));
+      statusEl.textContent = 'Could not check sign-in status.';
+      statusEl.style.color = 'var(--danger, #ef4444)';
+    }
+  };
+
+  btnIn.addEventListener('click', async () => {
+    btnIn.disabled = true;
+    btnOut.disabled = true;
+    btnCancel.style.display = 'inline-block';
+    statusEl.textContent = 'Opening browser for Google login… complete the flow there. This window will detect when you finish.';
+    statusEl.style.color = 'var(--muted)';
+    try {
+      const result = await api.geminiCliSignin({ command: editedGeminiCliCommand || 'gemini' });
+      if (result.ok) {
+        setIdleState(true, result.subject);
+        statusEl.textContent = result.message;
+        statusEl.style.color = 'var(--success, #16a34a)';
+      } else {
+        await refreshStatus();
+        statusEl.textContent = result.message;
+        statusEl.style.color = 'var(--danger, #ef4444)';
+      }
+    } catch (err) {
+      await refreshStatus();
+      statusEl.textContent = `Sign-in failed: ${(err as Error).message}`;
+      statusEl.style.color = 'var(--danger, #ef4444)';
+    }
+  });
+
+  btnCancel.addEventListener('click', async () => {
+    btnCancel.disabled = true;
+    try { await api.geminiCliSigninCancel(); } catch { /* ignore */ }
+    btnCancel.disabled = false;
+    await refreshStatus();
+  });
+
+  btnOut.addEventListener('click', async () => {
+    btnOut.disabled = true;
+    try {
+      await api.geminiCliSignout();
+    } catch (err) {
+      api.log('settings', 'gemini signout failed', String(err));
+    }
+    await refreshStatus();
+  });
+
+  void refreshStatus();
 }
 
 async function refreshVersionAndUpdateStatus(): Promise<void> {

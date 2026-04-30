@@ -15,6 +15,7 @@ import {
 } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { execSync } from 'node:child_process';
 import { log } from './logger';
 import { runPipeline, AnnotationRecord, ChapterRecord, formatSessionStamp } from './pipeline';
@@ -1817,6 +1818,183 @@ ipcMain.handle('settings:list-openrouter-models', async (): Promise<OpenRouterMo
 ipcMain.handle('settings:list-gemini-cli-models', async (_evt, command?: string): Promise<GeminiCliModelSummary[]> => {
   return listGeminiCliModelsWithCache(command ?? 'gemini');
 });
+
+// ─── Gemini CLI OAuth sign-in (free tier via Google account) ─────────
+//
+// User clicks "Sign in with Google" in Settings → we spawn gemini with
+// piped stdio, auto-respond "y" to its "Open authentication page?"
+// prompt, the CLI opens the browser for OAuth and runs a local HTTP
+// callback server. When the user completes the Google login flow,
+// the CLI writes oauth_creds.json. We poll for that file and return
+// success the moment it appears, killing the now-idle CLI process.
+
+const OAUTH_CREDS_PATH = path.join(os.homedir(), '.gemini', 'oauth_creds.json');
+
+let activeGeminiSigninChild: import('node:child_process').ChildProcess | null = null;
+
+function readOauthCredsSubject(): string | null {
+  try {
+    if (!fs.existsSync(OAUTH_CREDS_PATH)) return null;
+    const raw = fs.readFileSync(OAUTH_CREDS_PATH, 'utf-8');
+    const parsed = JSON.parse(raw) as { id_token?: string; subject?: string };
+    if (parsed?.subject && typeof parsed.subject === 'string') return parsed.subject;
+    // id_token is a JWT — decode payload for the email if present
+    if (parsed?.id_token && typeof parsed.id_token === 'string') {
+      const parts = parsed.id_token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8')) as {
+          email?: string;
+        };
+        if (payload?.email) return payload.email;
+      }
+    }
+    return 'signed-in';
+  } catch {
+    return null;
+  }
+}
+
+ipcMain.handle('settings:gemini-cli-signin-status', () => {
+  const subject = readOauthCredsSubject();
+  return { signedIn: !!subject, subject };
+});
+
+ipcMain.handle('settings:gemini-cli-signout', () => {
+  try {
+    if (fs.existsSync(OAUTH_CREDS_PATH)) {
+      fs.unlinkSync(OAUTH_CREDS_PATH);
+      log('settings', 'gemini-cli signout: oauth creds removed');
+    }
+    return { ok: true };
+  } catch (err) {
+    log('settings', 'gemini-cli signout: failed', { err: (err as Error).message });
+    return { ok: false, message: (err as Error).message };
+  }
+});
+
+ipcMain.handle('settings:gemini-cli-signin-cancel', () => {
+  if (activeGeminiSigninChild) {
+    try { activeGeminiSigninChild.kill(); } catch { /* ignore */ }
+    activeGeminiSigninChild = null;
+    return { ok: true };
+  }
+  return { ok: false, message: 'No active sign-in to cancel.' };
+});
+
+ipcMain.handle(
+  'settings:gemini-cli-signin',
+  async (_evt, payload: { command?: string }): Promise<{ ok: boolean; message: string; subject?: string }> => {
+    if (activeGeminiSigninChild) {
+      return { ok: false, message: 'Sign-in already in progress. Wait for it to finish or cancel it.' };
+    }
+    const cliCommand = (payload?.command ?? 'gemini').trim() || 'gemini';
+    const resolvedCli = resolveGeminiCliExecutable(cliCommand);
+    log('settings', 'gemini-cli signin: starting', { cliCommand, resolved: resolvedCli.command });
+
+    // Stamp the timestamp so we can detect a fresh login (vs. a stale file
+    // from a previous session). The CLI rewrites oauth_creds.json when it
+    // completes OAuth, so the mtime jumps forward.
+    const startedAtMs = Date.now();
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+    };
+    delete env.GEMINI_API_KEY;
+
+    return new Promise<{ ok: boolean; message: string; subject?: string }>((resolve) => {
+      const { spawn } = require('node:child_process') as typeof import('node:child_process');
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs], {
+          windowsHide: true,
+          shell: false,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env,
+        });
+      } catch (err) {
+        resolve({ ok: false, message: `Failed to launch Gemini CLI: ${(err as Error).message}` });
+        return;
+      }
+      activeGeminiSigninChild = child;
+      let stdoutBuf = '';
+      let answered = false;
+      let resolved = false;
+
+      const finish = (result: { ok: boolean; message: string; subject?: string }): void => {
+        if (resolved) return;
+        resolved = true;
+        clearInterval(pollTimer);
+        clearTimeout(timeoutTimer);
+        try { child.kill(); } catch { /* ignore */ }
+        if (activeGeminiSigninChild === child) activeGeminiSigninChild = null;
+        log('settings', 'gemini-cli signin: finish', { ok: result.ok, message: result.message });
+        resolve(result);
+      };
+
+      child.stdout?.on('data', (d: Buffer) => {
+        const text = d.toString();
+        stdoutBuf += text;
+        if (!answered && /continue\?\s*\[Y\/n\]/i.test(stdoutBuf)) {
+          answered = true;
+          try { child.stdin?.write('y\n'); } catch { /* ignore */ }
+        }
+      });
+      child.stderr?.on('data', (d: Buffer) => {
+        log('settings', 'gemini-cli signin stderr', { tail: d.toString().slice(-300) });
+      });
+      child.on('error', (err) => {
+        finish({ ok: false, message: `Gemini CLI process error: ${err.message}` });
+      });
+      child.on('close', (code) => {
+        // If the CLI exited on its own without us finishing, surface that.
+        // (Polling below normally finishes first when creds appear.)
+        if (!resolved) {
+          // Give the file-system a moment in case creds were just written.
+          setTimeout(() => {
+            const subject = readOauthCredsSubject();
+            const fresh = subject && fs.existsSync(OAUTH_CREDS_PATH) && fs.statSync(OAUTH_CREDS_PATH).mtimeMs >= startedAtMs;
+            if (fresh) {
+              finish({ ok: true, message: `Signed in as ${subject}.`, subject: subject ?? undefined });
+            } else {
+              finish({
+                ok: false,
+                message: `Sign-in did not complete (exit ${code}). Try again or cancel.`,
+              });
+            }
+          }, 500);
+        }
+      });
+
+      // Poll for the OAuth creds file every 1s.
+      const pollTimer = setInterval(() => {
+        try {
+          if (fs.existsSync(OAUTH_CREDS_PATH)) {
+            const stat = fs.statSync(OAUTH_CREDS_PATH);
+            if (stat.mtimeMs >= startedAtMs) {
+              const subject = readOauthCredsSubject();
+              finish({
+                ok: true,
+                message: subject ? `Signed in as ${subject}.` : 'Signed in successfully.',
+                subject: subject ?? undefined,
+              });
+            }
+          }
+        } catch {
+          // ignore transient stat errors mid-write
+        }
+      }, 1000);
+
+      // Hard timeout — 5 minutes.
+      const timeoutTimer = setTimeout(() => {
+        finish({
+          ok: false,
+          message: 'Sign-in timed out after 5 minutes. Try again.',
+        });
+      }, 5 * 60 * 1000);
+    });
+  }
+);
 
 ipcMain.handle(
   'settings:test-api-keys',

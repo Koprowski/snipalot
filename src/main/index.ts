@@ -31,6 +31,38 @@ const isDebug = process.argv.includes('--debug');
 // screenshot it for debugging. Don't use in normal recording runs.
 const disableContentProtection = process.argv.includes('--no-protect');
 
+function resolveGitShortSha(): string | null {
+  // Prefer explicit env injection (e.g. CI/build pipeline).
+  const envSha = process.env.SNIPALOT_GIT_SHA?.trim();
+  if (envSha) return envSha.slice(0, 12);
+  // Dev/local fallback: resolve from .git metadata if present.
+  try {
+    const gitDir = path.join(process.cwd(), '.git');
+    const headPath = path.join(gitDir, 'HEAD');
+    if (!fs.existsSync(headPath)) return null;
+    const head = fs.readFileSync(headPath, 'utf-8').trim();
+    if (head.startsWith('ref: ')) {
+      const ref = head.slice(5).trim();
+      const refPath = path.join(gitDir, ref);
+      if (fs.existsSync(refPath)) {
+        return fs.readFileSync(refPath, 'utf-8').trim().slice(0, 12);
+      }
+      const packedRefs = path.join(gitDir, 'packed-refs');
+      if (fs.existsSync(packedRefs)) {
+        const line = fs
+          .readFileSync(packedRefs, 'utf-8')
+          .split('\n')
+          .find((l) => l.endsWith(` ${ref}`));
+        if (line) return line.split(' ')[0].trim().slice(0, 12);
+      }
+      return null;
+    }
+    return head.slice(0, 12);
+  } catch {
+    return null;
+  }
+}
+
 // Prevent multiple instances of Snipalot from running simultaneously.
 // If we can't acquire the lock, a previous instance is still alive — bail
 // out so we don't spawn a second launcher/HUD/overlay set.

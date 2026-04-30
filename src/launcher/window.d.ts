@@ -28,6 +28,7 @@ interface Window {
           | 'processing';
         processingStep: string | null;
         startStopHotkey?: string;
+        tradeMarkerHotkey?: string;
         sessionMode?: 'record' | 'trade';
         processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;
       }) => void

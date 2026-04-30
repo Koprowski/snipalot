@@ -26,8 +26,8 @@ A single tool that replaces all five steps. Press a hotkey to start recording. T
 ## Core User Flow
 
 1. **Launch** — tool starts minimized to system tray
-2. **Start recording** — global hotkey (e.g., `Ctrl+Shift+R`) begins screen capture with audio
-3. **Annotate while recording** — hotkey (e.g., `Ctrl+Shift+N`) enters annotation mode:
+2. **Start recording** — global hotkey (default `Ctrl+Shift+S`; rebindable) begins screen capture with audio
+3. **Annotate while recording** — hotkey (default `Ctrl+Shift+A`; rebindable) enters annotation mode:
    - Click and drag to draw a numbered rectangle on screen
    - Number auto-increments (1, 2, 3...)
    - Annotation is visible in the recording itself (baked into the capture)
@@ -35,7 +35,7 @@ A single tool that replaces all five steps. Press a hotkey to start recording. T
 4. **Clear annotations** — hotkey (e.g., `Ctrl+Shift+C`) clears all visible annotations from screen
    - Numbering continues from where it left off (annotations 1-3 cleared, next one is #4)
    - Useful when navigating to a new page/screen
-5. **Stop recording** — same hotkey as start (`Ctrl+Shift+R`) stops capture
+5. **Stop recording** — same hotkey as start stops capture
 6. **Auto-process** — tool automatically:
    - Saves MP4 to configured output folder
    - Runs Whisper transcription (timestamped SRT → clean text)
@@ -51,7 +51,7 @@ A single tool that replaces all five steps. Press a hotkey to start recording. T
 
 | Feature | Hotkey | Behavior |
 |---|---|---|
-| Numbered rectangle | `Ctrl+Shift+N` then click+drag | Red rectangle with white number badge (top-left corner) |
+| Numbered rectangle | Annotate hotkey (default `Ctrl+Shift+A`) then click+drag | Red rectangle with white number badge (top-left corner) |
 | Clear annotations | `Ctrl+Shift+C` | Remove all visible annotations, keep numbering sequence |
 | Undo last | `Ctrl+Z` (in annotation mode) | Remove the most recent annotation |
 
@@ -184,9 +184,9 @@ Stored in `~/.screen-feedback-tool.json`:
   "whisperModel": "base",
   "mp4Retention": "keep-latest",
   "hotkeys": {
-    "startStop": "Ctrl+Shift+R",
-    "annotate": "Ctrl+Shift+N",
-    "clearAnnotations": "Ctrl+Shift+C",
+    "startStop": "Ctrl+Shift+S",
+    "annotate": "Ctrl+Shift+A",
+    "clear": "Ctrl+Shift+C",
     "undo": "Ctrl+Z"
   },
   "annotation": {

@@ -124,7 +124,7 @@ export interface PipelineInput {
   mode?: 'record' | 'trade';
   /**
    * Trade-mode hotkey markers (recording-relative ms). Empty / undefined when
-   * mode === 'record' or when the user never pressed Ctrl+Shift+T during a
+   * mode === 'record' or when the user never pressed the trade-marker hotkey during a
    * trade session. Markers are anchor points for the LLM extraction prompt;
    * extraction works without them, just less precisely.
    */

@@ -149,7 +149,7 @@ const pendingChapterPngs = new Map<number, string>();
 let currentSessionMode: 'record' | 'trade' = 'record';
 /**
  * Recording-relative ms offsets where the user pressed the Trade marker
- * hotkey (Ctrl+Shift+T). Empty for non-trade sessions. The trade-pipeline
+ * hotkey (see config `hotkeys.tradeMarker`). Empty for non-trade sessions. The trade-pipeline
  * uses these as anchor tags in the LLM extraction prompt so the model
  * focuses on the trader-flagged moments.
  */
@@ -332,6 +332,7 @@ function unregisterSnapshotHotkey(): void {
  * Trade-marker hotkey: only registered while recording AND mode === 'trade'.
  * Each press appends a recording-relative ms offset to currentTradeMarkers,
  * which the trade-pipeline uses as anchor tags for the LLM extraction prompt.
+ * (Default combo is Ctrl+Shift+M; rebindable in Settings — not the same as startTrade.)
  * No separate recording is started — markers are lightweight metadata only.
  */
 function registerTradeMarkerHotkey(): void {
@@ -431,7 +432,8 @@ function reloadGlobalHotkeys(): void {
 }
 
 function handleAnnotationHotkey(): void {
-  log('hotkey', 'Ctrl+Shift+N fired', { appState, activeDisplayId });
+  const combo = getConfig().hotkeys.annotate;
+  log('hotkey', `${combo} fired (annotate)`, { appState, activeDisplayId });
   if (appState !== 'recording' || !activeDisplayId) return;
 
   // If the cursor is outside the recording region, silently do nothing.
@@ -446,7 +448,7 @@ function handleAnnotationHotkey(): void {
       const rw = currentRecordingRegionLocal.w;
       const rh = currentRecordingRegionLocal.h;
       if (cursor.x < rx || cursor.x > rx + rw || cursor.y < ry || cursor.y > ry + rh) {
-        log('hotkey', 'Ctrl+Shift+N: cursor outside recording region, no-op');
+        log('hotkey', `${combo}: cursor outside recording region, no-op`);
         return;
       }
     }
@@ -461,6 +463,7 @@ function broadcastStateToLauncher(): void {
     appState,
     processingStep,
     startStopHotkey: getConfig().hotkeys.startStop,
+    tradeMarkerHotkey: getConfig().hotkeys.tradeMarker,
     sessionMode: currentSessionMode,
     processingProgress: computeProcessingProgress(),
   });
@@ -1253,7 +1256,7 @@ ipcMain.handle(
     const mm = String(Math.floor(payload.timeSec / 60)).padStart(2, '0');
     const ss = String(Math.floor(payload.timeSec) % 60).padStart(2, '0');
     const outPath = path.join(payload.sessionDir, `exported-${mm}-${ss}.png`);
-    const mp4 = path.join(path.dirname(payload.sessionDir), 'recording.mp4');
+    const mp4 = path.join(payload.sessionDir, 'recording.mp4');
     if (!fs.existsSync(mp4)) return { ok: false, error: 'mp4 not found' };
     try {
       await new Promise<void>((resolve, reject) => {
@@ -1967,7 +1970,7 @@ ipcMain.handle(
         currentChapters = [];
         pendingChapterPngs.clear();
         if (hudKeepOnTopInterval) { clearInterval(hudKeepOnTopInterval); hudKeepOnTopInterval = null; }
-  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+        if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
         broadcastOverlay('overlay:recording-stopped');
       } else {
         log('recorder', 'stopped confirmed (UI already cleaned)');
@@ -1978,7 +1981,7 @@ ipcMain.handle(
       activeDisplayId = null;
       activeSourceId = null;
       if (hudKeepOnTopInterval) { clearInterval(hudKeepOnTopInterval); hudKeepOnTopInterval = null; }
-  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+      if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
       broadcastOverlay('overlay:recording-stopped');
       showNotification('Snipalot', `Recording error: ${detail ?? 'unknown'}`);
     }
@@ -2278,7 +2281,8 @@ ipcMain.handle('launcher:toggle-minimize', () => {
 // ─── shared coordinators (hotkey entry points) ───────────────────────
 
 function handleToggleHotkey(): void {
-  log('hotkey', 'Ctrl+Shift+R', { appState });
+  const combo = getConfig().hotkeys.startStop;
+  log('hotkey', `${combo} fired (start/stop)`, { appState });
   switch (appState) {
     case 'idle':
       enterSelecting();
@@ -2286,10 +2290,10 @@ function handleToggleHotkey(): void {
     case 'selecting':
       // Treat second press during region-select as a cancel — this prevents
       // the "second overlay opens on top of first" bug.
-      exitSelecting('Ctrl+Shift+R during selecting');
+      exitSelecting(`${combo} during selecting`);
       break;
     case 'recording':
-      stopRecording('Ctrl+Shift+R during recording');
+      stopRecording(`${combo} during recording`);
       break;
   }
 }
@@ -2401,7 +2405,7 @@ app.whenReady().then(() => {
   if (isSpikeM1) {
     log(
       'main',
-      'multi-display per-overlay build. State machine: idle/selecting/recording. Ctrl+Shift+R cycles.'
+      `multi-display per-overlay build. State machine: idle/selecting/recording. ${getConfig().hotkeys.startStop} cycles record.`
     );
   }
 });

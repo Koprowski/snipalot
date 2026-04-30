@@ -36,6 +36,8 @@ let currentProcessingProgress:
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
 // idle hint always reflects the current binding (default: Ctrl+Shift+S).
 let currentStartStopHotkey = 'Ctrl+Shift+S';
+// Mirrors config.hotkeys.tradeMarker. Used in the trade-recording hint only.
+let currentTradeMarkerHotkey = 'Ctrl+Shift+M';
 // Tracks whether the active recording is record-mode or trade-mode (both
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';
@@ -105,7 +107,7 @@ function renderLauncherImpl(): void {
     btnScreenshotLabelEl.textContent = 'Screenshot';
     btnTradeLabelEl.textContent = isTrading ? 'Trading…' : 'Trade';
     hintEl.textContent = isTrading
-      ? 'Trade session live · Ctrl+Shift+T marks a trade · stop via HUD'
+      ? `Trade session live · ${currentTradeMarkerHotkey} marks a trade · stop via HUD`
       : 'Use the HUD to pause, annotate, or stop';
   } else if (currentState === 'processing') {
     btnPrimaryLabelEl.textContent = 'Processing…';
@@ -250,6 +252,7 @@ window.snipalotLauncher.onState((state) => {
   currentState = state.appState;
   currentProcessingStep = state.processingStep;
   if (state.startStopHotkey) currentStartStopHotkey = state.startStopHotkey;
+  if (state.tradeMarkerHotkey) currentTradeMarkerHotkey = state.tradeMarkerHotkey;
   if (state.sessionMode) currentSessionMode = state.sessionMode;
   currentProcessingProgress = state.processingProgress ?? null;
   renderLauncherImpl();

@@ -492,7 +492,7 @@ function formatOffset(ms: number): string {
  * later polish milestone if the user wants to tune it without recompile.
  *
  * The trader's transcript is included with [MARKER N at M:SS] anchor tags
- * inserted at the offsets the user pressed Ctrl+Shift+T. The model uses
+ * inserted at the offsets the user pressed the trade-marker hotkey. The model uses
  * markers as focal points but isn't required to find one trade per marker
  * — content alone is enough.
  */
@@ -779,7 +779,7 @@ The polling timeout is 60 minutes from the moment the recording stopped.
 
 ## Files in this folder right now
 
-- \`recording.mp4\` — the raw recording (lives in the parent folder)
+- \`recording.mp4\` — the raw recording (in this session folder)
 - \`transcript.txt\` — whisper-generated transcript
 - \`markers.json\` — your Ctrl+Shift+M marker timestamps
 - \`extraction_prompt.md\` — paste-ready LLM prompt (also on clipboard)

@@ -37,7 +37,7 @@ Saved output (in your configured output folder): annotated PNG with legend + `pr
 Designed for traders who narrate during live sessions. Records one long session (up to ~2 hours), then runs a post-session extraction pipeline:
 
 1. **Record** — one continuous recording; the trader narrates entries, targets, rationale, exits, and post-trade commentary naturally
-2. **Mark trades** — optional `Ctrl+Shift+T` hotkey stamps timestamps as anchor points for the LLM (works without markers, they just improve accuracy)
+2. **Mark trades** — optional `Ctrl+Shift+M` hotkey (default; rebindable in Settings) stamps timestamps as anchor points for the LLM (works without markers, they just improve accuracy)
 3. **Add MockApe data** — after stopping, a data-entry window lets you paste your MockApe JSON or CSV export; Snipalot matches trades to the recording window and attaches entry/exit market caps and PnL
 4. **LLM extraction** — Snipalot writes `extraction_prompt.md` containing the full transcript, trade markers, and MockApe data, formatted for a structured extraction pass
 5. **Paste and receive** — open the prompt in Claude Code, Gemini CLI, Cursor, or any LLM; paste back the JSON response as `extraction_response.json`
@@ -82,9 +82,11 @@ During recording, a compact HUD overlays your screen with:
 | Action | Default |
 |--------|---------|
 | Start/stop recording | `Ctrl+Shift+S` |
-| Start trade session | `Ctrl+Shift+T` (hold) |
-| Mark trade event | `Ctrl+Shift+T` (during trade recording) |
+| Start / stop trade session | `Ctrl+Shift+T` (toggle from idle or while trading) |
+| Mark trade event | `Ctrl+Shift+M` (only while a trade recording is active) |
 | Mid-session snapshot | `Ctrl+Shift+P` |
+| Annotate (during recording) | `Ctrl+Shift+A` |
+| Pause / resume | `Ctrl+Shift+B` |
 | Annotator save | `Ctrl+S` |
 | Annotator undo | `Ctrl+Z` |
 

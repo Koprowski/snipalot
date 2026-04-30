@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
       processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;
       processingStep: string | null;
       startStopHotkey?: string;
+      tradeMarkerHotkey?: string;
     }) => void
   ) => ipcRenderer.on('launcher:state', (_evt, state) => cb(state)),
 });

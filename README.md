@@ -59,7 +59,7 @@ The launcher is a small always-available control panel that lives in your taskba
 - **Copy Last Prompt** — copies the most recent generated prompt to clipboard without reopening anything
 - **Pin** — keeps the launcher on top of other windows
 - **Settings** — output folder, hotkeys, capture mode, countdown duration
-- **X** — hides to tray (Snipalot keeps running; global hotkeys stay active). Use the tray menu to fully quit.
+- **X** — exits Snipalot. Minimize keeps the launcher available from the taskbar.
 
 ---
 
@@ -129,12 +129,12 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **End users** (no Node.js or Git required):
 
-1. **Download the installer** (current release **v1.0.7**):
-   - **Direct:** [Snipalot-1.0.7-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.7/Snipalot-1.0.7-setup.exe)
+1. **Download the installer** (current release **v1.0.8**):
+   - **Direct:** [Snipalot-1.0.8-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.8/Snipalot-1.0.8-setup.exe)
    - Or open **[Releases](https://github.com/Koprowski/snipalot/releases)** and grab the latest **`Snipalot-*-setup.exe`** (NSIS installer, Windows x64).
 2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
 
-**Upgrading or reinstalling:** Snipalot keeps running in the **system tray** after you close the launcher (the **X** only hides the window). Before running a new installer, **quit fully**: right-click the **Snipalot tray icon** (near the clock) → **Quit Snipalot**. If the setup still says the app cannot be closed, click **Retry** after quitting (the installer retries several times).
+**Upgrading or reinstalling:** close Snipalot before running a new installer. The launcher **X** exits the app; the tray menu also has **Quit Snipalot**. If the setup still says the app cannot be closed, click **Retry** after quitting (the installer retries several times).
 
 The Windows installer bundles the local Whisper transcription engine and the `ggml-base.en.bin` model, so recording/transcription works without a separate post-install download.
 
@@ -156,7 +156,7 @@ npm run fetch-resources
 npm run dev
 ```
 
-Whisper and FFmpeg are bundled under `resources/bin/` — no separate installation needed.
+Whisper and FFmpeg are bundled under `resources/bin/` after `npm run fetch-resources` — no separate installation needed.
 
 ### Production / installer build (from source)
 
@@ -178,7 +178,6 @@ This runs `electron-builder` and writes the NSIS setup (and related artifacts) u
 Actively developed. Record, Screenshot/Annotator, and Trade modes (M1–M5) are fully functional. Trade mode is on the `trade-mode` branch pending a full real-session verification pass before merging to `main`.
 
 Deferred:
-- OpenRouter auto-extract (Trade mode M6) — skip the manual paste step by providing an API key
 - Window-picker capture mode — current options are region (drag to select) and fullscreen; per-window capture is marked "coming soon" in Settings
 
 ---

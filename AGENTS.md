@@ -4,15 +4,15 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 
 ## Repo snapshot
 
-- **Stack:** Electron 30, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
+- **Stack:** Electron 41, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
 - **Windows installer (local):** On a Windows machine, `npm run package` produces **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe.
-- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.7`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`**, **`npm run fetch-resources`** (Whisper + model into `resources/`), then **`npm run package:nopublish`** on `windows-latest`, then **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
+- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.8`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`** then **`npm run package:nopublish`** on `windows-latest`; the package script fetches/asserts Whisper resources before building. **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
 - **Linux:** `npm run package` on Linux produces AppImage/Snap only, not the Windows setup exe.
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.7)
+## Recent improvements (v1.0.1 onward; current release v1.0.8)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -87,7 +87,12 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Review-priority follow-ups (local branch):**
  - Completed: `settings:save` now logs `sanitizeSettingsPartialForLog(partial)` so `trade.openaiApiKey` is redacted in `snipalot.log`; Trade auto-extraction now retries with a positional prompt after Gemini CLI's known "`--prompt` + positional" parser conflict, matching Settings test behavior.
  - Recorder shortcut fail-safe passed build/static review and Pass 3 was appended to `docs/recording-shortcuts-issue-log.md`; still needs hands-on runtime validation for both `Ctrl+Shift+S` and `Ctrl+Shift+T` with exact log lines.
- - After those, clean up user-facing mismatches: make Trade hotkeys editable in Settings, align launcher-X docs/tooltips with the current full-exit behavior, propagate config write errors to Settings instead of silently closing, and refresh `docs/installation-guide-issue-2.md` for Gemini CLI/OpenRouter mode (no removed Gemini API key field).
+ - Completed in v1.0.8 local branch: trade hotkeys are editable in Settings, launcher-X docs/tooltips match full-exit behavior, config write errors propagate to Settings, and `docs/installation-guide-issue-2.md` now documents Gemini CLI/OpenRouter mode instead of the removed Gemini API key field.
+- **Settings/docs/persistence hardening (v1.0.8 local branch):**
+ - Settings hotkey editor now includes `startTrade` and `tradeMarker`, so all README/config advertised trade shortcuts are rebindable from the UI.
+ - Launcher X copy and README/install-guide upgrade text now match current behavior: launcher X exits Snipalot; minimize keeps the launcher/taskbar path.
+ - `saveConfig()` is now transactional: it writes the merged config to disk before replacing in-memory config, throws on filesystem errors, and Settings keeps the window open with an error instead of reporting a false successful save.
+ - Added `npm test` with `tests/config-persistence.test.mjs` covering successful config writes and disk-write failure behavior.
 
 ## Packaged app logs
 
@@ -105,7 +110,7 @@ These came from code review; **not** implemented yet. Pick up as separate tasks 
 
 4. **Dependency / security audit:** `npm audit` upstream noise; dedicated pass if required.
 
-5. **Automated tests:** No `npm test` yet; good candidates: pipeline helpers, path logic.
+5. **Automated tests:** `npm test` currently covers config persistence. Good next candidates: pipeline helpers, packaged resource lookup, Gemini CLI fallback behavior.
 
 6. **In-app microphone device picker:** Diagnostics exist; explicit device selection in Settings still deferred.
 

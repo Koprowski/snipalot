@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
   trade: () => ipcRenderer.invoke('launcher:trade'),
   cancel: () => ipcRenderer.invoke('launcher:cancel'),
   quit: () => ipcRenderer.invoke('launcher:quit'),
-  /** Hide launcher to tray (app keeps running, hotkeys stay live). */
+  /** Legacy hide-to-tray IPC, retained for compatibility with older renderer code. */
   closeToTray: () => ipcRenderer.invoke('launcher:close-to-tray'),
   /** Toggle launcher's alwaysOnTop pin. Returns the new state so the
       renderer can sync its visual indicator. */

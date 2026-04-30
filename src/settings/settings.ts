@@ -35,6 +35,8 @@ const firstRunBanner = document.getElementById('first-run-banner') as HTMLElemen
 
 const HOTKEY_LABELS: Record<string, string> = {
   startStop: 'Start / Stop recording',
+  startTrade: 'Start / Stop trade session',
+  tradeMarker: 'Mark trade event',
   annotate: 'Enter annotation mode',
   snapshot: 'Take snapshot (close chapter)',
   clear: 'Clear annotations',
@@ -49,6 +51,8 @@ const HOTKEY_LABELS: Record<string, string> = {
 // in sync if defaults ever change.
 const DEFAULT_HOTKEYS: Record<string, string> = {
   startStop: 'Ctrl+Shift+S',
+  startTrade: 'Ctrl+Shift+T',
+  tradeMarker: 'Ctrl+Shift+M',
   annotate: 'Ctrl+Shift+A',
   snapshot: 'Ctrl+Shift+P',
   clear: 'Ctrl+Shift+C',

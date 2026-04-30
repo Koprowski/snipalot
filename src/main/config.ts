@@ -208,13 +208,15 @@ export function loadConfig(): SnipalotConfig {
  * Merge a partial update into the in-memory config and flush to disk.
  */
 export function saveConfig(partial: Partial<SnipalotConfig>): void {
-  _config = deepMerge(_config, partial) as SnipalotConfig;
+  const nextConfig = deepMerge(_config, partial) as SnipalotConfig;
   try {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(_config, null, 2), 'utf-8');
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(nextConfig, null, 2), 'utf-8');
+    _config = nextConfig;
     log('config', 'saved', { path: CONFIG_PATH });
   } catch (err) {
     log('config', 'save error', { err: (err as Error).message });
+    throw err;
   }
 }
 

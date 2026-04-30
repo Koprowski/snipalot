@@ -3,9 +3,9 @@
 **Mirror of [GitHub Issue #2](https://github.com/Koprowski/snipalot/issues/2).**  
 When the download URL changes, update this file and paste its body into the issue (or edit the issue on GitHub).
 
-**Current installer (latest):** [Snipalot-1.0.7-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.7/Snipalot-1.0.7-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
+**Current installer (latest):** [Snipalot-1.0.8-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.8/Snipalot-1.0.8-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
 
-**Before reinstalling:** quit Snipalot from the **system tray** (right-click tray icon → **Quit Snipalot**). The launcher **X** does not exit the app.
+**Before reinstalling:** quit Snipalot first. The launcher **X** exits the app; the tray menu also has **Quit Snipalot**.
 
 ---
 
@@ -17,10 +17,10 @@ Snipalot is a Windows screen-recording tool with a **Trade mode** built for meme
 
 ## Step 1 — Download and install Snipalot
 
-**[⬇ Download Snipalot-1.0.7-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.7/Snipalot-1.0.7-setup.exe)**
+**[⬇ Download Snipalot-1.0.8-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.8/Snipalot-1.0.8-setup.exe)**
 
 1. Click the link above to download the installer
-2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.7-setup.exe**
+2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.8-setup.exe**
 3. If Windows shows a blue "Windows protected your PC" warning, click **More info** → **Run anyway**
 4. Click through the installer (Next → Install → Finish)
 5. Snipalot now appears in your **Start menu** — press the Windows key and type **Snipalot** to launch it any time
@@ -29,36 +29,40 @@ Snipalot is a Windows screen-recording tool with a **Trade mode** built for meme
 
 ---
 
-## Step 2 — Get a free AI API key
+## Step 2 — Set up Trade-mode AI
 
-Snipalot needs an API key to automatically analyze your trades. Pick whichever option suits you:
+Snipalot can analyze trades with either Gemini CLI (recommended, no API key) or an OpenRouter/OpenAI-compatible API key.
 
-### Option A — Google Gemini (recommended, completely free)
+### Option A — Gemini CLI (recommended, no API key)
 
-1. Go to **https://aistudio.google.com/apikey** and sign in with any Google account
-2. Click **Create API key** → **Create API key in new project**
-3. Copy the key — it starts with `AIza`
+1. Install Node.js 20+ from **https://nodejs.org/**
+2. Open PowerShell and run:
 
-Free tier: 1,500 requests per day, no credit card needed.
+   ```
+   npm install -g @google/gemini-cli
+   ```
+
+3. Launch Snipalot, open **Settings → Trade Mode**, keep **LLM backend** set to **Gemini CLI**
+4. Click **Sign in with Google** and complete the browser login
+5. Click **Test LLM Connection**, then **Save**
+
+This uses free Gemini Code Assist quota. No Gemini API key is needed.
 
 ### Option B — OpenRouter (free tier, access to many models)
 
 1. Go to **https://openrouter.ai/keys** and create a free account
 2. Click **Create Key**, give it a name, copy the key — it starts with `sk-or-`
 
-Free tier includes Gemini Flash and Llama 3.3 70B at no cost.
-
 ---
 
-## Step 3 — Add your API key to Snipalot
+## Step 3 — Optional API-key fallback
 
 1. Launch Snipalot from the Start menu
 2. Click the **⚙ gear icon** in the top-right of the launcher window
 3. Scroll down to **Trade Mode**
-4. Paste your key into the matching field:
-   - Google key (`AIza…`) → **Gemini API Key**
-   - OpenRouter key (`sk-or-…`) → **OpenRouter / OpenAI API Key**
-5. Click **Save**
+4. Change **LLM backend** to **API keys (OpenRouter/OpenAI-compatible)**
+5. Paste your OpenRouter key (`sk-or-…`) into **OpenRouter / OpenAI API Key**
+6. Pick or type a model, click **Test LLM Connection**, then **Save**
 
 ---
 
@@ -114,7 +118,7 @@ Export your actual trades from MockApe or Padre as JSON and drop the file into t
 | Problem | Fix |
 | --- | --- |
 | Windows shows "Windows protected your PC" | Click **More info** → **Run anyway** — appears because the installer isn't code-signed |
-| No `trade_log.csv` after recording | Open the session folder — if `extraction_response.json` is missing, the API call failed. Double-check your key in Settings → Trade Mode |
+| No `trade_log.csv` after recording | Open the session folder. If `extraction_response.json` is missing, the LLM extraction failed. In Settings → Trade Mode, click **Test LLM Connection** and follow any Gemini CLI install/sign-in guidance, or switch to API mode and verify the OpenRouter/OpenAI key |
 | Recording has no audio | Check the microphone icon in the HUD. In Windows **Settings → System → Sound → Input**, set the correct default microphone. Open **`mic_diagnostics.json`** in the session folder to see which device Snipalot captured and any errors |
 | Snipalot doesn't appear in Start menu after install | Re-run the installer, or search for Snipalot in `C:\Users\YourName\AppData\Local\Programs\` |
 

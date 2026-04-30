@@ -1,6 +1,6 @@
 {
   "name": "snipalot",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Portable Windows screen-feedback tool: record, annotate live, transcribe, and hand an LLM-ready prompt to your clipboard.",
   "main": "dist/main/index.js",
   "author": "Jason Koprowski",
@@ -16,6 +16,7 @@
     "dev": "npm run build && electron . --dev",
     "debug": "npm run build && electron . --dev --debug",
     "spike:m1": "npm run build && electron . --spike=m1",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "assert-resources": "node scripts/assert-resources.mjs",
     "package": "npm run kill:stale && npm run fetch-resources && npm run build && npm run assert-resources && electron-builder",
     "package:nopublish": "npm run kill:stale && npm run fetch-resources && npm run build && npm run assert-resources && electron-builder --publish never",

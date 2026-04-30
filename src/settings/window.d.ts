@@ -3,10 +3,21 @@
 interface Window {
   snipalotSettings: {
     getConfig: () => Promise<import('../main/config').SnipalotConfig>;
+    getAppInfo: () => Promise<{
+      version: string;
+      startupRevision: string;
+    }>;
+    checkForUpdates: () => Promise<{
+      ok: boolean;
+      currentVersion: string;
+      latestVersion: string | null;
+      updateAvailable: boolean;
+      releaseUrl: string | null;
+      message: string;
+    }>;
+    openLatestRelease: () => Promise<void>;
     save: (partial: Partial<import('../main/config').SnipalotConfig>) => Promise<void>;
-    pickFolder: () => Promise<string | null>;
-    close: () => Promise<void>;
-    testTradeApiKeys: (payload: {
+    testApiKeys: (payload: {
       geminiApiKey?: string;
       openaiApiKey?: string;
       openaiBaseUrl?: string;
@@ -22,6 +33,8 @@ interface Window {
       openaiMessage: string;
       anyOk: boolean;
     }>;
+    pickFolder: () => Promise<string | null>;
+    close: () => Promise<void>;
     log: (scope: string, ...args: unknown[]) => Promise<void>;
   };
 }

@@ -1198,6 +1198,113 @@ function openSettings(isFirstRun = false): void {
 }
 
 ipcMain.handle('settings:get-config', () => getConfig());
+ipcMain.handle('settings:get-app-info', () => ({
+  version: app.getVersion(),
+  releasePageUrl: 'https://github.com/Koprowski/snipalot/releases/latest',
+}));
+
+interface SettingsUpdateCheckResult {
+  ok: boolean;
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string;
+  message: string;
+}
+
+function parseSemverParts(v: string): number[] | null {
+  const clean = v.trim().replace(/^v/i, '');
+  const m = clean.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function isRemoteVersionNewer(current: string, latest: string): boolean {
+  const a = parseSemverParts(current);
+  const b = parseSemverParts(latest);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (b[i] > a[i]) return true;
+    if (b[i] < a[i]) return false;
+  }
+  return false;
+}
+
+ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
+  const currentVersion = app.getVersion();
+  const fallbackUrl = 'https://github.com/Koprowski/snipalot/releases/latest';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch('https://api.github.com/repos/Koprowski/snipalot/releases/latest', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'User-Agent': `snipalot/${currentVersion}`,
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      log('settings', 'check-for-updates http fail', { status: res.status });
+      return {
+        ok: false,
+        currentVersion,
+        latestVersion: null,
+        updateAvailable: false,
+        releaseUrl: fallbackUrl,
+        message: `Update check failed (HTTP ${res.status}).`,
+      };
+    }
+    const json = await res.json() as {
+      tag_name?: string;
+      html_url?: string;
+      name?: string;
+    };
+    const latestTag = (json.tag_name ?? json.name ?? '').trim();
+    const latestVersion = latestTag.replace(/^v/i, '');
+    const releaseUrl = json.html_url || fallbackUrl;
+    if (!latestVersion) {
+      return {
+        ok: false,
+        currentVersion,
+        latestVersion: null,
+        updateAvailable: false,
+        releaseUrl,
+        message: 'Update check failed (invalid release metadata).',
+      };
+    }
+    const updateAvailable = isRemoteVersionNewer(currentVersion, latestVersion);
+    return {
+      ok: true,
+      currentVersion,
+      latestVersion,
+      updateAvailable,
+      releaseUrl,
+      message: updateAvailable
+        ? `Update available: v${latestVersion} (installed v${currentVersion}).`
+        : `You are up to date (v${currentVersion}).`,
+    };
+  } catch (err) {
+    log('settings', 'check-for-updates threw', { err: (err as Error).message });
+    return {
+      ok: false,
+      currentVersion,
+      latestVersion: null,
+      updateAvailable: false,
+      releaseUrl: fallbackUrl,
+      message: `Update check failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
+  const target = url && /^https?:\/\//i.test(url)
+    ? url
+    : 'https://github.com/Koprowski/snipalot/releases/latest';
+  await shell.openExternal(target);
+});
 
 function sanitizeSettingsPartialForLog(
   partial: Partial<SnipalotConfig>

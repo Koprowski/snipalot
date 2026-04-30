@@ -187,11 +187,18 @@
           and puts an LLM-ready prompt on your clipboard. Snipalot itself never contacts any cloud
           service; what you do with the prompt is up to you.
         </p>
+        <div class="field-row" style="margin-top:10px">
+          <button class="btn" id="btn-check-updates">Check for Updates</button>
+          <p class="info" style="margin-top:4px">
+            Compares your installed version with the latest GitHub release and opens the download page when available.
+          </p>
+        </div>
       </div>
     </div>
 
     <div class="footer">
       <span class="status" id="status"></span>
+      <span class="version" id="settings-version">Version: —</span>
       <button class="btn" id="btn-cancel">Cancel</button>
       <button class="btn primary" id="btn-save">Save</button>
     </div>

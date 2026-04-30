@@ -19,6 +19,7 @@ import { log } from './logger';
 import { runPipeline, AnnotationRecord, ChapterRecord, formatSessionStamp } from './pipeline';
 import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
+import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
@@ -1900,10 +1901,37 @@ ipcMain.handle(
   }
 );
 
+function isMicDiagnosticsPayload(x: unknown): x is MicDiagnosticsPayload {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as Record<string, unknown>;
+  return (
+    typeof o.capturedAtIso === 'string' &&
+    typeof o.microphoneRequested === 'boolean' &&
+    typeof o.microphoneGranted === 'boolean' &&
+    (o.getUserMediaError === null || typeof o.getUserMediaError === 'string') &&
+    Array.isArray(o.audioInputDevices)
+  );
+}
+
+function writeMicDiagnosticsFile(sessionDir: string, payload: MicDiagnosticsPayload): void {
+  const outPath = path.join(sessionDir, 'mic_diagnostics.json');
+  try {
+    fs.writeFileSync(outPath, JSON.stringify(payload, null, 2), 'utf-8');
+    log('recorder', 'mic_diagnostics.json written', { outPath });
+  } catch (err) {
+    log('recorder', 'mic_diagnostics.json write failed', { err: (err as Error).message });
+  }
+}
+
 ipcMain.handle(
   'recorder:state',
-  (_evt, state: 'started' | 'stopped' | 'error', detail?: string) => {
-    log('recorder', 'state', { state, detail });
+  (
+    _evt,
+    state: 'started' | 'stopped' | 'error',
+    detail?: string,
+    micDiagnostics?: unknown
+  ) => {
+    log('recorder', 'state', { state, detail, hasMicDiagnostics: Boolean(micDiagnostics) });
 
     if (state === 'started') {
       // Confirm transition (we already moved to 'recording' on region-confirmed).
@@ -1927,6 +1955,20 @@ ipcMain.handle(
       liveSessionDir = path.join(outputRoot, `${stamp} ${suffix}`);
       if (!fs.existsSync(liveSessionDir)) fs.mkdirSync(liveSessionDir, { recursive: true });
       log('main', 'liveSessionDir created', { liveSessionDir, mode: currentSessionMode });
+
+      if (isMicDiagnosticsPayload(micDiagnostics)) {
+        const d = micDiagnostics;
+        log('recorder', 'mic capture summary', {
+          microphoneGranted: d.microphoneGranted,
+          getUserMediaError: d.getUserMediaError,
+          activeLabel: d.activeAudioTrack?.label ?? null,
+          activeDeviceId: d.activeAudioTrack?.settings?.deviceId ?? null,
+          audioInputCount: d.audioInputDevices.length,
+        });
+        writeMicDiagnosticsFile(liveSessionDir, d);
+      } else if (micDiagnostics !== undefined) {
+        log('recorder', 'mic diagnostics payload ignored (invalid shape)', { micDiagnostics });
+      }
 
       const display = screen
         .getAllDisplays()

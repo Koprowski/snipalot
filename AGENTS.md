@@ -8,6 +8,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
 - **Windows installer:** `npm run package` (or `package:portable`) must run **on Windows** (or Windows CI). Linux builds produce AppImage/snap only; NSIS setup is configured in `electron-builder.yml` under `win:`.
 - **End-user install (`.exe`):** Not in repo source — see **README → “Installation (Windows — pre-built)”**, **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)**, and **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** for the full Gemini/trade walkthrough with download link.
+- **No audio / wrong mic:** Each session folder includes **`mic_diagnostics.json`** (written when recording starts): granted vs denied, `getUserMedia` error string, active track label + `deviceId`, and enumerated `audioinput` devices. Main also logs a one-line `recorder` scope summary. Packaged app logs: **`spike-output/snipalot.log`** next to the process cwd (often under the install directory); search the PC for `snipalot.log` if unsure.
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
 ## Recently landed on `main` (high level)

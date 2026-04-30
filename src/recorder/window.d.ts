@@ -15,7 +15,12 @@ interface Window {
       filepath: string;
       bytes: number;
     }>;
-    reportState: (state: 'started' | 'stopped' | 'error', detail?: string) => Promise<void>;
+    reportState: (
+      state: 'started' | 'stopped' | 'error',
+      detail?: string,
+      /** Present when state === 'started'; mic capture audit from the renderer. */
+      micDiagnostics?: unknown
+    ) => Promise<void>;
     reportSnap: (buffer: ArrayBuffer | null) => void;
     onStart: (cb: (region: RecorderRegion) => void) => void;
     onStop: (cb: () => void) => void;

@@ -102,6 +102,7 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
   {stamp} feedback.gif
   transcript.txt
   prompt.txt
+  mic_diagnostics.json    ← which mic was captured (labels, device ids, errors)
   snapshots/
 
 {stamp} screenshot/       ← Screenshot mode session
@@ -112,6 +113,7 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
   recording.mp4
   {stamp} trade.gif
   transcript.txt
+  mic_diagnostics.json    ← which mic was captured (labels, device ids, errors)
   markers.json
   extraction_prompt.md
   extraction_response.json   (written by user after LLM pass)

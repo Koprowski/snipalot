@@ -14,6 +14,8 @@
  * the captured stream) to recover source-pixel coordinates.
  */
 
+import type { MicActiveTrackSummary, MicDiagnosticsPayload } from '../shared/mic-diagnostics';
+
 const logEl = document.getElementById('log')!;
 
 let mediaRecorder: MediaRecorder | null = null;
@@ -31,6 +33,66 @@ function log(line: string): void {
   logEl.textContent = `${logEl.textContent}\n[${ts}] ${line}`;
   logEl.scrollTop = logEl.scrollHeight;
   console.log(`[recorder] ${line}`);
+}
+
+function pickJsonSafeSettings(track: MediaStreamTrack): Record<string, unknown> {
+  const s = track.getSettings();
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(s) as (keyof MediaTrackSettings)[]) {
+    const v = s[k];
+    if (v === undefined) continue;
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * After getUserMedia, capture which mic was bound and enumerate audio inputs
+ * for support/debug (written to mic_diagnostics.json by main).
+ */
+async function collectMicDiagnostics(
+  mic: MediaStream | null,
+  getUserMediaError: string | null
+): Promise<MicDiagnosticsPayload> {
+  let devices: MediaDeviceInfo[] = [];
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices();
+  } catch {
+    devices = [];
+  }
+  const audioInputDevices = devices
+    .filter((d) => d.kind === 'audioinput')
+    .map((d) => ({
+      deviceId: d.deviceId,
+      label: d.label || '(no label — grant mic permission to see names)',
+      groupId: d.groupId,
+    }));
+
+  let activeAudioTrack: MicActiveTrackSummary | null = null;
+  if (mic) {
+    const t = mic.getAudioTracks()[0];
+    if (t) {
+      activeAudioTrack = {
+        label: t.label || '(no label)',
+        id: t.id,
+        enabled: t.enabled,
+        muted: t.muted,
+        readyState: t.readyState,
+        settings: pickJsonSafeSettings(t),
+      };
+    }
+  }
+
+  return {
+    capturedAtIso: new Date().toISOString(),
+    microphoneRequested: true,
+    microphoneGranted: mic !== null,
+    getUserMediaError,
+    activeAudioTrack,
+    audioInputDevices,
+  };
 }
 
 async function startRecording(region: RecorderRegion): Promise<void> {
@@ -96,11 +158,22 @@ async function startRecording(region: RecorderRegion): Promise<void> {
     drawFrame();
 
     // 4. Mic (best-effort). No system audio in this build.
+    let micGetUserMediaError: string | null = null;
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     } catch (err) {
-      log(`mic unavailable, continuing without audio: ${(err as Error).message}`);
+      micGetUserMediaError = (err as Error).message;
+      log(`mic unavailable, continuing without audio: ${micGetUserMediaError}`);
       micStream = null;
+    }
+    const micDiagnostics = await collectMicDiagnostics(micStream, micGetUserMediaError);
+    if (micDiagnostics.activeAudioTrack) {
+      log(
+        `mic track: ${micDiagnostics.activeAudioTrack.label} ` +
+          `(deviceId in settings: ${String(micDiagnostics.activeAudioTrack.settings.deviceId ?? 'n/a')})`
+      );
+    } else if (!micDiagnostics.microphoneGranted) {
+      log('mic: no audio track (getUserMedia failed or returned no audio)');
     }
 
     // 5. Combine canvas video + mic audio into one stream for MediaRecorder.
@@ -147,7 +220,7 @@ async function startRecording(region: RecorderRegion): Promise<void> {
     pendingFilepath = await window.snipalotRecorder.getOutputPath();
     mediaRecorder.start(250);
     log(`recording started → ${pendingFilepath}`);
-    window.snipalotRecorder.reportState('started');
+    window.snipalotRecorder.reportState('started', undefined, micDiagnostics);
   } catch (err) {
     const msg = (err as Error).message;
     log(`start failed: ${msg}`);

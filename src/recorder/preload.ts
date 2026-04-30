@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
 
 export interface RegionSelection {
   xPct: number;
@@ -11,8 +12,11 @@ contextBridge.exposeInMainWorld('snipalotRecorder', {
   getOutputPath: () => ipcRenderer.invoke('recorder:get-output-path'),
   saveWebm: (payload: { buffer: ArrayBuffer; filepath: string }) =>
     ipcRenderer.invoke('recorder:save-webm', payload),
-  reportState: (state: 'started' | 'stopped' | 'error', detail?: string) =>
-    ipcRenderer.invoke('recorder:state', state, detail),
+  reportState: (
+    state: 'started' | 'stopped' | 'error',
+    detail?: string,
+    micDiagnostics?: MicDiagnosticsPayload
+  ) => ipcRenderer.invoke('recorder:state', state, detail, micDiagnostics),
   reportSnap: (buffer: ArrayBuffer | null) =>
     ipcRenderer.send('recorder:snap-result', buffer),
   onStart: (cb: (region: RegionSelection) => void) =>

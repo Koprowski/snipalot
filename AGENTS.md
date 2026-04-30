@@ -7,6 +7,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Stack:** Electron 30, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
 - **Windows installer:** `npm run package` (or `package:portable`) must run **on Windows** (or Windows CI). Linux builds produce AppImage/snap only; NSIS setup is configured in `electron-builder.yml` under `win:`.
+- **End-user install (`.exe`):** Not in repo source — see **README → “Installation (Windows — pre-built)”**, **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)**, and **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** for the full Gemini/trade walkthrough with download link.
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
 ## Recently landed on `main` (high level)

@@ -123,6 +123,17 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 ---
 
+## Installation (Windows — pre-built)
+
+**End users** (no Node.js or Git required):
+
+1. Open **[Releases](https://github.com/Koprowski/snipalot/releases)** and download the latest **`Snipalot-*-setup.exe`** (NSIS installer for Windows x64).
+2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
+
+A full walkthrough for Trade mode plus **Gemini CLI / API keys** is in **[Issue #2 — Installation Guide: Snipalot + Gemini CLI on Windows](https://github.com/Koprowski/snipalot/issues/2)** (includes a direct download link when a release is published).
+
+---
+
 ## Installation (dev)
 
 Requires Node.js 20+ and Windows 10/11.
@@ -136,14 +147,18 @@ npm run dev
 
 Whisper and FFmpeg are bundled under `resources/bin/` — no separate installation needed.
 
-For a production build:
+### Production / installer build (from source)
+
+On **Windows**, from the repo root:
 
 ```
-npm run build
-npm run dist
+npm install
+npm run package
 ```
 
-This produces a portable installer under `dist/`.
+This runs `electron-builder` and writes the NSIS setup (and related artifacts) under **`release/`** — see `electron-builder.yml`. For a portable `.exe` only: `npm run package:portable`.
+
+> Building the Windows installer on Linux produces AppImage/Snap only, not the `.exe`.
 
 ---
 

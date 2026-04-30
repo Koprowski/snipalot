@@ -319,3 +319,6 @@ window.snipalotRecorder.onResume(() => {
 });
 
 log('recorder ready · awaiting region-select');
+window.snipalotRecorder.ready().catch((err) => {
+  log(`failed to notify main of recorder readiness: ${(err as Error).message}`);
+});

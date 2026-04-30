@@ -455,6 +455,35 @@ select:focus {
   overflow-wrap: anywhere;
 }
 
+.missing-cli-help {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.missing-cli-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #facc15;
+}
+
+.missing-cli-command-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+#gemini-cli-install-command {
+  flex: 1;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
 /* ── footer ── */
 
 .footer {

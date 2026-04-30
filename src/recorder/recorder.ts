@@ -14,9 +14,25 @@
  * the captured stream) to recover source-pixel coordinates.
  */
 
-import type { MicActiveTrackSummary, MicDiagnosticsPayload } from '../shared/mic-diagnostics';
-
 const logEl = document.getElementById('log')!;
+
+interface MicActiveTrackSummary {
+  label: string;
+  id: string;
+  enabled: boolean;
+  muted: boolean;
+  readyState: string;
+  settings: Record<string, unknown>;
+}
+
+interface MicDiagnosticsPayload {
+  capturedAtIso: string;
+  microphoneRequested: boolean;
+  microphoneGranted: boolean;
+  getUserMediaError: string | null;
+  activeAudioTrack: MicActiveTrackSummary | null;
+  audioInputDevices: Array<{ deviceId: string; label: string; groupId: string }>;
+}
 
 let mediaRecorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
@@ -318,4 +334,5 @@ window.snipalotRecorder.onResume(() => {
   resumeRecording();
 });
 
+void window.snipalotRecorder.reportReady();
 log('recorder ready · awaiting region-select');

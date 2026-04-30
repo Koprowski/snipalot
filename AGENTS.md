@@ -65,9 +65,29 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Gemini CLI settings-test fallback + diagnostics (local branch):**
  - `settings:test-llm-connection` now retries the prompt probe with a positional prompt when Gemini returns the known "`--prompt` + positional" parser conflict, preventing false negatives from runtime argv quirks.
  - Added structured, non-secret `settings` logs for each Gemini test stage (launch/version/prompt/fallback success/failure) with sanitized stderr tails for faster root-cause support.
+- **Missing Gemini CLI guidance in Settings test (local branch):**
+ - `Test LLM Connection` now classifies missing-CLI launch failures (`ENOENT`/not-found patterns) and returns a mode-specific guidance payload from main (install command + docs URL).
+ - Settings now shows a compact "Gemini CLI not installed" help card with one-click **Open install guide** and **Copy** install command actions; successful test behavior remains unchanged.
 - **Recorder start handshake hardening (local branch):**
  - Main now tracks recorder-renderer readiness (`recorder:ready`) and queues `recorder:start` if the renderer is not yet ready, then flushes once ready so Record/Trade cannot silently drop the start IPC.
  - Added recorder-window diagnostics (`did-finish-load`, `did-fail-load`, `render-process-gone`) to `snipalot.log` for direct evidence when the hidden recorder fails to load or crashes.
+- **Recorder shortcut-start fail-safe + persistent issue log (local branch):**
+ - Added fallback start dispatch after recorder `did-finish-load` when `recorder:ready` has not arrived, plus a 5s readiness timeout that resets to idle with a user-facing notification instead of silently hanging.
+ - Added `docs/recording-shortcuts-issue-log.md` as the persistent troubleshooting ledger for this recurring hotkey/recording startup issue.
+- **Recorder renderer bootstrap fix (local branch):**
+ - Runtime logs showed `recorder window finished load` followed by queued start timeout and no `recorder:ready`; compiled `dist/recorder/recorder.js` contained CommonJS `exports` boilerplate because `src/recorder/recorder.ts` had a type-only import.
+ - Fixed by replacing the recorder renderer type import with local interfaces so the compiled browser script has no `exports`/`require`; added recorder `console-message` and `preload-error` forwarding in main so future renderer bootstrap failures appear in `snipalot.log`.
+- **Local Whisper install + transcript troubleshooting (2026-04-30):**
+ - Missing transcript was not an audio-capture issue; latest run logged `whisper.cpp + model not installed — run npm run fetch-resources`.
+ - Ran `npm run fetch-resources`, which installed `resources/bin/whisper/whisper-cli.exe` and `resources/models/ggml-base.en.bin`; manual ffmpeg + Whisper test against `E:\Video Screencasts\recording.mp4` succeeded and produced transcript text.
+ - Future dev runs should transcribe automatically; if not, inspect `pipeline` / `whisper` logs and confirm resources still exist under `resources/bin/whisper` + `resources/models`.
+- **Installer Whisper bundling hardening (local branch):**
+ - Packaging scripts now run `kill:stale`, `fetch-resources`, `build`, and `assert-resources` before `electron-builder`; `scripts/assert-resources.mjs` fails packaging if `whisper-cli.exe`/`main.exe` or `ggml-base.en.bin` is missing.
+ - `electron-builder.yml` was updated for `electron-builder@26` compatibility (`win.sign` removed, `nsis.warningsAsErrors=false` for bundled NSIS template warning). A fresh-output NSIS build succeeded and verified Whisper/model are present under packaged `resources/resources/...`; default `release/` may still be locally file-locked by Windows until handles clear.
+- **Review-priority follow-ups (local branch):**
+ - Completed: `settings:save` now logs `sanitizeSettingsPartialForLog(partial)` so `trade.openaiApiKey` is redacted in `snipalot.log`; Trade auto-extraction now retries with a positional prompt after Gemini CLI's known "`--prompt` + positional" parser conflict, matching Settings test behavior.
+ - Recorder shortcut fail-safe passed build/static review and Pass 3 was appended to `docs/recording-shortcuts-issue-log.md`; still needs hands-on runtime validation for both `Ctrl+Shift+S` and `Ctrl+Shift+T` with exact log lines.
+ - After those, clean up user-facing mismatches: make Trade hotkeys editable in Settings, align launcher-X docs/tooltips with the current full-exit behavior, propagate config write errors to Settings instead of silently closing, and refresh `docs/installation-guide-issue-2.md` for Gemini CLI/OpenRouter mode (no removed Gemini API key field).
 
 ## Packaged app logs
 
@@ -88,6 +108,8 @@ These came from code review; **not** implemented yet. Pick up as separate tasks 
 5. **Automated tests:** No `npm test` yet; good candidates: pipeline helpers, path logic.
 
 6. **In-app microphone device picker:** Diagnostics exist; explicit device selection in Settings still deferred.
+
+7. **Shortcut-triggered recording startup reliability:** Mitigations landed (queued-start fallback + timeout) and build/static verification passed, but runtime validation across both hotkeys (`Ctrl+Shift+S` and `Ctrl+Shift+T`) remains in progress; track detailed passes in `docs/recording-shortcuts-issue-log.md`.
 
 ## Conventions
 

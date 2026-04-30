@@ -338,7 +338,6 @@ async function tryGeminiCli(
   if (onStep) onStep('Auto-extracting via Gemini CLI…');
   log('trade-pipeline', 'gemini-cli: attempting auto-extraction', { cliCommand, model });
 
-  const args = ['--model', model, '--output-format', 'json', '--prompt', promptText];
   const resolvedCli = resolveGeminiCliExecutable(cliCommand);
   // Use Gemini CLI's own auth method (OAuth via Google account, or whatever
   // is in ~/.gemini/settings.json). Strip GEMINI_API_KEY env var so a stale
@@ -354,48 +353,74 @@ async function tryGeminiCli(
     GEMINI_CLI_NO_RELAUNCH: 'true',
   };
   delete env.GEMINI_API_KEY;
-  const result = await new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    // shell:false on Windows keeps multi-word --prompt as a single argv token;
-    // shell:true via cmd.exe splits on spaces and triggers Gemini's
-    // "positional prompt and --prompt together" error.
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs, ...args], {
-        windowsHide: true,
-        shell: false,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+
+  const runGemini = (
+    args: string[],
+    attempt: 'prompt-flag' | 'prompt-positional'
+  ): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> =>
+    new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      // shell:false on Windows keeps multi-word --prompt as a single argv token;
+      // shell:true via cmd.exe splits on spaces and triggers Gemini's
+      // "positional prompt and --prompt together" error.
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs, ...args], {
+          windowsHide: true,
+          shell: false,
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (err) {
+        log('trade-pipeline', 'gemini-cli: spawn failed', { attempt, err: (err as Error).message });
+        resolve({ code: -1, stdout, stderr, timedOut });
+        return;
+      }
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill();
+      }, timeoutMs);
+      child.stdout?.on('data', (d) => { stdout += d.toString(); });
+      child.stderr?.on('data', (d) => { stderr += d.toString(); });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        resolve({ code, stdout, stderr, timedOut });
       });
-    } catch {
-      resolve({ code: -1, stdout, stderr, timedOut });
-      return;
-    }
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-    child.stdout?.on('data', (d) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        log('trade-pipeline', 'gemini-cli: process error', { attempt, err: err.message });
+        resolve({ code: -1, stdout, stderr, timedOut });
+      });
     });
-    child.on('error', () => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr, timedOut });
+
+  let result = await runGemini(
+    ['--model', model, '--output-format', 'json', '--prompt', promptText],
+    'prompt-flag'
+  );
+  let fallback = 'none';
+
+  if (result.code !== 0 && /Cannot use both a positional prompt and the --prompt flag together/i.test(result.stderr)) {
+    log('trade-pipeline', 'gemini-cli: retrying positional prompt after parser conflict', {
+      code: result.code,
+      stderr: result.stderr.slice(0, 500),
     });
-  });
+    result = await runGemini(
+      ['--model', model, '--output-format', 'json', promptText],
+      'prompt-positional'
+    );
+    fallback = 'positional-prompt';
+  }
 
   if (result.timedOut) {
-    log('trade-pipeline', 'gemini-cli: timeout', { timeoutMs });
+    log('trade-pipeline', 'gemini-cli: timeout', { timeoutMs, fallback });
     return false;
   }
   if (result.code !== 0) {
     log('trade-pipeline', 'gemini-cli: non-zero exit', {
       code: result.code,
+      fallback,
       stderr: result.stderr.slice(0, 500),
     });
     return false;
@@ -412,7 +437,7 @@ async function tryGeminiCli(
   try {
     parseAndValidateResponse(rawText);
     fs.writeFileSync(responsePath, rawText, 'utf-8');
-    log('trade-pipeline', 'gemini-cli: auto-extraction succeeded', { chars: rawText.length });
+    log('trade-pipeline', 'gemini-cli: auto-extraction succeeded', { chars: rawText.length, fallback });
     return true;
   } catch (err) {
     log('trade-pipeline', 'gemini-cli: invalid response JSON', {

@@ -7,17 +7,38 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     ok: boolean;
     mode: 'gemini-cli' | 'api';
     message: string;
+    guidance?: {
+      kind: 'gemini-cli-missing';
+      title: string;
+      explanation: string;
+      installCommand: string;
+      docsUrl: string;
+    };
   }> => ipcRenderer.invoke('settings:test-llm-connection', payload),
   // Backward-compatible aliases for older renderer code paths.
   testApiKeys: (payload: unknown): Promise<{
     ok: boolean;
     mode: 'gemini-cli' | 'api';
     message: string;
+    guidance?: {
+      kind: 'gemini-cli-missing';
+      title: string;
+      explanation: string;
+      installCommand: string;
+      docsUrl: string;
+    };
   }> => ipcRenderer.invoke('settings:test-llm-connection', payload),
   testTradeApiKeys: (payload: unknown): Promise<{
     ok: boolean;
     mode: 'gemini-cli' | 'api';
     message: string;
+    guidance?: {
+      kind: 'gemini-cli-missing';
+      title: string;
+      explanation: string;
+      installCommand: string;
+      docsUrl: string;
+    };
   }> => ipcRenderer.invoke('settings:test-llm-connection', payload),
   listOpenRouterModels: (): Promise<Array<{ id: string; createdAtMs: number; inputCostPer1M: number }>> =>
     ipcRenderer.invoke('settings:list-openrouter-models'),

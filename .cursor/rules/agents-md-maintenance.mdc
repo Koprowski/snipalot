@@ -1,0 +1,15 @@
+---
+description: Keep AGENTS.md updated after meaningful implementation work
+alwaysApply: true
+---
+
+# AGENTS.md Maintenance Rule
+
+After any meaningful feature implementation or bug-fix implementation:
+
+- Update `AGENTS.md` before ending the session.
+- Add concise bullets for:
+  - What changed (behavior, config/schema, workflow, or troubleshooting outcome).
+  - Current status of relevant open items/issues (progress, deferred, blocked, or resolved).
+- Keep entries action-oriented and useful for handoff to the next agent.
+- Do not add noise for trivial edits; focus on meaningful implementation sessions.

@@ -14,6 +14,12 @@ const btnTestLlmConnection = document.getElementById('btn-test-llm-connection') 
 const btnFetchOpenRouterModels = document.getElementById('btn-fetch-openrouter-models') as HTMLButtonElement;
 const btnFetchGeminiCliModels = document.getElementById('btn-fetch-gemini-cli-models') as HTMLButtonElement;
 const btnCheckUpdates = document.getElementById('btn-check-updates') as HTMLButtonElement;
+const geminiCliMissingHelpEl = document.getElementById('gemini-cli-missing-help') as HTMLElement;
+const geminiCliMissingTitleEl = document.getElementById('gemini-cli-missing-title') as HTMLElement;
+const geminiCliMissingExplanationEl = document.getElementById('gemini-cli-missing-explanation') as HTMLElement;
+const geminiCliInstallCommandInput = document.getElementById('gemini-cli-install-command') as HTMLInputElement;
+const btnCopyGeminiCliCommand = document.getElementById('btn-copy-gemini-cli-command') as HTMLButtonElement;
+const btnOpenGeminiCliDocs = document.getElementById('btn-open-gemini-cli-docs') as HTMLButtonElement;
 const openrouterModelFilterInput = document.getElementById('input-openrouter-model-filter') as HTMLInputElement;
 const openrouterModelsSelect = document.getElementById('select-openrouter-models') as HTMLSelectElement;
 const openrouterFreeOnlyCheckbox = document.getElementById('checkbox-openrouter-free-only') as HTMLInputElement;
@@ -72,6 +78,7 @@ let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostP
 // Working copy of the capture mode + countdown duration.
 let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 let editedCountdownSec = 3;
+let lastGeminiCliDocsUrl = 'https://github.com/google-gemini/gemini-cli#installation';
 
 async function init(): Promise<void> {
   const config = await api.getConfig();
@@ -468,6 +475,7 @@ btnTestLlmConnection.addEventListener('click', async () => {
   const prevSaveDisabled = btnSave.disabled;
   btnSave.disabled = true;
   setStatus(editedLlmMode === 'gemini-cli' ? 'Testing Gemini CLI connection…' : 'Testing API connection…');
+  hideGeminiCliMissingHelp();
   try {
     const result = await api.testLlmConnection({
       llmMode: editedLlmMode,
@@ -477,9 +485,16 @@ btnTestLlmConnection.addEventListener('click', async () => {
       openaiBaseUrl: baseUrl,
       openaiModel: model,
     });
-    if (result.ok) setStatus(result.message);
-    else setStatus(result.message, true);
+    if (result.ok) {
+      setStatus(result.message);
+      return;
+    }
+    if (result.guidance?.kind === 'gemini-cli-missing') {
+      showGeminiCliMissingHelp(result.guidance);
+    }
+    setStatus(result.message, true);
   } catch (err) {
+    hideGeminiCliMissingHelp();
     setStatus(`LLM connection test failed: ${(err as Error).message}`, true);
   } finally {
     btnTestLlmConnection.disabled = false;
@@ -613,6 +628,53 @@ function setStatus(msg: string, isError = false): void {
   settingsStatusEl.textContent = msg;
   settingsStatusEl.className = 'status' + (isError ? ' err' : msg ? ' ok' : '');
 }
+
+function hideGeminiCliMissingHelp(): void {
+  geminiCliMissingHelpEl.style.display = 'none';
+  geminiCliMissingTitleEl.textContent = '';
+  geminiCliMissingExplanationEl.textContent = '';
+  geminiCliInstallCommandInput.value = '';
+}
+
+function showGeminiCliMissingHelp(guidance: {
+  kind: 'gemini-cli-missing';
+  title: string;
+  explanation: string;
+  installCommand: string;
+  docsUrl: string;
+}): void {
+  geminiCliMissingTitleEl.textContent = guidance.title;
+  geminiCliMissingExplanationEl.textContent = guidance.explanation;
+  geminiCliInstallCommandInput.value = guidance.installCommand;
+  lastGeminiCliDocsUrl = guidance.docsUrl;
+  geminiCliMissingHelpEl.style.display = 'flex';
+}
+
+btnCopyGeminiCliCommand.addEventListener('click', async () => {
+  const command = geminiCliInstallCommandInput.value.trim();
+  if (!command) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(command);
+    } else {
+      geminiCliInstallCommandInput.focus();
+      geminiCliInstallCommandInput.select();
+      document.execCommand('copy');
+      geminiCliInstallCommandInput.setSelectionRange(command.length, command.length);
+    }
+    setStatus('Install command copied to clipboard.');
+  } catch {
+    setStatus('Could not copy automatically. Copy the command from the field above.', true);
+  }
+});
+
+btnOpenGeminiCliDocs.addEventListener('click', async () => {
+  try {
+    await api.openUrl(lastGeminiCliDocsUrl);
+  } catch (err) {
+    setStatus(`Could not open install guide: ${(err as Error).message}`, true);
+  }
+});
 
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

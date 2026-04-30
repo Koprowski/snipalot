@@ -76,6 +76,14 @@ let quitCleanupRan = false;
 let appExitRequested = false;
 let recorderRendererReady = false;
 let pendingRecorderStartRegion: RegionSelection | null = null;
+let pendingRecorderStartTimeout: NodeJS.Timeout | null = null;
+
+function clearPendingRecorderStartTimeout(): void {
+  if (pendingRecorderStartTimeout) {
+    clearTimeout(pendingRecorderStartTimeout);
+    pendingRecorderStartTimeout = null;
+  }
+}
 
 function killSiblingSnipalotElectronProcesses(): void {
   if (process.platform !== 'win32') return;
@@ -644,6 +652,15 @@ function createRecorderWindow(): BrowserWindow {
   win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html'));
   win.webContents.on('did-finish-load', () => {
     log('recorder', 'window finished load');
+    // Fallback: if renderer-ready IPC is missing due preload/runtime quirks,
+    // still dispatch queued start once the page has loaded.
+    if (pendingRecorderStartRegion && !win.isDestroyed()) {
+      const queued = pendingRecorderStartRegion;
+      pendingRecorderStartRegion = null;
+      clearPendingRecorderStartTimeout();
+      win.webContents.send('recorder:start', queued);
+      log('recorder', 'dispatched queued start after did-finish-load fallback');
+    }
   });
   win.webContents.on(
     'did-fail-load',
@@ -656,6 +673,12 @@ function createRecorderWindow(): BrowserWindow {
       });
     }
   );
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    log('recorder', 'console-message', { level, message, line, sourceId });
+  });
+  win.webContents.on('preload-error', (_event, preloadPath, error) => {
+    log('recorder', 'preload error', { preloadPath, err: error.message });
+  });
   win.webContents.on('render-process-gone', (_event, details) => {
     recorderRendererReady = false;
     log('recorder', 'renderer process gone', details);
@@ -663,6 +686,7 @@ function createRecorderWindow(): BrowserWindow {
   win.on('closed', () => {
     recorderRendererReady = false;
     pendingRecorderStartRegion = null;
+    clearPendingRecorderStartTimeout();
   });
   if (isDebug) win.webContents.openDevTools({ mode: 'detach' });
   return win;
@@ -1298,6 +1322,14 @@ interface SettingsUpdateCheckResult {
   message: string;
 }
 
+type SettingsTestLlmGuidance = {
+  kind: 'gemini-cli-missing';
+  title: string;
+  explanation: string;
+  installCommand: string;
+  docsUrl: string;
+};
+
 function parseSemverParts(v: string): number[] | null {
   const clean = v.trim().replace(/^v/i, '');
   const m = clean.match(/^(\d+)\.(\d+)\.(\d+)/);
@@ -1492,7 +1524,20 @@ async function testOpenAiCompatibleApiKey(
 async function testGeminiCliConnection(
   command: string,
   model: string
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; guidance?: SettingsTestLlmGuidance }> {
+  const geminiCliInstallDocsUrl = 'https://github.com/google-gemini/gemini-cli#installation';
+  const installCommand = process.platform === 'win32'
+    ? 'npm install -g @google/gemini-cli'
+    : 'npm install -g @google/gemini-cli';
+  const buildGeminiCliMissingGuidance = (reason: string): SettingsTestLlmGuidance => ({
+    kind: 'gemini-cli-missing',
+    title: 'Gemini CLI is not installed yet',
+    explanation: reason,
+    installCommand,
+    docsUrl: geminiCliInstallDocsUrl,
+  });
+  const isMissingCliError = (value: string): boolean =>
+    /(enoent|not found|is not recognized|cannot find|no such file)/i.test(value);
   const cliCommand = (command || 'gemini').trim();
   const resolvedCli = resolveGeminiCliExecutable(cliCommand);
   const cliModel = (model || 'gemini-2.5-flash').trim();
@@ -1585,19 +1630,39 @@ async function testGeminiCliConnection(
 
   const versionProbe = await runGemini(['--version'], 10_000);
   if (versionProbe.launchError) {
+    const launchErr = versionProbe.launchError.trim();
+    const missingCli = isMissingCliError(launchErr);
     log('settings', 'gemini-cli test launch failed', {
       step: 'version',
-      err: versionProbe.launchError,
+      err: launchErr,
+      missingCli,
       resolvedCommand: resolvedCli.command,
     });
-    return { ok: false, message: `Gemini CLI launch failed: ${versionProbe.launchError}` };
+    if (missingCli) {
+      return {
+        ok: false,
+        message: 'Gemini CLI was not found on this machine. Install it, then run this test again.',
+        guidance: buildGeminiCliMissingGuidance('Snipalot could not find the configured Gemini CLI command.'),
+      };
+    }
+    return { ok: false, message: `Gemini CLI launch failed: ${launchErr}` };
   }
   if (versionProbe.code !== 0) {
+    const stderrTail = cleanStderrTail(versionProbe.stderr, 400);
+    const missingCli = isMissingCliError(stderrTail);
     log('settings', 'gemini-cli test step failed', {
       step: 'version',
       code: versionProbe.code,
-      stderrTail: cleanStderrTail(versionProbe.stderr, 400),
+      stderrTail,
+      missingCli,
     });
+    if (missingCli) {
+      return {
+        ok: false,
+        message: 'Gemini CLI was not found on this machine. Install it, then run this test again.',
+        guidance: buildGeminiCliMissingGuidance('The configured Gemini CLI command is unavailable in your PATH.'),
+      };
+    }
     return {
       ok: false,
       message: `Gemini CLI --version failed (code ${versionProbe.code}). ${versionProbe.stderr.trim().slice(0, 400)}`,
@@ -1792,14 +1857,14 @@ ipcMain.handle(
       openaiBaseUrl?: string;
       openaiModel?: string;
     }
-  ): Promise<{ ok: boolean; mode: 'gemini-cli' | 'api'; message: string }> => {
+  ): Promise<{ ok: boolean; mode: 'gemini-cli' | 'api'; message: string; guidance?: SettingsTestLlmGuidance }> => {
     const mode = payload?.llmMode === 'api' ? 'api' : 'gemini-cli';
     if (mode === 'gemini-cli') {
       const result = await testGeminiCliConnection(
         payload?.geminiCliCommand ?? 'gemini',
         payload?.geminiCliModel ?? 'gemini-2.5-flash'
       );
-      return { ok: result.ok, mode, message: result.message };
+      return { ok: result.ok, mode, message: result.message, guidance: result.guidance };
     }
 
     const apiKey = payload?.openaiApiKey?.trim() ?? '';
@@ -2066,7 +2131,7 @@ ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
     log('hotkey', 'config changed; reloading global shortcuts');
     reloadGlobalHotkeys();
   }
-  log('settings', 'config saved via IPC', partial);
+  log('settings', 'config saved via IPC', sanitizeSettingsPartialForLog(partial));
 });
 
 type ProviderUnderTest = 'openai-compatible';
@@ -2709,10 +2774,34 @@ function dispatchRecorderStart(region: RegionSelection): void {
   }
   if (!recorderRendererReady) {
     pendingRecorderStartRegion = region;
+    clearPendingRecorderStartTimeout();
+    pendingRecorderStartTimeout = setTimeout(() => {
+      pendingRecorderStartTimeout = null;
+      if (!pendingRecorderStartRegion || appState !== 'recording') return;
+      log('recorder', 'renderer readiness timeout; aborting recording start');
+      pendingRecorderStartRegion = null;
+      recorderMediaReady = false;
+      pendingRegion = null;
+      activeDisplayId = null;
+      activeSourceId = null;
+      currentAnnotations = [];
+      currentRecordingRegionLocal = null;
+      currentChapters = [];
+      pendingChapterPngs.clear();
+      if (hudKeepOnTopInterval) { clearInterval(hudKeepOnTopInterval); hudKeepOnTopInterval = null; }
+      if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+      setAppState('idle', 'recorder did not initialize');
+      broadcastOverlay('overlay:recording-stopped');
+      showNotification(
+        'Snipalot',
+        'Recorder did not initialize. Please try again. If this repeats, restart Snipalot and check snipalot.log.'
+      );
+    }, 5000);
     log('recorder', 'queued start; recorder renderer not ready yet');
     return;
   }
   pendingRecorderStartRegion = null;
+  clearPendingRecorderStartTimeout();
   recorderWindow.webContents.send('recorder:start', region);
   log('recorder', 'dispatched start to recorder renderer');
 }
@@ -2851,6 +2940,7 @@ ipcMain.handle('overlay:region-cancelled', (_evt, displayId: string) => {
 
 ipcMain.handle('recorder:ready', () => {
   recorderRendererReady = true;
+  clearPendingRecorderStartTimeout();
   log('recorder', 'renderer signaled ready');
   if (pendingRecorderStartRegion && recorderWindow && !recorderWindow.isDestroyed()) {
     const queued = pendingRecorderStartRegion;

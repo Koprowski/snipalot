@@ -23,7 +23,6 @@ win:
   icon: resources/icons/app.png
   artifactName: Snipalot-${version}-setup.${ext}
   signAndEditExecutable: false
-  sign: null
 portable:
   artifactName: Snipalot-${version}-portable.exe
 
@@ -31,6 +30,7 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  warningsAsErrors: false
   artifactName: Snipalot-${version}-setup.exe
 publish:
   provider: github

@@ -30,6 +30,13 @@ interface Window {
       ok: boolean;
       mode: 'gemini-cli' | 'api';
       message: string;
+      guidance?: {
+        kind: 'gemini-cli-missing';
+        title: string;
+        explanation: string;
+        installCommand: string;
+        docsUrl: string;
+      };
     }>;
     listOpenRouterModels: () => Promise<Array<{
       id: string;

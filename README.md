@@ -136,6 +136,8 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **Upgrading or reinstalling:** Snipalot keeps running in the **system tray** after you close the launcher (the **X** only hides the window). Before running a new installer, **quit fully**: right-click the **Snipalot tray icon** (near the clock) → **Quit Snipalot**. If the setup still says the app cannot be closed, click **Retry** after quitting (the installer retries several times).
 
+The Windows installer bundles the local Whisper transcription engine and the `ggml-base.en.bin` model, so recording/transcription works without a separate post-install download.
+
 **Trade mode + Gemini / API keys:** step-by-step guide in **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)** (same content as **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)**; the doc in `docs/` carries the current download URL).
 
 **No audio after recording?** Each session folder can include **`mic_diagnostics.json`** (which microphone was used and any capture errors). See the troubleshooting table in the install guide above.
@@ -150,6 +152,7 @@ Requires Node.js 20+ and Windows 10/11.
 git clone https://github.com/Koprowski/snipalot.git
 cd snipalot
 npm install
+npm run fetch-resources
 npm run dev
 ```
 

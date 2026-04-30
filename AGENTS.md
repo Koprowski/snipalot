@@ -9,7 +9,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Windows installer (local):** On a Windows machine, `npm run package` produces **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe.
 - **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.2`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm run package:nopublish`** on `windows-latest` (build only — avoids electron-builder’s GitHub publish step, which needs `GH_TOKEN` during build), then **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
 - **Linux:** `npm run package` on Linux produces AppImage/Snap only, not the Windows setup exe.
-- **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini walkthrough: **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** (update the pinned download link there when you ship a new version).
+- **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
 ## Recent improvements (v1.0.1 onward; current release v1.0.2)
@@ -57,3 +57,4 @@ These came from code review; **not** implemented yet. Pick up as separate tasks 
 | Config | `src/main/config.ts` |
 | Windows release CI | `.github/workflows/release-windows.yml` |
 | Product doc | `README.md`, `snipalot_PRD.md` |
+| End-user install guide (Issue #2 mirror) | `docs/installation-guide-issue-2.md` |

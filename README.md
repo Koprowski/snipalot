@@ -132,7 +132,7 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 1. Open **[Releases](https://github.com/Koprowski/snipalot/releases)** and download the latest **`Snipalot-*-setup.exe`** (NSIS installer for Windows x64).
 2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
 
-A full walkthrough for Trade mode plus **Gemini CLI / API keys** is in **[Issue #2 — Installation Guide: Snipalot + Gemini CLI on Windows](https://github.com/Koprowski/snipalot/issues/2)** (includes a direct download link when a release is published).
+A full walkthrough for Trade mode plus **Gemini CLI / API keys** is in **[Issue #2 — Installation Guide: Snipalot + Gemini CLI on Windows](https://github.com/Koprowski/snipalot/issues/2)**. The same guide (with an up-to-date download link) lives in the repo as **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)**.
 
 ---
 

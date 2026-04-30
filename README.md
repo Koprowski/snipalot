@@ -129,8 +129,8 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **End users** (no Node.js or Git required):
 
-1. **Download the installer** (current release **v1.0.2**):
-   - **Direct:** [Snipalot-1.0.2-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.2/Snipalot-1.0.2-setup.exe)
+1. **Download the installer** (current release **v1.0.3**):
+   - **Direct:** [Snipalot-1.0.3-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.3/Snipalot-1.0.3-setup.exe)
    - Or open **[Releases](https://github.com/Koprowski/snipalot/releases)** and grab the latest **`Snipalot-*-setup.exe`** (NSIS installer, Windows x64).
 2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
 

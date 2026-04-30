@@ -141,6 +141,13 @@ let currentChapters: ChapterRecord[] = [];
 const pendingChapterPngs = new Map<number, string>();
 
 /**
+ * Chains snapshot work so a second 📸 (hotkey + HUD, or double-tap) cannot
+ * register a second `ipcMain.once('recorder:snap-result')` while the first
+ * is still awaiting — which would pair the wrong reply with the wrong chapter.
+ */
+let snapshotChain: Promise<void> = Promise.resolve();
+
+/**
  * Capture mode of the current/most-recent recording. Decides the session
  * folder suffix ('feedback' for record, 'trade' for trade) and which
  * post-recording pipeline path runs. Set when region-confirmed lands,
@@ -1196,12 +1203,21 @@ ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
 });
 
 ipcMain.handle('settings:pick-folder', async () => {
-  const parent = settingsWindow && !settingsWindow.isDestroyed() ? settingsWindow : undefined;
-  const result = await dialog.showOpenDialog(parent!, {
+  let parent: BrowserWindow | undefined;
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    parent = settingsWindow;
+  } else {
+    const focused = BrowserWindow.getFocusedWindow();
+    if (focused && !focused.isDestroyed()) parent = focused;
+  }
+  const opts: Electron.OpenDialogOptions = {
     title: 'Choose Output Folder',
     defaultPath: getConfig().outputDir,
     properties: ['openDirectory', 'createDirectory'],
-  });
+  };
+  const result = parent
+    ? await dialog.showOpenDialog(parent, opts)
+    : await dialog.showOpenDialog(opts);
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
 });
@@ -2036,8 +2052,20 @@ ipcMain.handle('hud:enter-annotation', () => {
  * HUD button can disable itself for the duration. The annotation-wipe
  * behavior is gated by config.snapshot.clearAnnotationsAfter and threaded
  * to the overlay through the `overlay:snapshot-reset` IPC payload.
+ *
+ * Invocations are serialized via `snapshotChain` so overlapping snap
+ * requests cannot cross-wire `recorder:snap-result` listeners.
  */
-async function doSnapshot(): Promise<void> {
+function doSnapshot(): Promise<void> {
+  snapshotChain = snapshotChain
+    .then(() => runSnapshot())
+    .catch((err) => {
+      log('hud', 'snap chain error', { err: (err as Error).message });
+    });
+  return snapshotChain;
+}
+
+async function runSnapshot(): Promise<void> {
   if (appState !== 'recording' || !recorderWindow || !liveSessionDir) return;
   snapCount++;
   const snapIndex = snapCount;

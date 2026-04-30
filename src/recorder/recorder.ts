@@ -33,6 +33,7 @@ function log(line: string): void {
   logEl.textContent = `${logEl.textContent}\n[${ts}] ${line}`;
   logEl.scrollTop = logEl.scrollHeight;
   console.log(`[recorder] ${line}`);
+  void window.snipalotRecorder.mainLog(line);
 }
 
 function pickJsonSafeSettings(track: MediaStreamTrack): Record<string, unknown> {
@@ -104,10 +105,19 @@ async function startRecording(region: RecorderRegion): Promise<void> {
   try {
     // 1. Full-screen capture. The main-process display-media handler resolves
     //    this to the primary screen source.
-    displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 30 } as MediaTrackConstraints,
-      audio: false,
-    });
+    // Windows: fullscreen overlay is alwaysOnTop 'screen-saver' — the OS
+    // screen-share dialog can open behind it; main lowers overlays first.
+    log('calling getDisplayMedia (watch for Windows "pick what to share")…');
+    await window.snipalotRecorder.prepareDisplayCapture();
+    try {
+      displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 } as MediaTrackConstraints,
+        audio: false,
+      });
+    } finally {
+      await window.snipalotRecorder.restoreDisplayCapture();
+    }
+    log('getDisplayMedia resolved');
 
     // 2. Pipe the stream into a hidden video element so we can read frames.
     sourceVideo = document.createElement('video');

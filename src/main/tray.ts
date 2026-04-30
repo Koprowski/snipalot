@@ -36,10 +36,13 @@ let _currentState: AppState = 'idle';
 export function createTray(callbacks: TrayCallbacks): Tray {
   _callbacks = callbacks;
 
-  // Try to load the 16 px tray icon; fall back to a tiny blank image so the
-  // tray doesn't crash on systems where the icon file hasn't been generated yet.
-  const iconPath16 = path.join(process.cwd(), 'resources', 'icons', 'app-16.png');
-  const iconPath32 = path.join(process.cwd(), 'resources', 'icons', 'app-32.png');
+  // Packaged installs: icons live under process.resourcesPath/resources (extraResources).
+  // Dev: project root resources/.
+  const resRoot = app.isPackaged
+    ? path.join(process.resourcesPath, 'resources')
+    : path.join(process.cwd(), 'resources');
+  const iconPath16 = path.join(resRoot, 'icons', 'app-16.png');
+  const iconPath32 = path.join(resRoot, 'icons', 'app-32.png');
   let icon: Electron.NativeImage;
   if (fs.existsSync(iconPath16)) {
     icon = nativeImage.createFromPath(iconPath16);

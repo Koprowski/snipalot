@@ -24,9 +24,10 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install and package
+      - name: Install, fetch Whisper bundle, package
         run: |
           npm ci
+          npm run fetch-resources
           # --publish never: electron-builder.yml sets publish.github; without a token
           # the build fails. Upload is done in the next step (action-gh-release).
           npm run package:nopublish

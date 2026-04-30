@@ -9,6 +9,9 @@ interface RecorderRegion {
 
 interface Window {
   snipalotRecorder: {
+    mainLog: (line: string) => Promise<void>;
+    prepareDisplayCapture: () => Promise<void>;
+    restoreDisplayCapture: () => Promise<void>;
     getOutputPath: () => Promise<string>;
     saveWebm: (payload: { buffer: ArrayBuffer; filepath: string }) => Promise<{
       ok: boolean;

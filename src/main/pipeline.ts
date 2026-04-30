@@ -24,7 +24,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
-import { clipboard } from 'electron';
+import { app, clipboard } from 'electron';
 import { log } from './logger';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -352,11 +352,14 @@ function findWhisperBinary(): { exe: string; model: string } | null {
   // During development, resources/ lives next to the project root. For a
   // packaged build, process.resourcesPath would be used instead. For now,
   // check both.
-  const candidates = [
-    path.join(process.cwd(), 'resources'),
-    // Packaged app: bundled under resources/
-    path.join(process.resourcesPath || '', 'resources'),
-  ];
+  // Prefer packaged extraResources path first — cwd is Program Files and may
+  // not contain whisper even when the bundle does.
+  const candidates = app.isPackaged
+    ? [
+        path.join(process.resourcesPath || '', 'resources'),
+        path.join(process.cwd(), 'resources'),
+      ]
+    : [path.join(process.cwd(), 'resources'), path.join(process.resourcesPath || '', 'resources')];
 
   for (const root of candidates) {
     if (!root || !fs.existsSync(root)) continue;

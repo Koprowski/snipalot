@@ -9,6 +9,12 @@ export interface RegionSelection {
 }
 
 contextBridge.exposeInMainWorld('snipalotRecorder', {
+  /** Lines land in main snipalot.log (same file as other scopes). */
+  mainLog: (line: string) => ipcRenderer.invoke('log', 'recorder', line),
+  /** Lower fullscreen overlays so Windows' screen-share picker is not hidden behind them. */
+  prepareDisplayCapture: () => ipcRenderer.invoke('recorder:prepare-display-capture'),
+  /** Restore overlay always-on-top after getDisplayMedia completes or fails. */
+  restoreDisplayCapture: () => ipcRenderer.invoke('recorder:restore-display-capture'),
   getOutputPath: () => ipcRenderer.invoke('recorder:get-output-path'),
   saveWebm: (payload: { buffer: ArrayBuffer; filepath: string }) =>
     ipcRenderer.invoke('recorder:save-webm', payload),

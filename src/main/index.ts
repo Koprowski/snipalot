@@ -53,6 +53,8 @@ app.on('second-instance', () => {
 
 // One overlay per display, keyed by display id (as string).
 const overlayWindows = new Map<string, BrowserWindow>();
+/** Nested prepare/restore pairs from recorder around getDisplayMedia. */
+let overlayPrecaptureDepth = 0;
 let recorderWindow: BrowserWindow | null = null;
 let hudWindow: BrowserWindow | null = null;
 let launcherWindow: BrowserWindow | null = null;
@@ -1867,6 +1869,32 @@ ipcMain.handle('recorder:get-output-path', () => {
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   return path.join(outDir, `recording-${ts}.webm`);
+});
+
+/**
+ * Fullscreen overlays sit at 'screen-saver' alwaysOnTop — on Windows the
+ * Chromium/Electron screen-share picker can open *behind* them, so the user
+ * never sees it and getDisplayMedia never resolves. Temporarily drop
+ * alwaysOnTop on all overlays so the picker is visible.
+ */
+ipcMain.handle('recorder:prepare-display-capture', () => {
+  overlayPrecaptureDepth += 1;
+  if (overlayPrecaptureDepth === 1) {
+    log('recorder', 'prepare-display-capture: lowering overlays for screen picker');
+    for (const win of overlayWindows.values()) {
+      if (!win.isDestroyed()) win.setAlwaysOnTop(false);
+    }
+  }
+});
+
+ipcMain.handle('recorder:restore-display-capture', () => {
+  overlayPrecaptureDepth = Math.max(0, overlayPrecaptureDepth - 1);
+  if (overlayPrecaptureDepth === 0) {
+    log('recorder', 'restore-display-capture: re-raising overlays');
+    for (const win of overlayWindows.values()) {
+      if (!win.isDestroyed()) win.setAlwaysOnTop(true, 'screen-saver');
+    }
+  }
 });
 
 ipcMain.handle(

@@ -7,13 +7,16 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Stack:** Electron 30, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
 - **Windows installer (local):** On a Windows machine, `npm run package` produces **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe.
-- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.6`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm run package:nopublish`** on `windows-latest` (build only — avoids electron-builder’s GitHub publish step, which needs `GH_TOKEN` during build), then **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
+- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.7`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`**, **`npm run fetch-resources`** (Whisper + model into `resources/`), then **`npm run package:nopublish`** on `windows-latest`, then **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
 - **Linux:** `npm run package` on Linux produces AppImage/Snap only, not the Windows setup exe.
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.6)
+## Recent improvements (v1.0.1 onward; current release v1.0.7)
 
+- **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
+- **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
+- **Packaged tray + Whisper paths:** Tray icons and Whisper lookup prefer **`process.resourcesPath/resources`** (not `cwd` under Program Files).
 - **Processing / trade stalls:** If `save-webm` never arrives or Whisper hangs, a **processing watchdog** returns the launcher to idle with a toast (and Whisper is killed after 25 min). Trade-mode **MockApe wait** defaults to **3 minutes** then proceeds without trade data (was 30 min).
 - **`mic_diagnostics.json`** in each **record/trade** session folder when recording starts: `getUserMedia` success/failure, active audio track label + `deviceId` (when exposed), `enumerateDevices` snapshot for `audioinput`. Main logs a one-line **`recorder` / `mic capture summary`**. Use for “no audio” / wrong-default-mic support (Snipalot still uses OS default input; no in-app mic picker yet).
 - **Frame picker:** Export uses `recording.mp4` inside the session directory (not the parent folder).

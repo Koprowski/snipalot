@@ -58,9 +58,22 @@ let editedOpenaiModel = '';
 let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 let editedCountdownSec = 3;
 
+function maskTradeSecrets<T extends { trade?: { geminiApiKey?: string; openaiApiKey?: string } }>(cfg: T): T {
+  const trade = cfg.trade;
+  if (!trade) return cfg;
+  return {
+    ...cfg,
+    trade: {
+      ...trade,
+      geminiApiKey: trade.geminiApiKey ? '[REDACTED]' : '',
+      openaiApiKey: trade.openaiApiKey ? '[REDACTED]' : '',
+    },
+  } as T;
+}
+
 async function init(): Promise<void> {
   const config = await api.getConfig();
-  api.log('settings', 'loaded config', config);
+  api.log('settings', 'loaded config', maskTradeSecrets(config));
 
   // Output dir
   dirInput.value = config.outputDir ?? '';

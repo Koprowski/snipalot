@@ -1216,6 +1216,27 @@ function openSettings(isFirstRun = false): void {
 
 ipcMain.handle('settings:get-config', () => getConfig());
 
+function sanitizeSettingsPartialForLog(
+  partial: Partial<SnipalotConfig>
+): Partial<SnipalotConfig> & { redactedKeys?: string[] } {
+  const clone: Partial<SnipalotConfig> & { redactedKeys?: string[] } = JSON.parse(
+    JSON.stringify(partial)
+  );
+  const redacted: string[] = [];
+  if (clone.trade) {
+    if (typeof clone.trade.geminiApiKey === 'string' && clone.trade.geminiApiKey.length > 0) {
+      clone.trade.geminiApiKey = '[REDACTED]';
+      redacted.push('trade.geminiApiKey');
+    }
+    if (typeof clone.trade.openaiApiKey === 'string' && clone.trade.openaiApiKey.length > 0) {
+      clone.trade.openaiApiKey = '[REDACTED]';
+      redacted.push('trade.openaiApiKey');
+    }
+  }
+  if (redacted.length > 0) clone.redactedKeys = redacted;
+  return clone;
+}
+
 ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
   // Detect a hotkey change so we know whether to re-register globalShortcuts.
   // We compare the partial.hotkeys keys against current to avoid the cost
@@ -1227,7 +1248,7 @@ ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
     log('hotkey', 'config changed; reloading global shortcuts');
     reloadGlobalHotkeys();
   }
-  log('settings', 'config saved via IPC', partial);
+  log('settings', 'config saved via IPC', sanitizeSettingsPartialForLog(partial));
 });
 
 ipcMain.handle('settings:pick-folder', async () => {

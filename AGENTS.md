@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.25)
+## Recent improvements (v1.0.1 onward; current release v1.0.26)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -199,6 +199,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - `Ctrl+Shift+P` / configured snapshot hotkey is now registered globally: idle state starts the normal Screenshot flow using the current capture mode/cursor display, recording state still closes a snapshot chapter through the HUD snapshot path.
  - Trade workbook/Markdown/adherence outputs now omit Gemini-extracted spoken-only musings when MockApe/Padre data is present; only rows matched to an actual trade are user-facing. Raw `Inputs/extraction_response.json` still preserves the full model response for debugging.
  - Added `docs/exit-screenshot-feature-plan.md` with a feasible design for extracting automatic exit-time screenshots from `recording.mp4` using `mockape_timestamp_ms - recordingStartedAtMs`.
+- **Invalid hotkey startup trap fix (v1.0.26 local branch):**
+ - Son's support log showed `tradeMarkerHotkey="Ctrl+Shift+ "`; clicking Trade still failed because entering recording mode registers the trade-marker hotkey and Electron threw `conversion failure from Control+Shift+ ` before recorder start.
+ - Config load now sanitizes malformed hotkeys back to defaults (covered by `tests/config-persistence.test.mjs`), Settings normalizes literal Space as `Space` instead of a blank, and Settings save validates each combo has a modifier plus a real key.
+ - Global hotkey registration now catches thrown Electron accelerator errors, and recording startup unwinds to idle/clears overlay interaction if a startup exception occurs after region confirmation but before recorder start.
 
 ## Packaged app logs
 

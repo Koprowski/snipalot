@@ -644,6 +644,7 @@ function renderHotkeyRows(): void {
  * earlier).
  */
 function normalizeKey(key: string, code: string): string {
+  if (key === ' ') return 'Space';
   if (key.length === 1) return key.toUpperCase();
   // Numpad/digit codes occasionally come through as "Numpad5" — accept those.
   if (/^F\d{1,2}$/.test(key)) return key;
@@ -653,6 +654,16 @@ function normalizeKey(key: string, code: string): string {
   }
   if (code.startsWith('Numpad')) return code;
   return key;
+}
+
+function isValidHotkeyCombo(combo: string): boolean {
+  const trimmed = combo.trim();
+  if (!trimmed || trimmed !== combo) return false;
+  const parts = combo.split('+').map((part) => part.trim());
+  if (parts.length < 2 || parts.some((part) => !part)) return false;
+  const main = parts[parts.length - 1];
+  if (['Ctrl', 'Control', 'Shift', 'Alt', 'Meta'].includes(main)) return false;
+  return parts.slice(0, -1).some((part) => ['Ctrl', 'Control', 'Shift', 'Alt', 'Meta'].includes(part));
 }
 
 /**
@@ -814,11 +825,11 @@ btnSave.addEventListener('click', async () => {
     dirInput.focus();
     return;
   }
-  // Bail early if any binding is empty — the global shortcut layer can't
-  // register an empty accelerator and we'd silently lose the action.
+  // Bail early if any binding is empty/invalid — the global shortcut layer
+  // can't register a malformed accelerator and we'd silently lose the action.
   for (const [key, combo] of Object.entries(editedHotkeys)) {
-    if (!combo) {
-      setStatus(`Hotkey for "${HOTKEY_LABELS[key]}" cannot be blank.`, true);
+    if (!isValidHotkeyCombo(combo)) {
+      setStatus(`Hotkey for "${HOTKEY_LABELS[key]}" must include a modifier and a key.`, true);
       return;
     }
   }

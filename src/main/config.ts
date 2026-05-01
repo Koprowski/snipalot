@@ -258,4 +258,29 @@ function migrateLoadedConfig(
       to: config.trade.geminiCliModel,
     });
   }
+  sanitizeHotkeys(config);
+}
+
+function sanitizeHotkeys(config: SnipalotConfig): void {
+  for (const key of Object.keys(DEFAULT_CONFIG.hotkeys) as Array<keyof HotkeyConfig>) {
+    const value = config.hotkeys[key];
+    if (isUsableHotkey(value)) continue;
+    config.hotkeys[key] = DEFAULT_CONFIG.hotkeys[key];
+    log('config', 'reset invalid hotkey to default', {
+      key,
+      from: value,
+      to: config.hotkeys[key],
+    });
+  }
+}
+
+function isUsableHotkey(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed !== value) return false;
+  const parts = value.split('+').map((p) => p.trim());
+  if (parts.length < 2 || parts.some((p) => !p)) return false;
+  const last = parts[parts.length - 1];
+  if (['Ctrl', 'Control', 'Shift', 'Alt', 'Meta', 'Command', 'Cmd'].includes(last)) return false;
+  return parts.slice(0, -1).some((p) => ['Ctrl', 'Control', 'Shift', 'Alt', 'Meta', 'Command', 'Cmd'].includes(p));
 }

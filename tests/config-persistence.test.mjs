@@ -74,6 +74,24 @@ test('loadConfig preserves custom trade marker hotkey', () => {
   runConfigChild(home, code);
 });
 
+test('loadConfig resets malformed hotkeys to defaults', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-bad-hotkey-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ hotkeys: { tradeMarker: 'Ctrl+Shift+ ' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.hotkeys.tradeMarker, 'Ctrl+Shift+X');
+  `;
+  runConfigChild(home, code);
+});
+
 test('loadConfig migrates old default Gemini CLI model', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-migrate-gemini-model-'));
   const configDir = path.join(home, '.snipalot');

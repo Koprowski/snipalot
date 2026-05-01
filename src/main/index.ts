@@ -447,10 +447,15 @@ function reloadGlobalHotkeys(): void {
 
   const reg = (combo: string, handler: () => void): void => {
     const accel = toAccelerator(combo);
-    const ok = globalShortcut.register(accel, handler);
-    log('hotkey', 'register', { combo: accel, ok });
-    if (!ok) {
-      showNotification('Snipalot', `Could not register hotkey: ${accel} (another app owns it)`);
+    try {
+      const ok = globalShortcut.register(accel, handler);
+      log('hotkey', 'register', { combo: accel, ok });
+      if (!ok) {
+        showNotification('Snipalot', `Could not register hotkey: ${accel} (another app owns it)`);
+      }
+    } catch (err) {
+      log('hotkey', 'register failed', { combo: accel, err: (err as Error).message });
+      showNotification('Snipalot', `Invalid hotkey ignored: ${combo}`);
     }
   };
 
@@ -3127,7 +3132,30 @@ function exitSelecting(reason: string): void {
 function failSelectionStart(reason: string, userMessage: string, details?: unknown): void {
   log('overlay', 'selection start failed', { reason, details });
   showNotification('Snipalot', userMessage);
-  exitSelecting(reason);
+  if (
+    appState === 'selecting' ||
+    appState === 'selecting-screenshot' ||
+    appState === 'selecting-trade'
+  ) {
+    exitSelecting(reason);
+  } else if (appState === 'recording' && !recorderMediaReady) {
+    resetFailedRecordingStart(reason, userMessage);
+  }
+}
+
+function resetFailedRecordingStart(reason: string, userMessage: string): void {
+  log('state', 'recording start failed; resetting to idle', { reason });
+  if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:exit-region-select');
+  broadcastOverlay('overlay:exit-region-select');
+  if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
+  activeDisplayId = null;
+  activeSourceId = null;
+  pendingRegion = null;
+  recorderMediaReady = false;
+  pendingRecorderStartRegion = null;
+  clearPendingRecorderStartTimeout();
+  setAppState('idle', `recording start failed: ${reason}`);
+  showNotification('Snipalot', userMessage);
 }
 
 /**
@@ -3552,13 +3580,20 @@ ipcMain.handle(
       currentSessionMode = intent === 'trade' ? 'trade' : 'record';
       currentTradeMarkers = [];
       recorderMediaReady = false;
-      setAppState('recording', `region confirmed (mode=${currentSessionMode})`);
-      broadcastOverlay('overlay:exit-region-select');
-      // Tell the active display's overlay to draw the region outline + receive annotations.
-      targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
-      showHudForDisplay(display);
+      try {
+        setAppState('recording', `region confirmed (mode=${currentSessionMode})`);
+        broadcastOverlay('overlay:exit-region-select');
+        // Tell the active display's overlay to draw the region outline + receive annotations.
+        targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
+        showHudForDisplay(display);
 
-      dispatchRecorderStart(region);
+        dispatchRecorderStart(region);
+      } catch (err) {
+        resetFailedRecordingStart(
+          'recording startup threw',
+          `Recording could not start: ${(err as Error).message}`
+        );
+      }
     } catch (err) {
       failSelectionStart(
         'desktopCapturer failed after region confirmed',

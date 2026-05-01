@@ -3,7 +3,7 @@
 **Mirror of [GitHub Issue #2](https://github.com/Koprowski/snipalot/issues/2).**  
 When the download URL changes, update this file and paste its body into the issue (or edit the issue on GitHub).
 
-**Current installer (latest):** [Snipalot-1.0.22-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.22/Snipalot-1.0.22-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
+**Current installer (latest):** [Snipalot-1.0.23-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.23/Snipalot-1.0.23-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
 
 **Before reinstalling:** quit Snipalot first. The launcher **X** exits the app; the tray menu also has **Quit Snipalot**.
 
@@ -17,10 +17,10 @@ Snipalot is a Windows screen-recording tool with a **Trade mode** built for meme
 
 ## Step 1 — Download and install Snipalot
 
-**[⬇ Download Snipalot-1.0.22-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.22/Snipalot-1.0.22-setup.exe)**
+**[⬇ Download Snipalot-1.0.23-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.23/Snipalot-1.0.23-setup.exe)**
 
 1. Click the link above to download the installer
-2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.22-setup.exe**
+2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.23-setup.exe**
 3. If Windows shows a blue "Windows protected your PC" warning, click **More info** → **Run anyway**
 4. Click through the installer (Next → Install → Finish)
 5. Snipalot launches automatically after setup finishes and also appears in your **Start menu** — press the Windows key and type **Snipalot** to launch it any time

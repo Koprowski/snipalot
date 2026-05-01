@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.22)
+## Recent improvements (v1.0.1 onward; current release v1.0.23)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -184,6 +184,11 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Added `docs/dependency-check-issue-log.md` to track the recurring Node/npm checklist issue.
  - Settings dependency logs now include `appVersion` so support logs reveal stale installed builds.
  - If Gemini CLI is already installed and runnable, Node/npm is treated as OK/optional instead of a blocking missing dependency; Node/npm is only required for Snipalot-managed Gemini CLI install/update.
+- **Packaged ffmpeg + processing visibility fix (v1.0.23 local branch):**
+ - `src/main/pipeline.ts` now prefers `app.asar.unpacked/node_modules/ffmpeg-static/ffmpeg.exe` before the virtual `app.asar` path, fixing installed-build ENOENT failures that skipped audio extraction, Whisper transcription, MP4, and GIF.
+ - Verified installed ffmpeg + installed Whisper manually against `E:\Video Screencasts\recording.mp4`; ffmpeg extracted WAV and Whisper produced an SRT transcript successfully.
+ - Processing launcher z-order is reasserted while processing and after trade-data submit/skip, so the status window should return on top after helper windows close.
+ - Trade processing status strings were changed to ASCII for the visible pipeline steps to avoid mojibake such as `adherence reportÃ¢...`.
 
 ## Packaged app logs
 

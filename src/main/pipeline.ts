@@ -32,12 +32,17 @@ const ffmpegPathRaw: string | null = require('ffmpeg-static');
 
 function resolveFfmpegPath(rawPath: string | null): string | null {
   if (!rawPath) return null;
+  const unpackedFromRaw = rawPath.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
   const candidates = [
-    rawPath,
-    rawPath.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`),
+    // In packaged Electron apps, require('ffmpeg-static') can resolve to the
+    // virtual app.asar path. fs.existsSync can return true for that path, but
+    // Windows cannot spawn an executable from inside the asar archive. Prefer
+    // the real unpacked executable before considering the raw path.
+    unpackedFromRaw,
     app.isPackaged
       ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', 'ffmpeg.exe')
       : '',
+    rawPath.includes(`${path.sep}app.asar${path.sep}`) ? '' : rawPath,
     path.join(process.cwd(), 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'),
   ].filter((candidate, index, arr) => Boolean(candidate) && arr.indexOf(candidate) === index);
   const found = candidates.find((candidate) => fs.existsSync(candidate));

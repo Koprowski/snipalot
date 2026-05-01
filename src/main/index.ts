@@ -332,10 +332,18 @@ function startProcessingProgressTick(estimatedTotalSec: number): void {
   processingStartedAtMs = Date.now();
   processingEstimatedTotalSec = estimatedTotalSec;
   if (processingTickInterval) clearInterval(processingTickInterval);
+  let topReassertCounter = 0;
   processingTickInterval = setInterval(() => {
-    // Just rebroadcast — the launcher reads the current progress fields
+    // Just rebroadcast - the launcher reads the current progress fields
     // and recomputes pct/eta on every tick.
-    if (appState === 'processing') broadcastStateToLauncher();
+    if (appState === 'processing') {
+      broadcastStateToLauncher();
+      topReassertCounter += 1;
+      if (topReassertCounter >= 4) {
+        topReassertCounter = 0;
+        ensureProcessingLauncherVisible(false);
+      }
+    }
   }, 250);
   log('processing', 'progress tick started', { estimatedTotalSec });
 }
@@ -366,6 +374,7 @@ function setProcessingStep(step: string): void {
   processingStep = step;
   log('state', 'processing step', { step });
   broadcastStateToLauncher();
+  ensureProcessingLauncherVisible(false);
 }
 
 /**
@@ -553,19 +562,25 @@ function broadcastStateToLauncher(): void {
   });
 }
 
+function ensureProcessingLauncherVisible(focus = false): void {
+  if (appState !== 'processing') return;
+  if (!launcherWindow || launcherWindow.isDestroyed()) return;
+  if (launcherWindow.isMinimized()) launcherWindow.restore();
+  if (!launcherWindow.isVisible()) launcherWindow.show();
+  launcherWindow.setAlwaysOnTop(true, 'floating');
+  launcherWindow.moveTop();
+  if (focus) launcherWindow.focus();
+}
+
 function updateLauncherVisibility(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
-  // Hide the launcher during active recording — the HUD owns that state.
+  // Hide the launcher during active recording - the HUD owns that state.
   // During 'processing' it stays visible so the user can watch progress.
   if (appState === 'recording') {
     if (launcherWindow.isVisible()) launcherWindow.hide();
     launcherWindow.setAlwaysOnTop(false);
   } else if (appState === 'processing') {
-    if (launcherWindow.isMinimized()) launcherWindow.restore();
-    if (!launcherWindow.isVisible()) launcherWindow.show();
-    launcherWindow.setAlwaysOnTop(true, 'floating');
-    launcherWindow.moveTop();
-    launcherWindow.focus();
+    ensureProcessingLauncherVisible(true);
   } else {
     launcherWindow.setAlwaysOnTop(false);
     if (!launcherWindow.isVisible()) launcherWindow.show();
@@ -1145,6 +1160,7 @@ ipcMain.handle(
     }
     pendingTradeContext = null;
     if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
+    setTimeout(() => ensureProcessingLauncherVisible(true), 100);
   }
 );
 
@@ -1166,6 +1182,7 @@ ipcMain.handle('trade-context:skip', (_evt, payload: { dontAskAgain: boolean }) 
   }
   pendingTradeContext = null;
   if (tradeContextWindow && !tradeContextWindow.isDestroyed()) tradeContextWindow.close();
+  setTimeout(() => ensureProcessingLauncherVisible(true), 100);
 });
 
 ipcMain.handle('trade-context:browse', async () => {

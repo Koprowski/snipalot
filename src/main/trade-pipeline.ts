@@ -170,7 +170,7 @@ export async function runTradePipeline(
   // Write markers.json (also useful for the M4 extraction prompt, which
   // formats markers as [MARKER N at M:SS] anchor tags). Always written
   // even if empty so downstream tooling can rely on the file existing.
-  if (onStep) onStep('Writing trade markersâ€¦');
+  if (onStep) onStep('Writing trade markers...');
   const inputsDir = getTradeInputsDir(sessionDir);
   const markersPath = path.join(inputsDir, 'markers.json');
   try {
@@ -194,7 +194,7 @@ export async function runTradePipeline(
   //    so it's already up and parallel to whisper / mp4 / gif work.
   //    If autoPromptForTradeData is off, main writes the .skipped
   //    sentinel directly â€” wait returns immediately. â”€â”€
-  if (onStep) onStep('Waiting for trade-context decisionâ€¦');
+  if (onStep) onStep('Waiting for trade data...');
   await waitForTradeContextDecision(sessionDir, undefined, abortSignal);
 
   // Load the MockApe data NOW (before rendering the prompt) so the
@@ -205,7 +205,7 @@ export async function runTradePipeline(
   }
 
   // â”€â”€ M4: write the extraction prompt + wait for the user's LLM response â”€â”€
-  if (onStep) onStep('Writing trade extraction promptâ€¦');
+  if (onStep) onStep('Writing trade extraction prompt...');
   throwIfAborted(abortSignal);
   const promptText = renderExtractionPrompt(
     transcriptSegments,
@@ -266,11 +266,11 @@ export async function runTradePipeline(
   }
 
   if (autoSucceeded) {
-    if (onStep) onStep(`${autoLabel} extracted trades â€” generating trade logâ€¦`);
+    if (onStep) onStep(`${autoLabel} extracted trades - generating trade log...`);
     if (Notification.isSupported()) {
       new Notification({
-        title: 'Snipalot Trade Â· auto-extracted',
-        body: `${autoLabel} extracted your trades automatically. Generating trade logâ€¦`,
+        title: 'Snipalot Trade - auto-extracted',
+        body: `${autoLabel} extracted your trades automatically. Generating trade log...`,
         silent: false,
       }).show();
     }
@@ -281,7 +281,7 @@ export async function runTradePipeline(
     if (input.onPromptReady) {
       input.onPromptReady(sessionDir, responsePath, promptPath);
     }
-    if (onStep) onStep('Waiting for LLM response (paste into the response window)â€¦');
+    if (onStep) onStep('Waiting for LLM response (paste into the response window)...');
   }
 
   if (!autoSucceeded) {
@@ -332,7 +332,7 @@ export async function runTradePipeline(
   // tokenName + timestamp matching for unjoined trades.
   let mockApeJoinStats = { matched: 0, unmatched: 0 };
   if (mockape) {
-    if (onStep) onStep('Joining MockApe outcomes by idâ€¦');
+    if (onStep) onStep('Joining MockApe outcomes by id...');
     mockApeJoinStats = joinMockApeById(trades, mockape);
     // Any trades the LLM didn't tag get a fallback fuzzy attempt.
     const unjoined = trades.filter((t) => !t.mockape_trade_id);
@@ -343,11 +343,11 @@ export async function runTradePipeline(
     }
     log('trade-pipeline', 'mockape join total', mockApeJoinStats);
   } else {
-    log('trade-pipeline', 'no mockape.json â€” actual P&L columns will be blank');
+    log('trade-pipeline', 'no mockape.json - actual P&L columns will be blank');
   }
 
   // â”€â”€ Generate trade_log.xlsx + companion Markdown reports â”€â”€
-  if (onStep) onStep('Generating trade workbook + adherence reportâ€¦');
+  if (onStep) onStep('Generating trade workbook + adherence report...');
   let csvPath: string | null = null;
   let xlsxPath: string | null = null;
   let mdPath: string | null = null;
@@ -371,7 +371,7 @@ export async function runTradePipeline(
   });
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Snipalot Trade Â· log ready',
+      title: 'Snipalot Trade - log ready',
       body: `${trades.length} trade${trades.length === 1 ? '' : 's'} logged. trade_log.xlsx + companions in:\n${sessionDir}`,
       silent: false,
     }).show();
@@ -401,7 +401,7 @@ async function tryGeminiCli(
 ): Promise<boolean> {
   if (!cliCommand) return false;
   throwIfAborted(abortSignal);
-  if (onStep) onStep('Auto-extracting via Gemini CLIâ€¦');
+  if (onStep) onStep('Auto-extracting via Gemini CLI...');
   log('trade-pipeline', 'gemini-cli: attempting auto-extraction', { cliCommand, model });
 
   const resolvedCli = resolveGeminiCliExecutable(cliCommand);
@@ -568,7 +568,7 @@ async function tryOpenAiApi(
   throwIfAborted(abortSignal);
 
   const label = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
-  if (onStep) onStep(`Auto-extracting via ${label}â€¦`);
+  if (onStep) onStep(`Auto-extracting via ${label}...`);
   log('trade-pipeline', 'openai-api: attempting auto-extraction', { baseUrl, model });
 
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
@@ -1003,7 +1003,7 @@ The polling timeout is 60 minutes from the moment the recording stopped.
 
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Snipalot Trade Â· prompt ready',
+      title: 'Snipalot Trade - prompt ready',
       body:
         `Paste the prompt into Claude Code / Gemini / Cursor, then paste ` +
         `the JSON reply into the Snipalot response window. ` +
@@ -1041,7 +1041,7 @@ async function waitForExtractionResponse(
         });
         if (Notification.isSupported()) {
           new Notification({
-            title: 'Snipalot Trade Â· response invalid',
+            title: 'Snipalot Trade - response invalid',
             body: `extraction_response.json couldn't be parsed: ${(err as Error).message}. Fix and re-save.`,
             silent: false,
           }).show();
@@ -1664,12 +1664,12 @@ function writeAdherenceReport(sessionDir: string, trades: TradeEvent[]): string 
   const actualEarly = matched.filter((t) => t.exit_scenario === 'early').length;
   const actualOvershoot = matched.filter((t) => t.exit_scenario === 'overshoot').length;
 
-  const pct = (n: number, d: number): string => (d === 0 ? 'â€“' : `${Math.round((n / d) * 100)}%`);
+  const pct = (n: number, d: number): string => (d === 0 ? '-' : `${Math.round((n / d) * 100)}%`);
 
   const lines: string[] = [];
   lines.push('# Adherence Report');
   lines.push('');
-  lines.push(`Generated by Snipalot Trade-mode Â· ${new Date().toLocaleString()}`);
+  lines.push(`Generated by Snipalot Trade-mode - ${new Date().toLocaleString()}`);
   lines.push('');
   lines.push('## Summary');
   lines.push('');

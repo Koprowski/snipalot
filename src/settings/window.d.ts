@@ -49,7 +49,7 @@ interface Window {
     }>>;
     checkDependencies: (payload: { geminiCliCommand?: string }) => Promise<{
       whisper: { ok: boolean; message: string; exePath?: string; modelPath?: string };
-      node: { ok: boolean; message: string; version?: string };
+      node: { ok: boolean; message: string; version?: string; optional?: boolean };
       geminiCli: { ok: boolean; message: string; version?: string; command?: string };
     }>;
     installGeminiCli: () => Promise<{

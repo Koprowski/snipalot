@@ -46,7 +46,7 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     ipcRenderer.invoke('settings:list-gemini-cli-models', command),
   checkDependencies: (payload: { geminiCliCommand?: string }): Promise<{
     whisper: { ok: boolean; message: string; exePath?: string; modelPath?: string };
-    node: { ok: boolean; message: string; version?: string };
+    node: { ok: boolean; message: string; version?: string; optional?: boolean };
     geminiCli: { ok: boolean; message: string; version?: string; command?: string };
   }> => ipcRenderer.invoke('settings:check-dependencies', payload),
   installGeminiCli: (): Promise<{ ok: boolean; message: string; stdoutTail?: string; stderrTail?: string }> =>

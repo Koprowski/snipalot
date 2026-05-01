@@ -2103,19 +2103,6 @@ async function copySupportLogToClipboard(): Promise<
 ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCliCommand?: string }) => {
   const whisper = findBundledWhisperDependency();
   const npmProbe = await runNpmDependencyProbe(['--version'], 10_000);
-  const nodeStatus = npmProbe.ok
-    ? {
-        ok: true,
-        message: `npm ${npmProbe.stdout.trim()} is available.`,
-        version: npmProbe.stdout.trim(),
-      }
-    : {
-        ok: false,
-        message: npmProbe.error
-          ? `npm was not found (${npmProbe.error}). Install Node.js LTS first.`
-          : `npm check failed${npmProbe.timedOut ? ' (timed out)' : ''}. Install Node.js LTS first.`,
-      };
-
   const cliCommand = (payload?.geminiCliCommand || 'gemini').trim() || 'gemini';
   const resolvedCli = resolveGeminiCliExecutable(cliCommand);
   const env: NodeJS.ProcessEnv = {
@@ -2146,8 +2133,9 @@ ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCli
         command: resolvedCli.command,
       };
   log('settings', 'dependency check', {
+    appVersion: app.getVersion(),
     whisperOk: whisper.ok,
-    npmOk: nodeStatus.ok,
+    npmOk: npmProbe.ok,
     npmCode: npmProbe.code,
     npmError: npmProbe.error,
     npmTimedOut: npmProbe.timedOut,
@@ -2155,6 +2143,24 @@ ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCli
     npmStderrTail: npmProbe.stderr.slice(-300),
     geminiOk: geminiCli.ok,
   });
+  const nodeStatus = npmProbe.ok
+    ? {
+        ok: true,
+        message: `npm ${npmProbe.stdout.trim()} is available.`,
+        version: npmProbe.stdout.trim(),
+      }
+    : geminiCli.ok
+      ? {
+          ok: true,
+          optional: true,
+          message: 'Gemini CLI is already installed and working. Node/npm is only needed if Snipalot needs to install or update Gemini CLI for you.',
+        }
+      : {
+          ok: false,
+          message: npmProbe.error
+            ? `npm was not found (${npmProbe.error}). Install Node.js LTS first.`
+            : `npm check failed${npmProbe.timedOut ? ' (timed out)' : ''}. Install Node.js LTS first.`,
+        };
   return { whisper, node: nodeStatus, geminiCli };
 });
 

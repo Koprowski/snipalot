@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.21)
+## Recent improvements (v1.0.1 onward; current release v1.0.22)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -180,6 +180,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Settings dependency checks now launch `npm.cmd` through `cmd.exe /d /c call ...` with cmd-safe quoting. This fixes false "Node/npm missing" results when Node is installed under `C:\Program Files\nodejs` and npm itself works from a normal terminal.
 - **Start Menu shortcut repair (v1.0.21 local branch):**
  - `resources/installer.nsh` now explicitly recreates `$SMPROGRAMS\Snipalot.lnk` on every install/update and sends a shell change notification, avoiding electron-builder's shortcut-preservation path leaving Start Menu search empty after a prior bad/missing shortcut state.
+- **Dependency checklist Node/npm loop fix (v1.0.22 local branch):**
+ - Added `docs/dependency-check-issue-log.md` to track the recurring Node/npm checklist issue.
+ - Settings dependency logs now include `appVersion` so support logs reveal stale installed builds.
+ - If Gemini CLI is already installed and runnable, Node/npm is treated as OK/optional instead of a blocking missing dependency; Node/npm is only required for Snipalot-managed Gemini CLI install/update.
 
 ## Packaged app logs
 
@@ -225,3 +229,4 @@ These came from code review; **not** implemented yet. Pick up as separate tasks 
 | NSIS installer hooks | `resources/installer.nsh` (`customCheckAppRunning` — more patient app-exit during upgrade) |
 | Product doc | `README.md`, `snipalot_PRD.md` |
 | End-user install guide (Issue #2 mirror) | `docs/installation-guide-issue-2.md` |
+| Dependency checklist issue log | `docs/dependency-check-issue-log.md` |

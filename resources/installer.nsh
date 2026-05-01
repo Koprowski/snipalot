@@ -1,7 +1,7 @@
 ; Snipalot NSIS customization (must live under buildResources = resources/).
-; Snipalot stays running in the tray after closing the launcher — the stock
-; "app cannot be closed" dialog appears after only 2 kill attempts. We retry
-; longer with force-kill so upgrades/repairs usually succeed.
+; Keep the running-app check short. Long silent sleeps make Windows look
+; frozen while launching/upgrading the setup EXE, especially when Defender
+; is already scanning the unsigned installer.
 
 !ifndef nsProcess::FindProcess
   !include "nsProcess.nsh"
@@ -12,14 +12,9 @@ Var pid
 !macro customCheckAppRunning
   ${GetProcessInfo} 0 $pid $1 $2 $3 $4
   ${if} $3 != "${APP_EXECUTABLE_FILENAME}"
-    ${if} ${isUpdated}
-      Sleep 300
-    ${endIf}
-
     !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
     ${if} $R0 == 0
       ${if} ${isUpdated}
-        Sleep 1000
         Goto doStopProcess
       ${endIf}
       MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(appRunning)" /SD IDOK IDOK doStopProcess
@@ -33,7 +28,7 @@ Var pid
       !else
         nsExec::Exec `%SYSTEMROOT%\System32\cmd.exe /c taskkill /im "${APP_EXECUTABLE_FILENAME}" /fi "PID ne $pid" /fi "USERNAME eq %USERNAME%"`
       !endif
-      Sleep 500
+      Sleep 300
 
       StrCpy $R1 0
 
@@ -42,7 +37,7 @@ Var pid
 
         !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
         ${if} $R0 == 0
-          Sleep 1500
+          Sleep 500
           !ifdef INSTALL_MODE_PER_ALL_USERS
             nsExec::Exec `taskkill /f /im "${APP_EXECUTABLE_FILENAME}" /fi "PID ne $pid"`
           !else
@@ -50,8 +45,8 @@ Var pid
           !endif
           !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
           ${if} $R0 == 0
-            DetailPrint `Waiting for "${PRODUCT_NAME}" to close ($R1/15)...`
-            Sleep 2000
+            DetailPrint `Waiting for "${PRODUCT_NAME}" to close ($R1/4)...`
+            Sleep 700
           ${else}
             Goto not_running
           ${endIf}
@@ -59,8 +54,8 @@ Var pid
           Goto not_running
         ${endIf}
 
-        ${if} $R1 > 15
-          MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Snipalot is still running.$\n$\nRight-click the Snipalot icon in the system tray (near the clock), choose Quit Snipalot, then click Retry.$\n$\nNote: The launcher X button only hides the window; the app keeps running until you quit from the tray." /SD IDCANCEL IDRETRY loop
+        ${if} $R1 > 4
+          MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Snipalot is still running.$\n$\nClick the launcher X button or right-click the Snipalot tray icon and choose Quit Snipalot, then click Retry." /SD IDCANCEL IDRETRY loop
           Quit
         ${else}
           Goto loop

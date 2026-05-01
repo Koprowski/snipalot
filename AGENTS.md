@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.16)
+## Recent improvements (v1.0.1 onward; current release v1.0.17)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -160,6 +160,9 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Record, Trade, and Screenshot now all use the launcher-selected mode, while Settings only keeps the recording countdown.
  - Fullscreen Screenshot bypasses overlay region-select entirely and captures the cursor display directly into Annotator; Select Screenshot still uses the overlay only as a picker with zero countdown.
  - Fullscreen Screenshot hides the launcher before grabbing the frame and uses a request id so cancel/state changes cannot still open Annotator with a stale capture.
+- **Installer Finish responsiveness (v1.0.17 local branch):**
+ - NSIS `runAfterFinish` is disabled for both light and full installers, removing the Finish-page auto-launch path that could make the installer window appear unresponsive while Windows scanned/launched the freshly installed Electron app.
+ - Users should launch Snipalot from the Start menu or desktop shortcut after setup closes.
 
 ## Packaged app logs
 

@@ -32,6 +32,7 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  runAfterFinish: false
   warningsAsErrors: false
   artifactName: Snipalot-${version}-full-setup.exe
 publish:

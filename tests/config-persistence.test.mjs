@@ -74,6 +74,25 @@ test('loadConfig preserves custom trade marker hotkey', () => {
   runConfigChild(home, code);
 });
 
+test('loadConfig accepts UTF-8 BOM config files', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-bom-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    `\uFEFF${JSON.stringify({ capture: { mode: 'fullscreen', countdownSec: 0 } })}`,
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.capture.mode, 'fullscreen');
+    assert.equal(loaded.capture.countdownSec, 0);
+  `;
+  runConfigChild(home, code);
+});
+
 function runConfigChild(home, code) {
   const result = spawnSync(process.execPath, ['-e', code], {
     cwd: process.cwd(),

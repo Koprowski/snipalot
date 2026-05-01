@@ -189,7 +189,7 @@ let _config: SnipalotConfig = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
 export function loadConfig(): SnipalotConfig {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
-      const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+      const raw = fs.readFileSync(CONFIG_PATH, 'utf-8').replace(/^\uFEFF/, '');
       const parsed = JSON.parse(raw) as Partial<SnipalotConfig>;
       _config = deepMerge(DEFAULT_CONFIG, parsed) as SnipalotConfig;
       migrateLoadedConfig(_config, parsed);

@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.13)
+## Recent improvements (v1.0.1 onward; current release v1.0.14)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -144,6 +144,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - `resources/installer.nsh` no longer performs long silent sleeps while closing an already-running Snipalot during upgrades. Worst-case wait before prompting is now ~5 seconds instead of ~50+ seconds, and the prompt text matches current launcher X behavior. Unsigned EXE Defender/SmartScreen scanning can still cause pre-NSIS launch delay.
 - **Trade marker hotkey migration (local branch):**
  - `src/main/config.ts` migrates existing configs that still have the old default `hotkeys.tradeMarker = Ctrl+Shift+M` to the current default `Ctrl+Shift+X` on load. Other custom marker bindings are preserved. Covered by `tests/config-persistence.test.mjs`.
+- **Screenshot selection cleanup (local branch):**
+ - Screenshot capture now forces countdown `0` regardless of the Record/Trade countdown setting; there should never be a 3-2-1 countdown for screenshots.
+ - Overlay confirm no longer pre-promotes a selected region into `recordingRegion`/dashed outline. Recording ownership is set only after main sends `overlay:owns-recording`; screenshot exits selection with no lingering dotted outline.
+ - Config loading strips a UTF-8 BOM before `JSON.parse`, preventing PowerShell-written config files from resetting Snipalot to defaults. Covered by `tests/config-persistence.test.mjs`.
 
 ## Packaged app logs
 

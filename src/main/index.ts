@@ -2818,8 +2818,10 @@ function enterSelectingScreenshot(): void {
   }
   setAppState('selecting-screenshot', 'screenshot button from idle');
   const cfg = getConfig().capture;
-  log('state', 'enterSelectingScreenshot capture config', cfg);
-  dispatchRegionEntry(cfg.mode, cfg.countdownSec);
+  log('state', 'enterSelectingScreenshot capture config', { ...cfg, effectiveCountdownSec: 0 });
+  // Screenshots should capture immediately after the user picks a region.
+  // The countdown preference is for recording/trade sessions only.
+  dispatchRegionEntry(cfg.mode, 0);
 }
 
 /**

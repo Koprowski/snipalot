@@ -581,12 +581,18 @@ async function enterRegionSelectMode(): Promise<void> {
 
 async function exitRegionSelectMode(): Promise<void> {
   if (!regionSelectMode) return;
+  cancelCountdown();
   regionSelectMode = false;
   document.body.classList.remove('region-select-mode');
   regionStatusEl.classList.add('region-hidden');
   regionConfirmEl.classList.add('region-hidden');
   confirmedRegion = null;
   currentRect = null;
+  if (!isRecording) {
+    ownsRecording = false;
+    recordingRegion = null;
+    outlineVisible = true;
+  }
   await setInteractiveIfChanged(false);
   window.snipalot.log('mode', 'exit region-select');
   redraw();
@@ -655,9 +661,6 @@ function cancelCountdown(): void {
 }
 
 function fireConfirm(r: Rect): void {
-  recordingRegion = { ...r };
-  outlineVisible = true;
-  ownsRecording = true;
   window.snipalot.confirmRegion(r);
 }
 
@@ -1319,9 +1322,6 @@ window.addEventListener('keydown', (e) => {
   if (regionSelectMode && e.key === 'Enter' && confirmedRegion) {
     e.preventDefault();
     const r = confirmedRegion;
-    recordingRegion = { ...r };
-    outlineVisible = true;
-    ownsRecording = true;
     window.snipalot.confirmRegion(r);
     return;
   }
@@ -1374,9 +1374,6 @@ window.addEventListener('keydown', (e) => {
 regionConfirmBtn.addEventListener('click', () => {
   if (!confirmedRegion) return;
   const r = confirmedRegion;
-  recordingRegion = { ...r };
-  outlineVisible = true;
-  ownsRecording = true;
   window.snipalot.confirmRegion(r);
 });
 regionCancelBtn.addEventListener('click', () => {

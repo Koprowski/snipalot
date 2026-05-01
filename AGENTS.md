@@ -116,7 +116,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Trade extraction UX + scale-out prompt hardening (v1.0.8 local branch):**
  - `src/main/pipeline.ts` now `await`s `runTradePipeline()` for trade sessions, so launcher processing state and step text stay active through Gemini/API auto-extraction instead of dropping to idle before `trade_log.csv` exists.
  - Trade processing ETA in `src/main/index.ts` now budgets a real LLM extraction window for trade mode (instead of a 5-second placeholder), so the progress bar no longer races to the end before Gemini finishes.
- - Gemini CLI default/recommended stable model is `gemini-2.5-pro`; public docs list `gemini-3-pro-preview` as the latest Gemini 3 Pro Preview, but CLI/account availability may lag, so Settings lists it as preview/test-first rather than the default. Legacy bad value `gemini-3.1-pro-preview` is normalized in memory to `gemini-2.5-pro`.
+ - Gemini CLI default/recommended model is `gemini-3.1-pro-preview`. Current official Gemini 3 docs list Gemini 3.1 Pro with model id `gemini-3.1-pro-preview` and state all Gemini 3 models are currently preview; Settings includes current Gemini 3.1/3 preview ids in the curated model list and warns users to test CLI/account access before saving.
  - Trade extraction schema/prompt now includes `leg_index`, `leg_count`, and `position_fraction`, with explicit instructions to split scaled entries/exits into multiple rows when the transcript indicates partial fills/trims.
  - `joinMockApeById()` now apportions aggregate MockApe size/P&L across multiple rows sharing the same `mockape_trade_id` using `position_fraction` when provided, or equal shares as fallback.
 

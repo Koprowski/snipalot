@@ -1765,8 +1765,12 @@ interface GeminiCliModelSummary {
 }
 
 const GEMINI_CLI_FALLBACK_MODELS: GeminiCliModelSummary[] = [
-  { id: 'gemini-3-pro-preview', createdAtMs: Date.parse('2025-11-01') || 0 },
+  { id: 'gemini-3.1-pro-preview', createdAtMs: Date.parse('2026-02-19') || 0 },
+  { id: 'gemini-3.1-flash-lite-preview', createdAtMs: Date.parse('2026-03-03') || 0 },
+  { id: 'gemini-3.1-flash-image-preview', createdAtMs: Date.parse('2026-03-03') || 0 },
   { id: 'gemini-3-flash-preview', createdAtMs: Date.parse('2025-12-01') || 0 },
+  { id: 'gemini-3-pro-preview', createdAtMs: Date.parse('2025-11-01') || 0 },
+  { id: 'gemini-3-pro-image-preview', createdAtMs: Date.parse('2025-11-01') || 0 },
   { id: 'gemini-2.5-pro', createdAtMs: Date.parse('2025-03-01') || 0 },
   { id: 'gemini-2.5-flash', createdAtMs: Date.parse('2025-03-01') || 0 },
   { id: 'gemini-2.0-flash', createdAtMs: Date.parse('2024-12-01') || 0 },
@@ -1850,7 +1854,7 @@ ipcMain.handle(
     if (mode === 'gemini-cli') {
       const result = await testGeminiCliConnection(
         payload?.geminiCliCommand ?? 'gemini',
-        payload?.geminiCliModel ?? 'gemini-2.5-pro'
+        payload?.geminiCliModel ?? 'gemini-3.1-pro-preview'
       );
       return { ok: result.ok, mode, message: result.message, guidance: result.guidance };
     }

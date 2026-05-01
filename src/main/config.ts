@@ -166,7 +166,7 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     openaiModel: 'google/gemini-2.5-flash',
     llmMode: 'gemini-cli',
     geminiCliCommand: 'gemini',
-    geminiCliModel: 'gemini-2.5-pro',
+    geminiCliModel: 'gemini-3.1-pro-preview',
   },
   launcher: {
     pinnedOnTop: false,
@@ -192,25 +192,16 @@ export function loadConfig(): SnipalotConfig {
       const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
       const parsed = JSON.parse(raw) as Partial<SnipalotConfig>;
       _config = deepMerge(DEFAULT_CONFIG, parsed) as SnipalotConfig;
-      normalizeConfigInMemory();
       log('config', 'loaded', { path: CONFIG_PATH, outputDir: _config.outputDir, firstRun: _config.firstRun });
     } else {
       _config = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
-      normalizeConfigInMemory();
       log('config', 'no config file found; using defaults');
     }
   } catch (err) {
     _config = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
-    normalizeConfigInMemory();
     log('config', 'load error; falling back to defaults', { err: (err as Error).message });
   }
   return _config;
-}
-
-function normalizeConfigInMemory(): void {
-  if (_config.trade.geminiCliModel === 'gemini-3.1-pro-preview') {
-    _config.trade.geminiCliModel = DEFAULT_CONFIG.trade.geminiCliModel;
-  }
 }
 
 /**

@@ -16,7 +16,7 @@ import {
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import { log } from './logger';
 import { runPipeline, AnnotationRecord, ChapterRecord, TradeMarkerRecord, formatSessionStamp } from './pipeline';
 import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
@@ -1761,6 +1761,166 @@ async function testGeminiCliConnection(
     message: `Gemini CLI connection OK (command: ${resolvedCli.command}, model: ${cliModel}).`,
   };
 }
+
+function findBundledWhisperDependency(): {
+  ok: boolean;
+  message: string;
+  exePath?: string;
+  modelPath?: string;
+} {
+  const roots = app.isPackaged
+    ? [path.join(process.resourcesPath || '', 'resources'), path.join(process.cwd(), 'resources')]
+    : [path.join(process.cwd(), 'resources'), path.join(process.resourcesPath || '', 'resources')];
+  for (const root of roots) {
+    if (!root || !fs.existsSync(root)) continue;
+    const binDir = path.join(root, 'bin', 'whisper');
+    const exe = [path.join(binDir, 'whisper-cli.exe'), path.join(binDir, 'main.exe')]
+      .find((candidate) => fs.existsSync(candidate));
+    const model = path.join(root, 'models', 'ggml-base.en.bin');
+    if (exe && fs.existsSync(model)) {
+      return {
+        ok: true,
+        message: 'Bundled local transcription engine is installed.',
+        exePath: exe,
+        modelPath: model,
+      };
+    }
+  }
+  return {
+    ok: false,
+    message: 'Bundled Whisper files were not found. Reinstall the latest Snipalot setup EXE.',
+  };
+}
+
+function runDependencyProbe(
+  command: string,
+  args: string[],
+  timeoutMs = 15_000,
+  env?: NodeJS.ProcessEnv
+): Promise<{ ok: boolean; code: number | null; stdout: string; stderr: string; error?: string; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, {
+        windowsHide: true,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      });
+    } catch (err) {
+      resolve({ ok: false, code: -1, stdout, stderr, error: (err as Error).message, timedOut });
+      return;
+    }
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill(); } catch { /* ignore */ }
+    }, timeoutMs);
+    child.stdout?.on('data', (d) => { stdout += String(d); });
+    child.stderr?.on('data', (d) => { stderr += String(d); });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, code: -1, stdout, stderr, error: err.message, timedOut });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0 && !timedOut, code, stdout, stderr, timedOut });
+    });
+  });
+}
+
+function npmCommand(): string {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
+ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCliCommand?: string }) => {
+  const whisper = findBundledWhisperDependency();
+  const npmProbe = await runDependencyProbe(npmCommand(), ['--version'], 10_000);
+  const nodeStatus = npmProbe.ok
+    ? {
+        ok: true,
+        message: `npm ${npmProbe.stdout.trim()} is available.`,
+        version: npmProbe.stdout.trim(),
+      }
+    : {
+        ok: false,
+        message: npmProbe.error
+          ? `npm was not found (${npmProbe.error}). Install Node.js LTS first.`
+          : `npm check failed${npmProbe.timedOut ? ' (timed out)' : ''}. Install Node.js LTS first.`,
+      };
+
+  const cliCommand = (payload?.geminiCliCommand || 'gemini').trim() || 'gemini';
+  const resolvedCli = resolveGeminiCliExecutable(cliCommand);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? 'true',
+    ELECTRON_RUN_AS_NODE: '1',
+    GEMINI_CLI_NO_RELAUNCH: 'true',
+  };
+  delete env.GEMINI_API_KEY;
+  const geminiProbe = await runDependencyProbe(
+    resolvedCli.command,
+    [...resolvedCli.prefixArgs, '--version'],
+    10_000,
+    env
+  );
+  const geminiCli = geminiProbe.ok
+    ? {
+        ok: true,
+        message: `${geminiProbe.stdout.trim() || 'Gemini CLI'} is installed.`,
+        version: geminiProbe.stdout.trim(),
+        command: resolvedCli.command,
+      }
+    : {
+        ok: false,
+        message: geminiProbe.error
+          ? `Gemini CLI was not found (${geminiProbe.error}).`
+          : `Gemini CLI check failed${geminiProbe.timedOut ? ' (timed out)' : ''}.`,
+        command: resolvedCli.command,
+      };
+  log('settings', 'dependency check', {
+    whisperOk: whisper.ok,
+    npmOk: nodeStatus.ok,
+    geminiOk: geminiCli.ok,
+  });
+  return { whisper, node: nodeStatus, geminiCli };
+});
+
+ipcMain.handle('settings:install-gemini-cli', async () => {
+  log('settings', 'gemini-cli install start');
+  const result = await runDependencyProbe(
+    npmCommand(),
+    ['install', '-g', '@google/gemini-cli'],
+    5 * 60 * 1000
+  );
+  const stdoutTail = result.stdout.slice(-1000);
+  const stderrTail = result.stderr.slice(-1000);
+  if (!result.ok) {
+    log('settings', 'gemini-cli install failed', {
+      code: result.code,
+      timedOut: result.timedOut,
+      error: result.error,
+      stderrTail,
+    });
+    return {
+      ok: false,
+      message: result.error
+        ? `Could not start npm: ${result.error}. Install Node.js LTS, then try again.`
+        : `Gemini CLI install failed${result.timedOut ? ' (timed out)' : ''}.`,
+      stdoutTail,
+      stderrTail,
+    };
+  }
+  log('settings', 'gemini-cli install complete', { stdoutTail, stderrTail });
+  return {
+    ok: true,
+    message: 'Gemini CLI installed. Next, click Sign in with Google.',
+    stdoutTail,
+    stderrTail,
+  };
+});
 
 interface OpenRouterModelSummary {
   id: string;

@@ -2,7 +2,7 @@
 
 ## Download for Windows
 
-**Latest installer:** [Download Snipalot-1.0.8-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.8/Snipalot-1.0.8-setup.exe)
+**Latest installer:** [Download Snipalot-1.0.9-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.9/Snipalot-1.0.9-setup.exe)
 
 Run the installer, then open Snipalot from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. The installer includes Whisper transcription and the base English model, so recording and transcription work without installing Whisper separately.
 
@@ -136,8 +136,8 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **End users** (no Node.js or Git required):
 
-1. **Download the installer** (current release **v1.0.8**):
-   - **Direct:** [Snipalot-1.0.8-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.8/Snipalot-1.0.8-setup.exe)
+1. **Download the installer** (current release **v1.0.9**):
+   - **Direct:** [Snipalot-1.0.9-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.9/Snipalot-1.0.9-setup.exe)
    - Or open **[Releases](https://github.com/Koprowski/snipalot/releases)** and grab the latest **`Snipalot-*-setup.exe`** (NSIS installer, Windows x64).
 2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
 

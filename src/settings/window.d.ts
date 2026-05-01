@@ -47,6 +47,17 @@ interface Window {
       id: string;
       createdAtMs: number;
     }>>;
+    checkDependencies: (payload: { geminiCliCommand?: string }) => Promise<{
+      whisper: { ok: boolean; message: string; exePath?: string; modelPath?: string };
+      node: { ok: boolean; message: string; version?: string };
+      geminiCli: { ok: boolean; message: string; version?: string; command?: string };
+    }>;
+    installGeminiCli: () => Promise<{
+      ok: boolean;
+      message: string;
+      stdoutTail?: string;
+      stderrTail?: string;
+    }>;
     geminiCliSigninStatus: () => Promise<{ signedIn: boolean; subject?: string | null }>;
     geminiCliSignin: (payload: { command?: string }) => Promise<{ ok: boolean; message: string; subject?: string }>;
     geminiCliSigninCancel: () => Promise<{ ok: boolean; message?: string }>;

@@ -14,6 +14,10 @@ const btnTestLlmConnection = document.getElementById('btn-test-llm-connection') 
 const btnFetchOpenRouterModels = document.getElementById('btn-fetch-openrouter-models') as HTMLButtonElement;
 const btnFetchGeminiCliModels = document.getElementById('btn-fetch-gemini-cli-models') as HTMLButtonElement;
 const btnCheckUpdates = document.getElementById('btn-check-updates') as HTMLButtonElement;
+const btnCheckDependencies = document.getElementById('btn-check-dependencies') as HTMLButtonElement;
+const btnInstallGeminiCli = document.getElementById('btn-install-gemini-cli') as HTMLButtonElement;
+const btnOpenNodejs = document.getElementById('btn-open-nodejs') as HTMLButtonElement;
+const dependencyStatusEl = document.getElementById('dependency-status') as HTMLElement;
 const geminiCliMissingHelpEl = document.getElementById('gemini-cli-missing-help') as HTMLElement;
 const geminiCliMissingTitleEl = document.getElementById('gemini-cli-missing-title') as HTMLElement;
 const geminiCliMissingExplanationEl = document.getElementById('gemini-cli-missing-explanation') as HTMLElement;
@@ -221,8 +225,57 @@ async function init(): Promise<void> {
   renderOpenrouterModelOptions();
   renderGeminiCliModelOptions();
 
+  btnCheckDependencies.addEventListener('click', () => {
+    void refreshDependencyStatus();
+  });
+  btnInstallGeminiCli.addEventListener('click', () => {
+    void installGeminiCliFromSettings();
+  });
+  btnOpenNodejs.addEventListener('click', async () => {
+    await api.openUrl('https://nodejs.org/en/download');
+  });
+  void refreshDependencyStatus();
+
   // ── Gemini CLI Google sign-in wiring ─────────────────────────────
   initGeminiSignin();
+}
+
+async function refreshDependencyStatus(): Promise<void> {
+  dependencyStatusEl.textContent = 'Checking dependencies...';
+  btnCheckDependencies.disabled = true;
+  try {
+    const result = await api.checkDependencies({
+      geminiCliCommand: editedGeminiCliCommand.trim() || 'gemini',
+    });
+    dependencyStatusEl.textContent = [
+      `${result.whisper.ok ? 'OK' : 'Missing'} - Whisper: ${result.whisper.message}`,
+      `${result.node.ok ? 'OK' : 'Missing'} - Node/npm: ${result.node.message}`,
+      `${result.geminiCli.ok ? 'OK' : 'Missing'} - Gemini CLI: ${result.geminiCli.message}`,
+    ].join('\n');
+    btnInstallGeminiCli.disabled = !result.node.ok || result.geminiCli.ok;
+  } catch (err) {
+    dependencyStatusEl.textContent = `Dependency check failed: ${(err as Error).message}`;
+    btnInstallGeminiCli.disabled = false;
+  } finally {
+    btnCheckDependencies.disabled = false;
+  }
+}
+
+async function installGeminiCliFromSettings(): Promise<void> {
+  btnInstallGeminiCli.disabled = true;
+  btnCheckDependencies.disabled = true;
+  dependencyStatusEl.textContent = 'Installing Gemini CLI with npm... this can take a minute.';
+  try {
+    const result = await api.installGeminiCli();
+    dependencyStatusEl.textContent = result.ok
+      ? `${result.message}\n\nRechecking dependencies...`
+      : `${result.message}${result.stderrTail ? `\n\n${result.stderrTail}` : ''}`;
+    await refreshDependencyStatus();
+  } catch (err) {
+    dependencyStatusEl.textContent = `Gemini CLI install failed: ${(err as Error).message}`;
+  } finally {
+    btnCheckDependencies.disabled = false;
+  }
 }
 
 /**
@@ -266,6 +319,16 @@ function initGeminiSignin(): void {
     statusEl.textContent = 'Opening browser for Google login… complete the flow there. This window will detect when you finish.';
     statusEl.style.color = 'var(--muted)';
     try {
+      const deps = await api.checkDependencies({ geminiCliCommand: editedGeminiCliCommand || 'gemini' });
+      if (!deps.geminiCli.ok) {
+        await refreshDependencyStatus();
+        btnCancel.style.display = 'none';
+        btnIn.disabled = false;
+        btnOut.disabled = false;
+        statusEl.textContent = 'Gemini CLI is not installed yet. Use Install Gemini CLI in the setup checklist first, or switch LLM backend to API mode.';
+        statusEl.style.color = 'var(--danger, #ef4444)';
+        return;
+      }
       const result = await api.geminiCliSignin({ command: editedGeminiCliCommand || 'gemini' });
       if (result.ok) {
         setIdleState(true, result.subject);

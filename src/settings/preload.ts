@@ -44,6 +44,13 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     ipcRenderer.invoke('settings:list-openrouter-models'),
   listGeminiCliModels: (command: string): Promise<Array<{ id: string; createdAtMs: number }>> =>
     ipcRenderer.invoke('settings:list-gemini-cli-models', command),
+  checkDependencies: (payload: { geminiCliCommand?: string }): Promise<{
+    whisper: { ok: boolean; message: string; exePath?: string; modelPath?: string };
+    node: { ok: boolean; message: string; version?: string };
+    geminiCli: { ok: boolean; message: string; version?: string; command?: string };
+  }> => ipcRenderer.invoke('settings:check-dependencies', payload),
+  installGeminiCli: (): Promise<{ ok: boolean; message: string; stdoutTail?: string; stderrTail?: string }> =>
+    ipcRenderer.invoke('settings:install-gemini-cli'),
   geminiCliSigninStatus: (): Promise<{ signedIn: boolean; subject?: string | null }> =>
     ipcRenderer.invoke('settings:gemini-cli-signin-status'),
   geminiCliSignin: (payload: { command?: string }): Promise<{ ok: boolean; message: string; subject?: string }> =>

@@ -7,12 +7,12 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Stack:** Electron 41, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
 - **Windows installer (local):** On a Windows machine, `npm run package` produces **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe.
-- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.8`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`** then **`npm run package:nopublish`** on `windows-latest`; the package script fetches/asserts Whisper resources before building. **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
+- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.9`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`** then **`npm run package:nopublish`** on `windows-latest`; the package script fetches/asserts Whisper resources before building. **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
 - **Linux:** `npm run package` on Linux produces AppImage/Snap only, not the Windows setup exe.
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.8)
+## Recent improvements (v1.0.1 onward; current release v1.0.9)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -66,7 +66,9 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Trade session folder cleanup (local branch):** Trade session roots are kept to polished outputs: GIF, `prompt.txt`, `transcript.txt`, `trade_log.xlsx`, `trade_log.md`, plus the `Inputs/` folder. Raw/support files move under **`Inputs/`** (`mockape.json`, `extraction_response.json`, `markers.json`, `annotations.json`, `NEXT_STEPS.md`, `adherence_report.md`). Trade marker captures live under **`Inputs/trade-screenshots/`**.
 - **Trade XLSX dependency (local branch):** Added **`jszip`** as a runtime dependency to emit XLSX files directly from the Electron main process without requiring Excel automation.
 - **Trade marker shortcut update (local branch):** Default marker hotkey is **`Ctrl+Shift+X`** ("X marks the spot"). Updated config defaults, Settings reset defaults, HUD/launcher fallback labels, README, and install guide references.
-- **v1.0.8 local installer build (local branch):** Fresh NSIS build succeeded at **`release-v1.0.8-trade-workbook-xhotkey/Snipalot-1.0.8-setup.exe`** after switching away from a locked prior output directory. SHA256: `33D9483B872BF7BE5616E3781786DF75C854992534814D03250E764556DF53C4`.
+- **v1.0.8 local installer build:** Fresh NSIS build succeeded at **`release-v1.0.8-trade-workbook-xhotkey/Snipalot-1.0.8-setup.exe`** after switching away from a locked prior output directory. SHA256: `33D9483B872BF7BE5616E3781786DF75C854992534814D03250E764556DF53C4`.
+- **First-run dependency setup (v1.0.9 local branch):** Settings now has a Trade Mode **Setup checklist** that verifies bundled Whisper, Node/npm, and Gemini CLI. If npm is available but Gemini CLI is missing, users can install `@google/gemini-cli` from Settings, then use **Sign in with Google**. The sign-in button now preflights Gemini CLI and points users back to setup/API mode instead of failing with a raw missing-command error.
+- **v1.0.9 local installer build:** NSIS build succeeded at **`release-v1.0.9-dependency-setup/Snipalot-1.0.9-setup.exe`**, then installed locally and registry shows **Snipalot 1.0.9**. Packaged Whisper verified under installed `resources/resources/bin/whisper/whisper-cli.exe`; model verified under `resources/resources/models/ggml-base.en.bin`. SHA256: `D629042DDD4BCE07763D0DF3739CC7641E2D7C21E1E05296AD479A3C80016891`.
 - **Processing escape hatch + window show-race hardening (local branch):**
   - Launcher now exposes **Abandon** during post-stop `processing`. It cancels the in-flight pipeline/trade pipeline, closes any trade-context / response-paste windows, deletes the current session folder, and resets Snipalot to idle.
   - The latest parent-level `recording.mp4` is intentionally preserved when abandoning; session-folder artifacts are cleared.
@@ -115,13 +117,13 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Review-priority follow-ups (local branch):**
  - Completed: `settings:save` now logs `sanitizeSettingsPartialForLog(partial)` so `trade.openaiApiKey` is redacted in `snipalot.log`; Trade auto-extraction now retries with a positional prompt after Gemini CLI's known "`--prompt` + positional" parser conflict, matching Settings test behavior.
  - Recorder shortcut fail-safe passed build/static review and Pass 3 was appended to `docs/recording-shortcuts-issue-log.md`; still needs hands-on runtime validation for both `Ctrl+Shift+S` and `Ctrl+Shift+T` with exact log lines.
- - Completed in v1.0.8 local branch: trade hotkeys are editable in Settings, launcher-X docs/tooltips match full-exit behavior, config write errors propagate to Settings, and `docs/installation-guide-issue-2.md` now documents Gemini CLI/OpenRouter mode instead of the removed Gemini API key field.
-- **Settings/docs/persistence hardening (v1.0.8 local branch):**
+ - Completed in v1.0.9 local branch: trade hotkeys are editable in Settings, launcher-X docs/tooltips match full-exit behavior, config write errors propagate to Settings, and `docs/installation-guide-issue-2.md` now documents Gemini CLI/OpenRouter mode instead of the removed Gemini API key field.
+- **Settings/docs/persistence hardening (v1.0.9 local branch):**
  - Settings hotkey editor now includes `startTrade` and `tradeMarker`, so all README/config advertised trade shortcuts are rebindable from the UI.
  - Launcher X copy and README/install-guide upgrade text now match current behavior: launcher X exits Snipalot; minimize keeps the launcher/taskbar path.
  - `saveConfig()` is now transactional: it writes the merged config to disk before replacing in-memory config, throws on filesystem errors, and Settings keeps the window open with an error instead of reporting a false successful save.
  - Added `npm test` with `tests/config-persistence.test.mjs` covering successful config writes and disk-write failure behavior.
-- **Trade extraction UX + scale-out prompt hardening (v1.0.8 local branch):**
+- **Trade extraction UX + scale-out prompt hardening (v1.0.9 local branch):**
  - `src/main/pipeline.ts` now `await`s `runTradePipeline()` for trade sessions, so launcher processing state and step text stay active through Gemini/API auto-extraction instead of dropping to idle before `trade_log.xlsx` exists.
  - Trade processing ETA in `src/main/index.ts` now budgets a real LLM extraction window for trade mode (instead of a 5-second placeholder), so the progress bar no longer races to the end before Gemini finishes.
  - Gemini CLI default/recommended model is `gemini-3.1-pro-preview`. Current official Gemini 3 docs list Gemini 3.1 Pro with model id `gemini-3.1-pro-preview` and state all Gemini 3 models are currently preview; Settings includes current Gemini 3.1/3 preview ids in the curated model list and warns users to test CLI/account access before saving.

@@ -567,8 +567,8 @@ function ensureProcessingLauncherVisible(focus = false): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
   if (launcherWindow.isMinimized()) launcherWindow.restore();
   if (!launcherWindow.isVisible()) launcherWindow.show();
-  launcherWindow.setAlwaysOnTop(true, 'floating');
-  launcherWindow.moveTop();
+  launcherWindow.setAlwaysOnTop(true, 'screen-saver');
+  if (focus) launcherWindow.moveTop();
   if (focus) launcherWindow.focus();
 }
 
@@ -731,7 +731,7 @@ function createLauncherWindow(): BrowserWindow {
   const w = 480;
   // Custom title bar 28px + content includes the launcher capture-mode
   // segmented control, action row, shortcuts, hint, and processing bar.
-  const h = 188;
+  const h = 218;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;

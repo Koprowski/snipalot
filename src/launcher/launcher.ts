@@ -105,12 +105,12 @@ function renderLauncherImpl(): void {
     btnPrimaryEl.title = `Record (${currentStartStopHotkey})`;
     btnScreenshotLabelEl.textContent = 'Screenshot';
     btnScreenshotEl.title = currentCaptureMode === 'fullscreen'
-      ? 'Screenshot - capture the full display for annotation'
+      ? 'Screenshot - captures full screen based upon cursor location'
       : 'Screenshot - capture a selected region for annotation';
     btnTradeLabelEl.textContent = 'Trade';
     btnTradeEl.title = 'Trade — record a session for trade-log extraction';
     hintEl.textContent = currentCaptureMode === 'fullscreen'
-      ? 'Full screen mode captures the display under your cursor.'
+      ? 'Captures Full Screen Based Upon Cursor Location'
       : 'Select mode lets you drag the area to capture.';
   } else if (currentState === 'selecting') {
     btnPrimaryLabelEl.textContent = 'Cancel';

@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.23)
+## Recent improvements (v1.0.1 onward; current release v1.0.24)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -189,6 +189,12 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Verified installed ffmpeg + installed Whisper manually against `E:\Video Screencasts\recording.mp4`; ffmpeg extracted WAV and Whisper produced an SRT transcript successfully.
  - Processing launcher z-order is reasserted while processing and after trade-data submit/skip, so the status window should return on top after helper windows close.
  - Trade processing status strings were changed to ASCII for the visible pipeline steps to avoid mojibake such as `adherence reportÃ¢...`.
+- **Trade processing polish + plan fields (v1.0.24 local branch):**
+ - Processing launcher height increased so the progress bar/ETA is visible again, and processing topmost uses `screen-saver` level without repeatedly calling `moveTop()` on every tick (reduces blinking while keeping the window above other apps).
+ - Fullscreen capture copy changed to "Captures Full Screen Based Upon Cursor Location".
+ - GIF timecode generation now quotes/escapes the Windows `drawtext=textfile` path; verified a short ffmpeg GIF smoke test against `E:\Video Screencasts\recording.mp4`.
+ - Whisper transcript post-processing now drops repeated adjacent hallucination segments and compacts repeated phrases before writing `transcript.txt` / feeding trade extraction.
+ - Trade extraction schema/export now includes `stop_loss_mc`, and `trade_log.xlsx` includes `target_exit_low_mc`, `target_exit_high_mc`, and `stop_loss_mc`; Markdown trade logs print a Plan line with targets/stops.
 
 ## Packaged app logs
 

@@ -42,6 +42,7 @@ export interface TradeEvent {
   post_call_offset_label: string | null;
   target_low_mc: number | null;
   target_high_mc: number | null;
+  stop_loss_mc: number | null;
   rationale: string | null;
   pre_transcript_excerpt: string | null;
   post_transcript_excerpt: string | null;
@@ -836,6 +837,7 @@ Use null for any field the transcript / data genuinely doesn't speak to.
     "post_call_offset_ms": <SAME_AS_LABEL_IN_MS_OR_NULL>,
     "target_low_mc": <SPOKEN_TARGET_LOW_INT_OR_NULL>,
     "target_high_mc": <SPOKEN_TARGET_HIGH_INT_OR_NULL>,
+    "stop_loss_mc": <SPOKEN_STOP_LOSS_INT_OR_NULL>,
     "rationale": "<TRADER_S_OWN_WORDS_FOR_WHY_OR_NULL>",
     "pre_transcript_excerpt": "<NEAR_VERBATIM_PRE_QUOTE_OR_NULL>",
     "post_transcript_excerpt": "<NEAR_VERBATIM_POST_QUOTE_OR_NULL>",
@@ -863,7 +865,7 @@ Rules:
 
 **ANTI-FABRICATION (critical):**
 - rationale, outcome_summary, adherence_self_assessment, target_low_mc,
-  target_high_mc, exit_mc_estimate must come DIRECTLY from words the
+  target_high_mc, stop_loss_mc, exit_mc_estimate must come DIRECTLY from words the
   trader said in the transcript. Quote-paraphrase only.
 - DO NOT invent rationale ("strong fundamentals", "bullish setup",
   "good entry") if the trader didn't say something equivalent. If the
@@ -874,6 +876,12 @@ Rules:
   said "I'm going to double this", target_high_mc = entry Ã— 2 IS a
   defensible inference (double is a clear quantitative claim). If they
   said nothing about a target, target_low_mc and target_high_mc are null.
+- Parse explicit profit/stop language. "2x", "double up", or "two-bagger"
+  means target_high_mc is roughly entry_mc_actual * 2 when a MockApe entry
+  market cap is available. "3x" / "three-bagger" means entry_mc_actual * 3.
+  "50% up" means entry_mc_actual * 1.5. "50% loss", "cut it in half",
+  "get out around 3.5k", or "stop at 3.5k" should populate stop_loss_mc
+  when the spoken entry/actual entry gives enough context.
 - pre_transcript_excerpt and post_transcript_excerpt must be VERBATIM
   quotes from the transcript (or near-verbatim with [...] for elision).
   These are evidence â€” the trader will read them to verify your
@@ -1120,6 +1128,7 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
       post_call_offset_label: strOrNull(e.post_call_offset_label),
       target_low_mc: numOrNull(e.target_low_mc),
       target_high_mc: numOrNull(e.target_high_mc),
+      stop_loss_mc: numOrNull(e.stop_loss_mc),
       rationale: strOrNull(e.rationale),
       pre_transcript_excerpt: strOrNull(e.pre_transcript_excerpt),
       post_transcript_excerpt: strOrNull(e.post_transcript_excerpt),
@@ -1208,6 +1217,9 @@ const XLSX_COLUMNS = [
   'time_in_trade_seconds',
   'video_end_time',
   'entry_mc_actual',
+  'target_exit_low_mc',
+  'target_exit_high_mc',
+  'stop_loss_mc',
   'exit_mc_actual',
   'sol_invested',
   'sol_received',
@@ -1270,6 +1282,9 @@ function buildTradeXlsxRow(
     time_in_trade_seconds: timeline.timeInTradeSeconds === null ? '' : String(timeline.timeInTradeSeconds),
     video_end_time: formatTradeTime(timeline.videoEnd),
     entry_mc_actual: formatWholeNumberWithCommas(trade.entry_mc_actual),
+    target_exit_low_mc: formatWholeNumberWithCommas(trade.target_low_mc),
+    target_exit_high_mc: formatWholeNumberWithCommas(trade.target_high_mc),
+    stop_loss_mc: formatWholeNumberWithCommas(trade.stop_loss_mc),
     exit_mc_actual: formatWholeNumberWithCommas(trade.exit_mc_actual),
     sol_invested: formatFixedDecimal(trade.sol_invested, 2),
     sol_received: formatFixedDecimal(trade.sol_received, 2),
@@ -1551,6 +1566,11 @@ function writeTradeLogMd(
       if (t.mockape_join_confidence) {
         lines.push(`- **MockApe match confidence:** ${t.mockape_join_confidence}`);
       }
+    }
+    if (t.target_low_mc !== null || t.target_high_mc !== null || t.stop_loss_mc !== null) {
+      lines.push(
+        `- **Plan:** target exit low $${formatWholeNumberWithCommas(t.target_low_mc) || 'unknown'}; target exit high $${formatWholeNumberWithCommas(t.target_high_mc) || 'unknown'}; stop loss $${formatWholeNumberWithCommas(t.stop_loss_mc) || 'unknown'}`
+      );
     }
     if (t.rationale) lines.push(`- **Rationale:** ${t.rationale}`);
     if (t.outcome_summary) lines.push(`- **Spoken outcome:** ${t.outcome_summary}`);

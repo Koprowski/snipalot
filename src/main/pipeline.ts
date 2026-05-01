@@ -327,9 +327,7 @@ async function mp4ToGif(
   // Use forward slashes for the textfile path inside the filter so we don't
   // have to escape backslashes (Windows native paths use \). Relative paths
   // work because ffmpeg runs in our cwd.
-  const textRel = path
-    .relative(process.cwd(), textfilePath)
-    .replace(/\\/g, '/');
+  const textRel = escapeFfmpegFilterPath(textfilePath);
 
   const filter =
     `[0:v]setpts=PTS/12,fps=12,drawtext=textfile=${textRel}:expansion=normal:x=10:y=10:fontsize=24:fontcolor=white:borderw=2:bordercolor=black,scale=800:-1,split[a][b];` +
@@ -373,6 +371,14 @@ async function extractFrameAt(
     `frame at ${seekSec}s`,
     abortSignal
   );
+}
+
+function escapeFfmpegFilterPath(filePath: string): string {
+  const escaped = filePath
+    .replace(/\\/g, '/')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'");
+  return `'${escaped}'`;
 }
 
 /**
@@ -493,7 +499,70 @@ function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
       break;
     }
   }
-  return out;
+  return filterRepeatedTranscriptSegments(out);
+}
+
+function normalizeTranscriptTextForRepeat(text: string): string {
+  return text
+    .replace(/^\[[^\]]+\]\s*/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function compactRepeatedPhrases(text: string): string {
+  const prefixMatch = text.match(/^(\[[^\]]+\]\s*)([\s\S]*)$/);
+  const prefix = prefixMatch ? prefixMatch[1] : '';
+  let body = prefixMatch ? prefixMatch[2] : text;
+  body = body.replace(
+    /\b([a-z][a-z' ]{2,70}?)(?:,\s+\1\b){2,}/gi,
+    (_match, phrase: string) => `${phrase}, ${phrase}`
+  );
+  body = body.replace(/\b(okay|alright)(?:,\s+\1\b){3,}/gi, '$1, $1');
+  return `${prefix}${body}`;
+}
+
+function filterRepeatedTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+  const recent = new Map<string, { count: number; lastEndSec: number }>();
+  const filtered: TranscriptSegment[] = [];
+  let dropped = 0;
+  let compacted = 0;
+
+  for (const segment of segments) {
+    const cleanedText = compactRepeatedPhrases(segment.text);
+    const normalized = normalizeTranscriptTextForRepeat(cleanedText);
+    if (!normalized) continue;
+
+    for (const [key, value] of recent.entries()) {
+      if (segment.startSec - value.lastEndSec > 90) recent.delete(key);
+    }
+
+    const seen = recent.get(normalized);
+    if (seen && seen.count >= 2 && segment.startSec - seen.lastEndSec <= 90) {
+      seen.count += 1;
+      seen.lastEndSec = segment.endSec;
+      dropped += 1;
+      continue;
+    }
+
+    recent.set(normalized, {
+      count: (seen?.count ?? 0) + 1,
+      lastEndSec: segment.endSec,
+    });
+    if (cleanedText !== segment.text) compacted += 1;
+    filtered.push({ ...segment, text: cleanedText });
+  }
+
+  if (dropped > 0 || compacted > 0) {
+    log('pipeline', 'transcript repetition cleanup', {
+      before: segments.length,
+      after: filtered.length,
+      dropped,
+      compacted,
+    });
+  }
+  return filtered;
 }
 
 function runWhisper(

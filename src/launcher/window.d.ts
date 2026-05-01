@@ -15,6 +15,10 @@ interface Window {
       | { ok: true; kind: 'record' | 'trade' | 'screenshot'; sessionName: string; chars: number }
       | { ok: false; error: string }
     >;
+    copySupportLog: () => Promise<
+      | { ok: true; mode: 'file' | 'text'; path: string; bytes: number }
+      | { ok: false; error: string }
+    >;
     settings: () => Promise<void>;
     exitApp: () => Promise<boolean>;
     toggleMinimize: () => Promise<void>;

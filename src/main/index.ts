@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { execSync, spawn } from 'node:child_process';
-import { log } from './logger';
+import { getLogPath, log } from './logger';
 import { runPipeline, AnnotationRecord, ChapterRecord, TradeMarkerRecord, formatSessionStamp } from './pipeline';
 import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
@@ -1909,6 +1909,59 @@ function runDependencyProbe(
 
 function npmCommand(): string {
   return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+}
+
+function sanitizeSupportLog(contents: string): string {
+  return contents
+    .replace(/(Authorization["']?\s*[:=]\s*["']?Bearer\s+)[^"',\s\\]+/gi, '$1[REDACTED]')
+    .replace(/(Bearer\s+)(sk-[A-Za-z0-9._-]+)/g, '$1[REDACTED]')
+    .replace(/(openaiApiKey["']?\s*[:=]\s*["']?)[^"',\s\\]+/gi, '$1[REDACTED]')
+    .replace(/(apiKey["']?\s*[:=]\s*["']?)[^"',\s\\]+/gi, '$1[REDACTED]')
+    .replace(/sk-or-[A-Za-z0-9._-]+/g, '[REDACTED_OPENROUTER_KEY]')
+    .replace(/sk-[A-Za-z0-9._-]{20,}/g, '[REDACTED_API_KEY]')
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_GOOGLE_API_KEY]');
+}
+
+async function copySupportLogToClipboard(): Promise<
+  | { ok: true; mode: 'file' | 'text'; path: string; bytes: number }
+  | { ok: false; error: string }
+> {
+  const sourcePath = getLogPath();
+  if (!sourcePath || !fs.existsSync(sourcePath)) {
+    return { ok: false, error: 'Log file was not found yet.' };
+  }
+
+  try {
+    const raw = fs.readFileSync(sourcePath, 'utf-8');
+    const sanitized = sanitizeSupportLog(raw);
+    const supportDir = path.join(app.getPath('temp'), 'snipalot-support');
+    fs.mkdirSync(supportDir, { recursive: true });
+    const supportPath = path.join(supportDir, 'snipalot-support.log');
+    fs.writeFileSync(supportPath, sanitized, 'utf-8');
+
+    if (process.platform === 'win32') {
+      const result = await runDependencyProbe(
+        'powershell',
+        ['-NoProfile', '-Command', `Set-Clipboard -LiteralPath "${supportPath}"`],
+        10_000
+      );
+      if (result.ok) {
+        log('launcher', 'support log file copied to clipboard', { supportPath });
+        return { ok: true, mode: 'file', path: supportPath, bytes: Buffer.byteLength(sanitized) };
+      }
+      log('launcher', 'support log file clipboard failed; falling back to text', {
+        error: result.error,
+        stderr: result.stderr.slice(-500),
+      });
+    }
+
+    clipboard.writeText(sanitized);
+    log('launcher', 'support log text copied to clipboard', { supportPath });
+    return { ok: true, mode: 'text', path: supportPath, bytes: Buffer.byteLength(sanitized) };
+  } catch (err) {
+    log('launcher', 'support log copy failed', { err: (err as Error).message });
+    return { ok: false, error: `Could not copy support log: ${(err as Error).message}` };
+  }
 }
 
 ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCliCommand?: string }) => {
@@ -3909,6 +3962,11 @@ ipcMain.handle('launcher:copy-last-prompt', () => {
     ok: false as const,
     error: 'No prompt file found in any session folder',
   };
+});
+
+ipcMain.handle('launcher:copy-support-log', () => {
+  log('launcher', 'copy-support-log click');
+  return copySupportLogToClipboard();
 });
 
 ipcMain.handle('launcher:close-to-tray', () => {

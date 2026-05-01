@@ -17,6 +17,7 @@ const btnScreenshotEl = document.getElementById('btn-screenshot') as HTMLButtonE
 const btnScreenshotLabelEl = document.getElementById('btn-screenshot-label')!;
 const btnTradeEl = document.getElementById('btn-trade') as HTMLButtonElement;
 const btnTradeLabelEl = document.getElementById('btn-trade-label')!;
+const btnCopyLogEl = document.getElementById('btn-copy-log') as HTMLButtonElement;
 const btnSettingsEl = document.getElementById('btn-settings') as HTMLButtonElement;
 const btnMinimizeEl = document.getElementById('btn-minimize') as HTMLButtonElement;
 const btnQuitEl = document.getElementById('btn-quit') as HTMLButtonElement;
@@ -198,6 +199,35 @@ btnTradeEl.addEventListener('click', () => {
 
 btnSettingsEl.addEventListener('click', () => {
   window.snipalotLauncher.settings();
+});
+
+btnCopyLogEl.addEventListener('click', async () => {
+  btnCopyLogEl.disabled = true;
+  const prevTitle = btnCopyLogEl.title;
+  try {
+    const result = await window.snipalotLauncher.copySupportLog();
+    if (result.ok) {
+      btnCopyLogEl.classList.add('copied');
+      btnCopyLogEl.title = result.mode === 'file'
+        ? 'Copied sanitized log file to clipboard'
+        : 'Copied sanitized log text to clipboard';
+      window.snipalotLauncher.log('copy-support-log', 'success', result);
+      setTimeout(() => {
+        btnCopyLogEl.classList.remove('copied');
+        btnCopyLogEl.title = prevTitle;
+      }, 2500);
+    } else {
+      btnCopyLogEl.classList.add('err');
+      btnCopyLogEl.title = result.error;
+      window.snipalotLauncher.log('copy-support-log', 'fail', result);
+      setTimeout(() => {
+        btnCopyLogEl.classList.remove('err');
+        btnCopyLogEl.title = prevTitle;
+      }, 3500);
+    }
+  } finally {
+    btnCopyLogEl.disabled = false;
+  }
 });
 
 btnMinimizeEl.addEventListener('click', () => {

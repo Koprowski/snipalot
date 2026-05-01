@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     | { ok: true; kind: 'record' | 'trade' | 'screenshot'; sessionName: string; chars: number }
     | { ok: false; error: string }
   > => ipcRenderer.invoke('launcher:copy-last-prompt'),
+  copySupportLog: (): Promise<
+    | { ok: true; mode: 'file' | 'text'; path: string; bytes: number }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('launcher:copy-support-log'),
   settings: () => ipcRenderer.invoke('launcher:settings'),
   exitApp: (): Promise<boolean> => ipcRenderer.invoke('settings:exit-app'),
   toggleMinimize: () => ipcRenderer.invoke('launcher:toggle-minimize'),

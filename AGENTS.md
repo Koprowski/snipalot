@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.20)
+## Recent improvements (v1.0.1 onward; current release v1.0.21)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -178,6 +178,8 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - NSIS config now explicitly sets `createStartMenuShortcut: true` and `shortcutName: Snipalot` for both light and full installers so Start Menu shortcut creation no longer relies only on electron-builder defaults.
 - **Windows npm dependency probe fix (v1.0.19 local branch):**
  - Settings dependency checks now launch `npm.cmd` through `cmd.exe /d /c call ...` with cmd-safe quoting. This fixes false "Node/npm missing" results when Node is installed under `C:\Program Files\nodejs` and npm itself works from a normal terminal.
+- **Start Menu shortcut repair (v1.0.21 local branch):**
+ - `resources/installer.nsh` now explicitly recreates `$SMPROGRAMS\Snipalot.lnk` on every install/update and sends a shell change notification, avoiding electron-builder's shortcut-preservation path leaving Start Menu search empty after a prior bad/missing shortcut state.
 
 ## Packaged app logs
 

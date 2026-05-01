@@ -64,3 +64,17 @@ Var pid
     ${endIf}
   ${endIf}
 !macroend
+
+!macro customInstall
+  ; Electron-builder preserves existing shortcut state across upgrades, which can
+  ; leave Start Menu search empty if the previous shortcut was missing. Repair it
+  ; explicitly on every install/update.
+  CreateShortCut "$SMPROGRAMS\Snipalot.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 "" "" "${APP_DESCRIPTION}"
+  ClearErrors
+  WinShell::SetLnkAUMI "$SMPROGRAMS\Snipalot.lnk" "${APP_ID}"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
+!macroend
+
+!macro customUnInstall
+  Delete "$SMPROGRAMS\Snipalot.lnk"
+!macroend

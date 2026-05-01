@@ -2021,7 +2021,7 @@ function resolveNpmExecutable(env: NodeJS.ProcessEnv): string {
 
 function quoteCmdArg(arg: string): string {
   if (!/[\s&()^|<>"]/g.test(arg)) return arg;
-  return `"${arg.replace(/"/g, '\\"')}"`;
+  return `"${arg.replace(/"/g, '""')}"`;
 }
 
 function runNpmDependencyProbe(
@@ -2034,9 +2034,10 @@ function runNpmDependencyProbe(
   }
   const npm = resolveNpmExecutable(env);
   const comspec = process.env.ComSpec || 'cmd.exe';
+  const npmCommand = ['call', quoteCmdArg(npm), ...args.map(quoteCmdArg)].join(' ');
   return runDependencyProbe(
     comspec,
-    ['/d', '/s', '/c', [quoteCmdArg(npm), ...args.map(quoteCmdArg)].join(' ')],
+    ['/d', '/c', npmCommand],
     timeoutMs,
     env
   );

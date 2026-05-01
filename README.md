@@ -2,7 +2,7 @@
 
 ## Download for Windows
 
-**Latest installer:** [Download Snipalot-1.0.18-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.18/Snipalot-1.0.18-setup.exe)
+**Latest installer:** [Download Snipalot-1.0.19-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.19/Snipalot-1.0.19-setup.exe)
 
 Run the installer, then open Snipalot from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. This is the light installer: Settings includes a setup checklist that can download Whisper for local transcription and install/sign in to Gemini CLI for trade extraction.
 
@@ -138,14 +138,14 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **End users** (no Node.js or Git required):
 
-1. **Download the installer** (current release **v1.0.9**):
-   - **Direct:** [Snipalot-1.0.9-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.9/Snipalot-1.0.9-setup.exe)
+1. **Download the installer** (current release **v1.0.19**):
+   - **Direct:** [Snipalot-1.0.19-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.19/Snipalot-1.0.19-setup.exe)
    - Or open **[Releases](https://github.com/Koprowski/snipalot/releases)** and grab the latest **`Snipalot-*-setup.exe`** (NSIS installer, Windows x64).
 2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet).
 
 **Upgrading or reinstalling:** close Snipalot before running a new installer. The launcher **X** exits the app; the tray menu also has **Quit Snipalot**. If the setup still says the app cannot be closed, click **Retry** after quitting (the installer retries several times).
 
-The Windows installer bundles the local Whisper transcription engine and the `ggml-base.en.bin` model, so recording/transcription works without a separate post-install download.
+This is the light installer. Settings includes a setup checklist that can download Whisper for local transcription and install/sign in to Gemini CLI for trade extraction.
 
 **Trade mode + Gemini / API keys:** step-by-step guide in **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)** (same content as **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)**; the doc in `docs/` carries the current download URL). Current Gemini CLI default is `gemini-3.1-pro-preview`; Settings can fetch available Gemini CLI models on the target machine.
 

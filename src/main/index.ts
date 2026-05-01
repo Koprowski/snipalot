@@ -1765,6 +1765,8 @@ interface GeminiCliModelSummary {
 }
 
 const GEMINI_CLI_FALLBACK_MODELS: GeminiCliModelSummary[] = [
+  { id: 'gemini-3-pro-preview', createdAtMs: Date.parse('2025-11-01') || 0 },
+  { id: 'gemini-3-flash-preview', createdAtMs: Date.parse('2025-12-01') || 0 },
   { id: 'gemini-2.5-pro', createdAtMs: Date.parse('2025-03-01') || 0 },
   { id: 'gemini-2.5-flash', createdAtMs: Date.parse('2025-03-01') || 0 },
   { id: 'gemini-2.0-flash', createdAtMs: Date.parse('2024-12-01') || 0 },
@@ -1825,8 +1827,9 @@ async function listOpenRouterModelsWithCache(): Promise<OpenRouterModelSummary[]
 async function listGeminiCliModelsWithCache(_command: string): Promise<GeminiCliModelSummary[]> {
   // Note: Gemini CLI has no `models` subcommand — passing it makes the CLI
   // treat "models" as a positional query and hang in interactive REPL mode.
-  // Just return the curated static list. Users can still type any model
-  // name into the input field manually if they want something off-list.
+  // Just return the curated static list based on the public Gemini model
+  // docs. Users can still type any model name into the input field manually
+  // if their CLI/account exposes something off-list.
   return [...GEMINI_CLI_FALLBACK_MODELS].sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
 }
 
@@ -1847,7 +1850,7 @@ ipcMain.handle(
     if (mode === 'gemini-cli') {
       const result = await testGeminiCliConnection(
         payload?.geminiCliCommand ?? 'gemini',
-        payload?.geminiCliModel ?? 'gemini-2.5-flash'
+        payload?.geminiCliModel ?? 'gemini-2.5-pro'
       );
       return { ok: result.ok, mode, message: result.message, guidance: result.guidance };
     }

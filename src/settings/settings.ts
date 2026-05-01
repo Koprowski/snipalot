@@ -76,7 +76,7 @@ let editedOpenaiBaseUrl = '';
 let editedOpenaiModel = '';
 let editedLlmMode: 'gemini-cli' | 'api' = 'gemini-cli';
 let editedGeminiCliCommand = 'gemini';
-let editedGeminiCliModel = 'gemini-3.1-pro-preview';
+let editedGeminiCliModel = 'gemini-2.5-pro';
 let fetchedGeminiCliModels: Array<{ id: string; createdAtMs: number }> = [];
 let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostPer1M: number }> = [];
 // Working copy of the capture mode + countdown duration.
@@ -166,7 +166,7 @@ async function init(): Promise<void> {
   editedOpenaiModel = cfgTrade?.openaiModel ?? 'google/gemini-2.5-flash';
   editedLlmMode = cfgTrade?.llmMode ?? 'gemini-cli';
   editedGeminiCliCommand = cfgTrade?.geminiCliCommand ?? 'gemini';
-  editedGeminiCliModel = cfgTrade?.geminiCliModel ?? 'gemini-3.1-pro-preview';
+  editedGeminiCliModel = normalizeGeminiCliModel(cfgTrade?.geminiCliModel ?? 'gemini-2.5-pro');
 
   const llmModeSelect = document.getElementById('trade-llm-mode') as HTMLSelectElement;
   llmModeSelect.value = editedLlmMode;
@@ -468,7 +468,7 @@ btnTestLlmConnection.addEventListener('click', async () => {
   const baseUrl = editedOpenaiBaseUrl.trim() || 'https://openrouter.ai/api/v1';
   const model = editedOpenaiModel.trim() || 'google/gemini-2.5-flash';
   const cliCommand = editedGeminiCliCommand.trim() || 'gemini';
-  const cliModel = editedGeminiCliModel.trim() || 'gemini-3.1-pro-preview';
+  const cliModel = normalizeGeminiCliModel(editedGeminiCliModel.trim() || 'gemini-2.5-pro');
 
   if (editedLlmMode === 'api' && !openaiKey) {
     setStatus('API mode: enter OpenRouter/OpenAI API key first.', true);
@@ -530,7 +530,7 @@ btnFetchOpenRouterModels.addEventListener('click', async () => {
 
 btnFetchGeminiCliModels.addEventListener('click', async () => {
   btnFetchGeminiCliModels.disabled = true;
-  setStatus('Fetching latest Gemini CLI models…');
+  setStatus('Loading Gemini CLI model list…');
   try {
     const models = await api.listGeminiCliModels(editedGeminiCliCommand.trim() || 'gemini');
     fetchedGeminiCliModels = models
@@ -538,7 +538,7 @@ btnFetchGeminiCliModels.addEventListener('click', async () => {
       .map((m) => ({ id: m.id, createdAtMs: m.createdAtMs ?? 0 }))
       .sort((a, b) => b.createdAtMs - a.createdAtMs || a.id.localeCompare(b.id));
     renderGeminiCliModelOptions();
-    setStatus(`Fetched ${fetchedGeminiCliModels.length} Gemini CLI models.`);
+    setStatus(`Loaded ${fetchedGeminiCliModels.length} Gemini CLI models. Preview models may require newer CLI/account access.`);
   } catch (err) {
     setStatus(`Failed to fetch Gemini CLI models: ${(err as Error).message}`, true);
   } finally {
@@ -722,6 +722,10 @@ function renderGeminiCliModelOptions(): void {
     geminiCliModelsSelect.appendChild(opt);
   }
   geminiCliModelsSelect.size = Math.max(1, Math.min(5, filtered.length));
+}
+
+function normalizeGeminiCliModel(model: string): string {
+  return model === 'gemini-3.1-pro-preview' ? 'gemini-2.5-pro' : model;
 }
 
 // ─── boot ──────────────────────────────────────────────────────────────

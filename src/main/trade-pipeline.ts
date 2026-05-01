@@ -219,7 +219,7 @@ export async function runTradePipeline(
 
   if (llmMode === 'gemini-cli') {
     const cliCommand = (cfg.geminiCliCommand || 'gemini').trim();
-    const cliModel = (cfg.geminiCliModel || 'gemini-2.5-flash').trim();
+    const cliModel = (cfg.geminiCliModel || 'gemini-2.5-pro').trim();
     try {
       autoSucceeded = await tryGeminiCli(promptText, responsePath, cliCommand, cliModel, onStep, undefined, abortSignal);
       autoLabel = 'Gemini CLI';

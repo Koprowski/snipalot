@@ -34,7 +34,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createStartMenuShortcut: true
   shortcutName: Snipalot
-  runAfterFinish: false
+  runAfterFinish: true
   warningsAsErrors: false
   artifactName: Snipalot-${version}-full-setup.exe
 publish:

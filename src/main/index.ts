@@ -1769,8 +1769,16 @@ function findBundledWhisperDependency(): {
   modelPath?: string;
 } {
   const roots = app.isPackaged
-    ? [path.join(process.resourcesPath || '', 'resources'), path.join(process.cwd(), 'resources')]
-    : [path.join(process.cwd(), 'resources'), path.join(process.resourcesPath || '', 'resources')];
+    ? [
+        path.join(app.getPath('userData'), 'resources'),
+        path.join(process.resourcesPath || '', 'resources'),
+        path.join(process.cwd(), 'resources'),
+      ]
+    : [
+        path.join(process.cwd(), 'resources'),
+        path.join(app.getPath('userData'), 'resources'),
+        path.join(process.resourcesPath || '', 'resources'),
+      ];
   for (const root of roots) {
     if (!root || !fs.existsSync(root)) continue;
     const binDir = path.join(root, 'bin', 'whisper');
@@ -1788,8 +1796,76 @@ function findBundledWhisperDependency(): {
   }
   return {
     ok: false,
-    message: 'Bundled Whisper files were not found. Reinstall the latest Snipalot setup EXE.',
+    message: 'Whisper files were not found. Use Install Whisper in this setup checklist.',
   };
+}
+
+const WHISPER_RELEASE_TAG = 'v1.8.4';
+const WHISPER_ZIP_NAME = 'whisper-blas-bin-x64.zip';
+const WHISPER_ZIP_URL =
+  `https://github.com/ggerganov/whisper.cpp/releases/download/${WHISPER_RELEASE_TAG}/${WHISPER_ZIP_NAME}`;
+const WHISPER_MODEL_URL =
+  'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin';
+
+async function downloadFile(url: string, dest: string): Promise<number> {
+  const res = await fetch(url, { redirect: 'follow' });
+  if (!res.ok) throw new Error(`Download failed (${res.status}) for ${url}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, buffer);
+  return buffer.length;
+}
+
+async function installWhisperDependency(): Promise<{ ok: boolean; message: string; exePath?: string; modelPath?: string }> {
+  const existing = findBundledWhisperDependency();
+  if (existing.ok) return existing;
+
+  const root = path.join(app.getPath('userData'), 'resources');
+  const binDir = path.join(root, 'bin', 'whisper');
+  const modelPath = path.join(root, 'models', 'ggml-base.en.bin');
+  const zipPath = path.join(binDir, WHISPER_ZIP_NAME);
+
+  try {
+    log('settings', 'whisper install start', { root });
+    if (!fs.existsSync(modelPath) || fs.statSync(modelPath).size < 100_000_000) {
+      const bytes = await downloadFile(WHISPER_MODEL_URL, modelPath);
+      log('settings', 'whisper model downloaded', { modelPath, bytes });
+    }
+
+    const exeExists =
+      fs.existsSync(path.join(binDir, 'whisper-cli.exe')) ||
+      fs.existsSync(path.join(binDir, 'main.exe'));
+    if (!exeExists) {
+      const bytes = await downloadFile(WHISPER_ZIP_URL, zipPath);
+      log('settings', 'whisper binary zip downloaded', { zipPath, bytes });
+      const extract = await runDependencyProbe(
+        'powershell',
+        ['-NoProfile', '-Command', `Expand-Archive -LiteralPath "${zipPath}" -DestinationPath "${binDir}" -Force`],
+        2 * 60 * 1000
+      );
+      if (!extract.ok) {
+        throw new Error(`Whisper zip extraction failed: ${(extract.stderr || extract.error || '').slice(-500)}`);
+      }
+    }
+
+    const installed = findBundledWhisperDependency();
+    if (!installed.ok) {
+      return {
+        ok: false,
+        message: 'Whisper downloaded, but Snipalot could not verify the executable and model.',
+      };
+    }
+    return {
+      ...installed,
+      message: `Whisper installed under ${root}.`,
+    };
+  } catch (err) {
+    log('settings', 'whisper install failed', { err: (err as Error).message });
+    return {
+      ok: false,
+      message: `Whisper install failed: ${(err as Error).message}`,
+    };
+  }
 }
 
 function runDependencyProbe(
@@ -1920,6 +1996,10 @@ ipcMain.handle('settings:install-gemini-cli', async () => {
     stdoutTail,
     stderrTail,
   };
+});
+
+ipcMain.handle('settings:install-whisper', async () => {
+  return installWhisperDependency();
 });
 
 interface OpenRouterModelSummary {

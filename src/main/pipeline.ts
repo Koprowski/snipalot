@@ -389,10 +389,15 @@ function findWhisperBinary(): { exe: string; model: string } | null {
   // not contain whisper even when the bundle does.
   const candidates = app.isPackaged
     ? [
+        path.join(app.getPath('userData'), 'resources'),
         path.join(process.resourcesPath || '', 'resources'),
         path.join(process.cwd(), 'resources'),
       ]
-    : [path.join(process.cwd(), 'resources'), path.join(process.resourcesPath || '', 'resources')];
+    : [
+        path.join(process.cwd(), 'resources'),
+        path.join(app.getPath('userData'), 'resources'),
+        path.join(process.resourcesPath || '', 'resources'),
+      ];
 
   for (const root of candidates) {
     if (!root || !fs.existsSync(root)) continue;
@@ -888,7 +893,7 @@ function buildPromptText(args: {
     '    frames below (if any) — those are PNGs captured at exact times.',
     transcriptPath
       ? `- Transcript (timestamped): ${transcriptPath}`
-      : '- Transcript unavailable (whisper.cpp not installed — run `npm run fetch-resources`)',
+      : '- Transcript unavailable (Whisper is not installed — open Settings > Trade Mode > Install Whisper)',
     `- Structured metadata (annotations, region, durations): ${annotationsPath}`,
   ].join('\n');
 
@@ -1022,7 +1027,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const audioBranch = (async () => {
     if (!whisper) {
       warnings.push(
-        'whisper.cpp + model not installed — run `npm run fetch-resources`; skipped transcription'
+        'Whisper is not installed — open Settings > Trade Mode > Install Whisper; skipped transcription'
       );
       return;
     }

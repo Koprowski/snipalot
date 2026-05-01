@@ -14,8 +14,6 @@ extraResources:
     to: resources
     filter:
       - '**/*'
-      - '!bin/whisper/**'
-      - '!models/**'
       - '!models/**/.gitkeep'
 win:
   target:
@@ -33,7 +31,7 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   warningsAsErrors: false
-  artifactName: Snipalot-${version}-setup.exe
+  artifactName: Snipalot-${version}-full-setup.exe
 publish:
   provider: github
   releaseType: draft

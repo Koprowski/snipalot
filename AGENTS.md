@@ -6,13 +6,13 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 
 - **Stack:** Electron 41, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
-- **Windows installer (local):** On a Windows machine, `npm run package` produces **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe.
-- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.9`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`** then **`npm run package:nopublish`** on `windows-latest`; the package script fetches/asserts Whisper resources before building. **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
+- **Windows installer (local):** On a Windows machine, `npm run package` produces the default **light installer** at **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe. Use `npm run package:full` only when intentionally building a large bundled-Whisper installer from `electron-builder.full.yml`.
+- **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.10`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`** then **`npm run package:nopublish`** on `windows-latest`. The default release artifact is now the light installer; Settings installs/checks Whisper and Gemini after first launch. **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
 - **Linux:** `npm run package` on Linux produces AppImage/Snap only, not the Windows setup exe.
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.9)
+## Recent improvements (v1.0.1 onward; current release v1.0.10)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -133,6 +133,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Main now logs the active capture config whenever Record/Screenshot/Trade selection begins, which helps support verify whether fullscreen vs region mode was actually loaded from `%USERPROFILE%\.snipalot\config.json`.
  - `targetOverlay()` now reports whether a targeted overlay send succeeded and queues sends while an overlay is still loading; fullscreen capture falls back to region selection with a notification if the cursor-display overlay cannot be reached.
  - Record/trade startup now catches `desktopCapturer.getSources()` errors and missing display-source matches after confirmation, exits selection mode, and returns to idle instead of leaving the fullscreen transparent overlay stuck in boundary-selection mode.
+- **Light installer rollout (v1.0.10 local branch):**
+ - Default `npm run package`, `package:nopublish`, CI release workflow, and portable builds no longer run `fetch-resources` or require bundled Whisper; `electron-builder.yml` excludes `resources/bin/whisper/**` and `resources/models/**`.
+ - `npm run package:full` / `package:full:nopublish` remain available for later large bundled-Whisper builds via `electron-builder.full.yml`.
+ - Settings now exposes **Install Whisper**, which downloads whisper.cpp + `ggml-base.en.bin` into `%APPDATA%\Snipalot\resources`; pipeline and dependency checks search that user-data path before packaged resources.
 
 ## Packaged app logs
 

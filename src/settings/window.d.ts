@@ -58,6 +58,12 @@ interface Window {
       stdoutTail?: string;
       stderrTail?: string;
     }>;
+    installWhisper: () => Promise<{
+      ok: boolean;
+      message: string;
+      exePath?: string;
+      modelPath?: string;
+    }>;
     geminiCliSigninStatus: () => Promise<{ signedIn: boolean; subject?: string | null }>;
     geminiCliSignin: (payload: { command?: string }) => Promise<{ ok: boolean; message: string; subject?: string }>;
     geminiCliSigninCancel: () => Promise<{ ok: boolean; message?: string }>;

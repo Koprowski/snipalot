@@ -15,6 +15,7 @@ const btnFetchOpenRouterModels = document.getElementById('btn-fetch-openrouter-m
 const btnFetchGeminiCliModels = document.getElementById('btn-fetch-gemini-cli-models') as HTMLButtonElement;
 const btnCheckUpdates = document.getElementById('btn-check-updates') as HTMLButtonElement;
 const btnCheckDependencies = document.getElementById('btn-check-dependencies') as HTMLButtonElement;
+const btnInstallWhisper = document.getElementById('btn-install-whisper') as HTMLButtonElement;
 const btnInstallGeminiCli = document.getElementById('btn-install-gemini-cli') as HTMLButtonElement;
 const btnOpenNodejs = document.getElementById('btn-open-nodejs') as HTMLButtonElement;
 const dependencyStatusEl = document.getElementById('dependency-status') as HTMLElement;
@@ -228,6 +229,9 @@ async function init(): Promise<void> {
   btnCheckDependencies.addEventListener('click', () => {
     void refreshDependencyStatus();
   });
+  btnInstallWhisper.addEventListener('click', () => {
+    void installWhisperFromSettings();
+  });
   btnInstallGeminiCli.addEventListener('click', () => {
     void installGeminiCliFromSettings();
   });
@@ -252,10 +256,29 @@ async function refreshDependencyStatus(): Promise<void> {
       `${result.node.ok ? 'OK' : 'Missing'} - Node/npm: ${result.node.message}`,
       `${result.geminiCli.ok ? 'OK' : 'Missing'} - Gemini CLI: ${result.geminiCli.message}`,
     ].join('\n');
+    btnInstallWhisper.disabled = result.whisper.ok;
     btnInstallGeminiCli.disabled = !result.node.ok || result.geminiCli.ok;
   } catch (err) {
     dependencyStatusEl.textContent = `Dependency check failed: ${(err as Error).message}`;
+    btnInstallWhisper.disabled = false;
     btnInstallGeminiCli.disabled = false;
+  } finally {
+    btnCheckDependencies.disabled = false;
+  }
+}
+
+async function installWhisperFromSettings(): Promise<void> {
+  btnInstallWhisper.disabled = true;
+  btnCheckDependencies.disabled = true;
+  dependencyStatusEl.textContent = 'Installing Whisper... downloading the local speech model can take a few minutes.';
+  try {
+    const result = await api.installWhisper();
+    dependencyStatusEl.textContent = result.ok
+      ? `${result.message}\n\nRechecking dependencies...`
+      : result.message;
+    await refreshDependencyStatus();
+  } catch (err) {
+    dependencyStatusEl.textContent = `Whisper install failed: ${(err as Error).message}`;
   } finally {
     btnCheckDependencies.disabled = false;
   }

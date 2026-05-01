@@ -139,16 +139,17 @@
         <div class="field-row" id="dependency-setup-row" style="margin-top:14px;padding:10px;background:var(--surface,#1a1a1f);border-radius:6px;border:1px solid var(--border,#333)">
           <label style="font-weight:600">Setup checklist</label>
           <p class="info" style="margin-top:2px">
-            Snipalot bundles Whisper for transcription. Trade auto-extraction also needs either Gemini CLI with Google sign-in, or an OpenRouter/OpenAI API key.
+            Snipalot installs Whisper for local transcription after setup. Trade auto-extraction also needs either Gemini CLI with Google sign-in, or an OpenRouter/OpenAI API key.
           </p>
           <div id="dependency-status" class="info" style="margin-top:8px;white-space:pre-wrap">Checking dependencies...</div>
           <div class="input-row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
             <button class="btn" id="btn-check-dependencies" type="button">Check Dependencies</button>
+            <button class="btn" id="btn-install-whisper" type="button">Install Whisper</button>
             <button class="btn" id="btn-install-gemini-cli" type="button">Install Gemini CLI</button>
             <button class="btn" id="btn-open-nodejs" type="button">Open Node.js Download</button>
           </div>
           <p class="info" style="margin-top:6px;font-size:11px">
-            If Gemini CLI is not installed, Snipalot can install it with npm when Node.js is available. After that, use Sign in with Google below.
+            Whisper downloads the local speech engine and English model. If Gemini CLI is not installed, Snipalot can install it with npm when Node.js is available. After that, use Sign in with Google below.
           </p>
         </div>
 

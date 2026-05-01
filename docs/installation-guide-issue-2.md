@@ -3,7 +3,7 @@
 **Mirror of [GitHub Issue #2](https://github.com/Koprowski/snipalot/issues/2).**  
 When the download URL changes, update this file and paste its body into the issue (or edit the issue on GitHub).
 
-**Current installer (latest):** [Snipalot-1.0.9-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.9/Snipalot-1.0.9-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
+**Current installer (latest):** [Snipalot-1.0.10-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.10/Snipalot-1.0.10-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
 
 **Before reinstalling:** quit Snipalot first. The launcher **X** exits the app; the tray menu also has **Quit Snipalot**.
 
@@ -17,32 +17,37 @@ Snipalot is a Windows screen-recording tool with a **Trade mode** built for meme
 
 ## Step 1 — Download and install Snipalot
 
-**[⬇ Download Snipalot-1.0.9-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.9/Snipalot-1.0.9-setup.exe)**
+**[⬇ Download Snipalot-1.0.10-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.10/Snipalot-1.0.10-setup.exe)**
 
 1. Click the link above to download the installer
-2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.9-setup.exe**
+2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.10-setup.exe**
 3. If Windows shows a blue "Windows protected your PC" warning, click **More info** → **Run anyway**
 4. Click through the installer (Next → Install → Finish)
 5. Snipalot now appears in your **Start menu** — press the Windows key and type **Snipalot** to launch it any time
 
-> No Node.js, Git, or command line needed.
+> This is the light installer. Snipalot downloads Whisper and Gemini CLI from Settings after install instead of packing them into the setup EXE.
 
 ---
 
-## Step 2 — Set up Trade-mode AI
+## Step 2 — Complete the setup checklist
+
+1. Launch Snipalot from the Start menu
+2. Click the **⚙ gear icon** in the launcher
+3. Scroll to **Trade Mode → Setup checklist**
+4. Click **Install Whisper** if Whisper is missing
+5. Click **Check Dependencies** again and confirm Whisper is OK
+
+---
+
+## Step 3 — Set up Trade-mode AI
 
 Snipalot can analyze trades with either Gemini CLI (recommended, no API key) or an OpenRouter/OpenAI-compatible API key.
 
 ### Option A — Gemini CLI (recommended, no API key)
 
-1. Install Node.js 20+ from **https://nodejs.org/**
-2. Open PowerShell and run:
-
-   ```
-   npm install -g @google/gemini-cli
-   ```
-
-3. Launch Snipalot, open **Settings → Trade Mode**, keep **LLM backend** set to **Gemini CLI**
+1. Install Node.js 20+ from **https://nodejs.org/** if the setup checklist says Node/npm is missing
+2. In **Settings → Trade Mode**, click **Install Gemini CLI** if Gemini CLI is missing
+3. Keep **LLM backend** set to **Gemini CLI**
 4. Click **Sign in with Google** and complete the browser login
 5. Click **Test LLM Connection**, then **Save**
 
@@ -55,7 +60,7 @@ This uses free Gemini Code Assist quota. No Gemini API key is needed.
 
 ---
 
-## Step 3 — Optional API-key fallback
+## Step 4 — Optional API-key fallback
 
 1. Launch Snipalot from the Start menu
 2. Click the **⚙ gear icon** in the top-right of the launcher window
@@ -66,7 +71,7 @@ This uses free Gemini Code Assist quota. No Gemini API key is needed.
 
 ---
 
-## Step 4 — Record your first trade session
+## Step 5 — Record your first trade session
 
 1. Launch Snipalot from the Start menu
 2. Click the **violet Trade button** in the launcher (or press `Ctrl+Shift+T`)

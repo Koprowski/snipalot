@@ -2,9 +2,9 @@
 
 ## Download for Windows
 
-**Latest installer:** [Download Snipalot-1.0.9-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.9/Snipalot-1.0.9-setup.exe)
+**Latest installer:** [Download Snipalot-1.0.10-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.10/Snipalot-1.0.10-setup.exe)
 
-Run the installer, then open Snipalot from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. The installer includes Whisper transcription and the base English model, so recording and transcription work without installing Whisper separately.
+Run the installer, then open Snipalot from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. This is the light installer: Settings includes a setup checklist that can download Whisper for local transcription and install/sign in to Gemini CLI for trade extraction.
 
 A Windows desktop tool for giving AI feedback on your screen — by talking, annotating, and capturing. Three capture modes cover everything from a quick screenshot to a long trading session.
 
@@ -64,6 +64,7 @@ The launcher is a small always-available control panel that lives in your taskba
 - **Copy Last Prompt** — copies the most recent generated prompt to clipboard without reopening anything
 - **Pin** — keeps the launcher on top of other windows
 - **Settings** — output folder, hotkeys, capture mode, countdown duration
+- **Settings → Trade Mode → Setup checklist** — install/check Whisper, Node/npm, Gemini CLI, and Google sign-in
 - **X** — exits Snipalot. Minimize keeps the launcher available from the taskbar.
 
 ---

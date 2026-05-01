@@ -2083,11 +2083,11 @@ function sanitizeSupportLog(contents: string): string {
   return contents
     .replace(/(Authorization["']?\s*[:=]\s*["']?Bearer\s+)[^"',\s\\]+/gi, '$1[REDACTED]')
     .replace(/(Bearer\s+)(sk-[A-Za-z0-9._-]+)/g, '$1[REDACTED]')
-    .replace(/(openaiApiKey["']?\s*[:=]\s*["']?)[^"',\s\\]+/gi, '$1[REDACTED]')
-    .replace(/(apiKey["']?\s*[:=]\s*["']?)[^"',\s\\]+/gi, '$1[REDACTED]')
+    .replace(/((?:openaiApiKey|geminiApiKey|apiKey|token|secret|password)["']?\s*[:=]\s*["']?)[^"',\s\\]+/gi, '$1[REDACTED]')
     .replace(/sk-or-[A-Za-z0-9._-]+/g, '[REDACTED_OPENROUTER_KEY]')
     .replace(/sk-[A-Za-z0-9._-]{20,}/g, '[REDACTED_API_KEY]')
-    .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_GOOGLE_API_KEY]');
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_GOOGLE_API_KEY]')
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]');
 }
 
 async function copySupportLogToClipboard(): Promise<

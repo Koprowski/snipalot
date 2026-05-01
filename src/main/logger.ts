@@ -7,6 +7,8 @@ import { app } from 'electron';
 // (e.g. C:\Program Files\Snipalot) — that hits EPERM. Use Electron's logs dir.
 let logPath: string | null = null;
 let initialized = false;
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+const MAX_ROTATED_LOGS = 3;
 
 function logDir(): string {
   try {
@@ -25,6 +27,7 @@ function ensureInit(): void {
   try {
     if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
     logPath = path.join(outDir, 'snipalot.log');
+    rotateLogIfNeeded(logPath);
   } catch {
     // Last resort: temp dir so logging never takes down the app
     try {
@@ -53,21 +56,53 @@ function ensureInit(): void {
   initialized = true;
 }
 
+function rotateLogIfNeeded(currentPath: string): void {
+  try {
+    if (!fs.existsSync(currentPath)) return;
+    const stat = fs.statSync(currentPath);
+    if (stat.size < MAX_LOG_BYTES) return;
+
+    for (let i = MAX_ROTATED_LOGS; i >= 1; i--) {
+      const from = `${currentPath}.${i}`;
+      const to = `${currentPath}.${i + 1}`;
+      if (i === MAX_ROTATED_LOGS && fs.existsSync(from)) {
+        fs.rmSync(from, { force: true });
+      } else if (fs.existsSync(from)) {
+        fs.renameSync(from, to);
+      }
+    }
+    fs.renameSync(currentPath, `${currentPath}.1`);
+  } catch {
+    // Logging must never prevent the app from launching.
+  }
+}
+
+function sanitizeLogText(text: string): string {
+  return text
+    .replace(/(Authorization["']?\s*[:=]\s*["']?Bearer\s+)[^"',\s\\]+/gi, '$1[REDACTED]')
+    .replace(/(Bearer\s+)(sk-[A-Za-z0-9._-]+)/g, '$1[REDACTED]')
+    .replace(/((?:openaiApiKey|geminiApiKey|apiKey|token|secret|password)["']?\s*[:=]\s*["']?)[^"',\s\\]+/gi, '$1[REDACTED]')
+    .replace(/sk-or-[A-Za-z0-9._-]+/g, '[REDACTED_OPENROUTER_KEY]')
+    .replace(/sk-[A-Za-z0-9._-]{20,}/g, '[REDACTED_API_KEY]')
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED_GOOGLE_API_KEY]')
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]');
+}
+
+function stringifyLogArg(arg: unknown): string {
+  if (typeof arg === 'string') return arg;
+  if (arg instanceof Error) return `${arg.message}\n${arg.stack ?? ''}`;
+  try {
+    return JSON.stringify(arg);
+  } catch {
+    return String(arg);
+  }
+}
+
 export function log(scope: string, ...args: unknown[]): void {
   ensureInit();
   if (!logPath) return;
   const ts = new Date().toISOString();
-  const parts = args
-    .map((a) => {
-      if (typeof a === 'string') return a;
-      if (a instanceof Error) return `${a.message}\n${a.stack ?? ''}`;
-      try {
-        return JSON.stringify(a);
-      } catch {
-        return String(a);
-      }
-    })
-    .join(' ');
+  const parts = sanitizeLogText(args.map(stringifyLogArg).join(' '));
   const line = `[${ts}] [pid=${process.pid}] [${scope}] ${parts}\n`;
   try {
     fs.appendFileSync(logPath, line);

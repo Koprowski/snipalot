@@ -77,11 +77,22 @@ let appExitRequested = false;
 let recorderRendererReady = false;
 let pendingRecorderStartRegion: RegionSelection | null = null;
 let pendingRecorderStartTimeout: NodeJS.Timeout | null = null;
+let captureSurfacesInitialized = false;
 
 function clearPendingRecorderStartTimeout(): void {
   if (pendingRecorderStartTimeout) {
     clearTimeout(pendingRecorderStartTimeout);
     pendingRecorderStartTimeout = null;
+  }
+}
+
+function initializeCaptureSurfaces(reason: string): void {
+  if (captureSurfacesInitialized) return;
+  captureSurfacesInitialized = true;
+  log('main', 'initialize capture surfaces', { reason });
+  rebuildOverlays();
+  if (!recorderWindow || recorderWindow.isDestroyed()) {
+    recorderWindow = createRecorderWindow();
   }
 }
 
@@ -2835,6 +2846,7 @@ ipcMain.handle(
 );
 
 function rebuildOverlays(): void {
+  captureSurfacesInitialized = true;
   log('main', 'rebuildOverlays');
   for (const [id, win] of overlayWindows) {
     log('main', 'closing existing overlay', { id });
@@ -3036,6 +3048,7 @@ function getCursorDisplayId(): string {
  * Returns true if a fullscreen short-circuit was used.
  */
 function dispatchRegionEntry(captureMode: 'region' | 'fullscreen' | 'window', countdownSec: number): void {
+  initializeCaptureSurfaces('capture requested');
   if (captureMode === 'fullscreen') {
     const targetId = getCursorDisplayId();
     const sent = targetOverlay(targetId, 'overlay:enter-region-select', {
@@ -4374,8 +4387,6 @@ app.whenReady().then(() => {
     return permission === 'media';
   });
 
-  rebuildOverlays();
-  recorderWindow = createRecorderWindow();
   launcherWindow = createLauncherWindow();
 
   // System tray — persistent access point independent of the launcher.
@@ -4394,10 +4405,17 @@ app.whenReady().then(() => {
     },
   });
 
+  // Defer the heavyweight hidden capture windows until after the visible
+  // launcher has had a chance to paint. When the installer auto-launches
+  // Snipalot from the Finish button, creating full-display transparent
+  // overlays before any visible window can make Windows mark the new app
+  // as "Not Responding" even though startup eventually completes.
+  setTimeout(() => initializeCaptureSurfaces('post-launch deferred init'), 600);
+
   // First-run onboarding: open settings so the user can pick an output dir.
   if (cfg.firstRun) {
     // Slight delay so the launcher renders first, giving context.
-    setTimeout(() => openSettings(true), 800);
+    setTimeout(() => openSettings(true), 1200);
   }
 
   screen.on('display-added', () => {

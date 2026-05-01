@@ -129,6 +129,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Gemini CLI default/recommended model is `gemini-3.1-pro-preview`. Current official Gemini 3 docs list Gemini 3.1 Pro with model id `gemini-3.1-pro-preview` and state all Gemini 3 models are currently preview; Settings includes current Gemini 3.1/3 preview ids in the curated model list and warns users to test CLI/account access before saving.
  - Trade extraction schema/prompt now includes `leg_index`, `leg_count`, and `position_fraction`, with explicit instructions to split scaled entries/exits into multiple rows when the transcript indicates partial fills/trims.
  - `joinMockApeById()` now apportions aggregate MockApe size/P&L across multiple rows sharing the same `mockape_trade_id` using `position_fraction` when provided, or equal shares as fallback.
+- **Recording start hardening (local branch):**
+ - Main now logs the active capture config whenever Record/Screenshot/Trade selection begins, which helps support verify whether fullscreen vs region mode was actually loaded from `%USERPROFILE%\.snipalot\config.json`.
+ - `targetOverlay()` now reports whether a targeted overlay send succeeded and queues sends while an overlay is still loading; fullscreen capture falls back to region selection with a notification if the cursor-display overlay cannot be reached.
+ - Record/trade startup now catches `desktopCapturer.getSources()` errors and missing display-source matches after confirmation, exits selection mode, and returns to idle instead of leaving the fullscreen transparent overlay stuck in boundary-selection mode.
 
 ## Packaged app logs
 

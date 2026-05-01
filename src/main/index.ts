@@ -2532,13 +2532,21 @@ function broadcastOverlay(channel: string, payload?: unknown): void {
   }
 }
 
-function targetOverlay(displayId: string, channel: string, payload?: unknown): void {
+function targetOverlay(displayId: string, channel: string, payload?: unknown): boolean {
   const win = overlayWindows.get(displayId);
   if (!win || win.isDestroyed()) {
     log('main', 'targetOverlay missing', { displayId, channel });
-    return;
+    return false;
+  }
+  if (win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', () => {
+      if (!win.isDestroyed()) win.webContents.send(channel, payload);
+    });
+    log('main', 'targetOverlay queued until overlay load completes', { displayId, channel });
+    return true;
   }
   win.webContents.send(channel, payload);
+  return true;
 }
 
 function notifyHud(channel: string, payload?: unknown): void {
@@ -2636,11 +2644,15 @@ function getCursorDisplayId(): string {
 function dispatchRegionEntry(captureMode: 'region' | 'fullscreen' | 'window', countdownSec: number): void {
   if (captureMode === 'fullscreen') {
     const targetId = getCursorDisplayId();
-    targetOverlay(targetId, 'overlay:enter-region-select', {
+    const sent = targetOverlay(targetId, 'overlay:enter-region-select', {
       countdownSec,
       mode: 'fullscreen',
     });
-    log('state', 'dispatchRegionEntry: fullscreen mode', { targetId, countdownSec });
+    log('state', 'dispatchRegionEntry: fullscreen mode', { targetId, countdownSec, sent });
+    if (!sent) {
+      showNotification('Snipalot', 'Could not reach the fullscreen overlay. Falling back to region selection.');
+      broadcastOverlay('overlay:enter-region-select', { countdownSec, mode: 'region' });
+    }
   } else {
     // 'region' (and 'window' fallback for now) → the existing drag-to-select
     // flow, broadcast to all overlays.
@@ -2655,6 +2667,7 @@ function enterSelecting(): void {
   }
   setAppState('selecting', 'user toggle from idle');
   const cfg = getConfig().capture;
+  log('state', 'enterSelecting capture config', cfg);
   dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
@@ -2672,6 +2685,7 @@ function enterSelectingScreenshot(): void {
   }
   setAppState('selecting-screenshot', 'screenshot button from idle');
   const cfg = getConfig().capture;
+  log('state', 'enterSelectingScreenshot capture config', cfg);
   dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
@@ -2690,6 +2704,7 @@ function enterSelectingTrade(): void {
   }
   setAppState('selecting-trade', 'trade button from idle');
   const cfg = getConfig().capture;
+  log('state', 'enterSelectingTrade capture config', cfg);
   dispatchRegionEntry(cfg.mode, cfg.countdownSec);
 }
 
@@ -2704,6 +2719,12 @@ function exitSelecting(reason: string): void {
   pendingRegion = null;
   activeDisplayId = null;
   activeSourceId = null;
+}
+
+function failSelectionStart(reason: string, userMessage: string, details?: unknown): void {
+  log('overlay', 'selection start failed', { reason, details });
+  showNotification('Snipalot', userMessage);
+  exitSelecting(reason);
 }
 
 /**
@@ -3072,8 +3093,11 @@ ipcMain.handle(
       .getAllDisplays()
       .find((d) => String(d.id) === payload.displayId);
     if (!display) {
-      log('overlay', 'no display matched', { displayId: payload.displayId });
-      showNotification('Snipalot', `No display matched id ${payload.displayId}`);
+      failSelectionStart(
+        'no display matched after region confirmed',
+        `No display matched id ${payload.displayId}`,
+        { displayId: payload.displayId }
+      );
       return;
     }
 
@@ -3127,32 +3151,43 @@ ipcMain.handle(
     //    difference is the AppState transition (recording vs trading) and
     //    currentSessionMode, which the pipeline reads at stop time to pick
     //    the folder suffix + extra trade-pipeline stage.
-    const sources = await desktopCapturer.getSources({ types: ['screen'] });
-    log('overlay', 'desktopCapturer sources', sources.map((s) => ({
-      id: s.id,
-      name: s.name,
-      display_id: s.display_id,
-    })));
-    const source =
-      sources.find((s) => s.display_id === payload.displayId) ?? sources[0];
-    if (!source) {
-      log('overlay', 'no source matched');
-      showNotification('Snipalot', 'Could not match region to a display source');
-      return;
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      log('overlay', 'desktopCapturer sources', sources.map((s) => ({
+        id: s.id,
+        name: s.name,
+        display_id: s.display_id,
+      })));
+      const source =
+        sources.find((s) => s.display_id === payload.displayId) ?? sources[0];
+      if (!source) {
+        failSelectionStart(
+          'no desktopCapturer source matched after region confirmed',
+          'Could not match region to a display source',
+          { displayId: payload.displayId, sourceCount: sources.length }
+        );
+        return;
+      }
+
+      activeDisplayId = payload.displayId;
+      activeSourceId = source.id;
+      pendingRegion = region;
+      currentSessionMode = intent === 'trade' ? 'trade' : 'record';
+      currentTradeMarkers = [];
+      recorderMediaReady = false;
+      setAppState('recording', `region confirmed (mode=${currentSessionMode})`);
+      broadcastOverlay('overlay:exit-region-select');
+      // Tell the active display's overlay to draw the region outline + receive annotations.
+      targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
+
+      dispatchRecorderStart(region);
+    } catch (err) {
+      failSelectionStart(
+        'desktopCapturer failed after region confirmed',
+        `Recording could not start: ${(err as Error).message}`,
+        { err: (err as Error).message, displayId: payload.displayId, intent }
+      );
     }
-
-    activeDisplayId = payload.displayId;
-    activeSourceId = source.id;
-    pendingRegion = region;
-    currentSessionMode = intent === 'trade' ? 'trade' : 'record';
-    currentTradeMarkers = [];
-    recorderMediaReady = false;
-    setAppState('recording', `region confirmed (mode=${currentSessionMode})`);
-    broadcastOverlay('overlay:exit-region-select');
-    // Tell the active display's overlay to draw the region outline + receive annotations.
-    targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
-
-    dispatchRecorderStart(region);
   }
 );
 

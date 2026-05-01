@@ -43,7 +43,7 @@ let currentStartStopHotkey = 'Ctrl+Shift+S';
 let currentSnapshotHotkey = 'Ctrl+Shift+P';
 let currentStartTradeHotkey = 'Ctrl+Shift+T';
 // Mirrors config.hotkeys.tradeMarker. Used in the trade-recording hint only.
-let currentTradeMarkerHotkey = 'Ctrl+Shift+M';
+let currentTradeMarkerHotkey = 'Ctrl+Shift+X';
 // Tracks whether the active recording is record-mode or trade-mode (both
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';

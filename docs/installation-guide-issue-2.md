@@ -11,7 +11,7 @@ When the download URL changes, update this file and paste its body into the issu
 
 ## What this is
 
-Snipalot is a Windows screen-recording tool with a **Trade mode** built for meme coin traders. You record your session while narrating your trades out loud. When you stop, it automatically transcribes the audio, sends the transcript to an AI model, and generates a structured trade log (CSV + Markdown) — no manual steps.
+Snipalot is a Windows screen-recording tool with a **Trade mode** built for meme coin traders. You record your session while narrating your trades out loud. When you stop, it automatically transcribes the audio, sends the transcript to an AI model, and generates a structured trade log (XLSX + Markdown) — no manual steps.
 
 ---
 
@@ -72,7 +72,7 @@ This uses free Gemini Code Assist quota. No Gemini API key is needed.
 2. Click the **violet Trade button** in the launcher (or press `Ctrl+Shift+T`)
 3. Drag to select the region of your screen to record (your Padre / trading window)
 4. Trade normally and narrate out loud: *"Going into PEPE at 80k market cap, target 150k…"*
-5. Press `Ctrl+Shift+M` to drop a marker at any key moment
+5. Press `Ctrl+Shift+X` to drop a marker at any key moment
 6. Click **Stop** in the floating HUD when done
 
 Snipalot then automatically:
@@ -80,7 +80,7 @@ Snipalot then automatically:
 - Converts the recording to MP4
 - Transcribes your voice with Whisper (runs locally, nothing is uploaded)
 - Sends the transcript to your AI model
-- Writes `trade_log.csv` + `trade_log.md` + `adherence_report.md` to your session folder
+- Writes `trade_log.xlsx` + `trade_log.md` to your session folder, with supporting review docs under `Inputs/`
 
 Post-processing takes about 1–2 minutes for a 30-minute session.
 
@@ -98,18 +98,25 @@ Each session gets its own folder, e.g.:
 
 ```
 Videos\Snipalot\20260429.1622 trade\
-  trade_log.csv          ← open this in Excel
-  trade_log.md
-  adherence_report.md
+  20260429.1622 trade.gif
+  prompt.txt
   transcript.txt
-  mic_diagnostics.json     ← which microphone was used (for troubleshooting audio)
+  trade_log.xlsx       ← open this in Excel
+  trade_log.md         ← includes the GIF and trade screenshots
+  Inputs\
+    mic_diagnostics.json
+    markers.json
+    mockape.json
+    extraction_response.json
+    adherence_report.md
+    trade-screenshots\
 ```
 
 ---
 
 ## Optional — add your MockApe / Padre trade data
 
-Export your actual trades from MockApe or Padre as JSON and drop the file into the session folder named `mockape.json` before the recording stops. Snipalot will add real entry/exit market caps, P&L in SOL, and win/loss columns to the CSV automatically.
+Export your actual trades from MockApe or Padre as JSON and paste it into the trade data window after recording, or save it under the session folder as `Inputs/mockape.json`. Snipalot will add real entry/exit market caps, P&L in SOL, and win/loss columns to the XLSX automatically.
 
 ---
 
@@ -118,8 +125,8 @@ Export your actual trades from MockApe or Padre as JSON and drop the file into t
 | Problem | Fix |
 | --- | --- |
 | Windows shows "Windows protected your PC" | Click **More info** → **Run anyway** — appears because the installer isn't code-signed |
-| No `trade_log.csv` after recording | Open the session folder. If `extraction_response.json` is missing, the LLM extraction failed. In Settings → Trade Mode, click **Test LLM Connection** and follow any Gemini CLI install/sign-in guidance, or switch to API mode and verify the OpenRouter/OpenAI key |
-| Recording has no audio | Check the microphone icon in the HUD. In Windows **Settings → System → Sound → Input**, set the correct default microphone. Open **`mic_diagnostics.json`** in the session folder to see which device Snipalot captured and any errors |
+| No `trade_log.xlsx` after recording | Open the session folder. If `Inputs/extraction_response.json` is missing, the LLM extraction failed. In Settings → Trade Mode, click **Test LLM Connection** and follow any Gemini CLI install/sign-in guidance, or switch to API mode and verify the OpenRouter/OpenAI key |
+| Recording has no audio | Check the microphone icon in the HUD. In Windows **Settings → System → Sound → Input**, set the correct default microphone. Open **`Inputs/mic_diagnostics.json`** in the session folder to see which device Snipalot captured and any errors |
 | Snipalot doesn't appear in Start menu after install | Re-run the installer, or search for Snipalot in `C:\Users\YourName\AppData\Local\Programs\` |
 
 ---

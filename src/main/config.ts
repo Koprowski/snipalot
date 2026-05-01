@@ -141,10 +141,10 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     // 'T' for Trade — toggles a Trade session, equivalent to clicking
     // the violet Trade button in the launcher. Always-on global.
     startTrade: 'Ctrl+Shift+T',
-    // 'M' for Mark — only registered while a trade-mode recording is
+    // 'X' for "X marks the spot" — only registered while a trade-mode recording is
     // live. Each press logs a recording-relative timestamp the LLM
     // uses as an anchor when extracting trades.
-    tradeMarker: 'Ctrl+Shift+M',
+    tradeMarker: 'Ctrl+Shift+X',
     clear: 'Ctrl+Shift+C',
     undo: 'Ctrl+Z',
     // Pause/resume moved off Ctrl+Shift+P to make room for snapshot.

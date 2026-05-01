@@ -20,7 +20,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Processing / trade stalls:** If `save-webm` never arrives or Whisper hangs, a **processing watchdog** returns the launcher to idle with a toast (and Whisper is killed after 25 min). Trade-mode **MockApe wait** defaults to **3 minutes** then proceeds without trade data (was 30 min).
 - **`mic_diagnostics.json`** in each **record/trade** session folder when recording starts: `getUserMedia` success/failure, active audio track label + `deviceId` (when exposed), `enumerateDevices` snapshot for `audioinput`. Main logs a one-line **`recorder` / `mic capture summary`**. Use for “no audio” / wrong-default-mic support (Snipalot still uses OS default input; no in-app mic picker yet).
 - **Frame picker:** Export uses `recording.mp4` inside the session directory (not the parent folder).
-- **Hotkeys:** README, launcher hints, and logs aligned with `config.ts` (e.g. trade marker `Ctrl+Shift+M`, trade toggle `Ctrl+Shift+T`).
+- **Hotkeys:** README, launcher hints, and logs aligned with `config.ts` (e.g. trade marker `Ctrl+Shift+X`, trade toggle `Ctrl+Shift+T`).
 - **Snapshots:** Serialized in main so concurrent 📸 cannot cross-wire `recorder:snap-result`.
 - **Settings:** Folder picker avoids a forced parent window when settings is closed.
 - **Docs:** README links Releases + Issue #2 for exe vs dev install; production build uses `npm run package` → **`release/`**.
@@ -62,6 +62,11 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
   - Gemini command parsing now strips wrapping quotes from user-entered command paths, and Gemini spawn helpers guard sync `spawn()` exceptions so IPC returns actionable launch errors instead of crashing with raw `spawn EINVAL`.
 - **Settings close semantics corrected (local branch):** Settings window `X`/Cancel now only closes Settings and refocuses launcher; full process shutdown remains tied to the primary launcher `X`/quit path.
 - **Windows quit-cleanup PowerShell fix (local branch):** Corrected sibling `electron.exe` filter command generation in `killSiblingSnipalotElectronProcesses()` to avoid `-and` parser errors; shutdown cleanup now uses a valid single-clause `Where-Object` predicate.
+- **Trade workbook output (local branch):** Trade sessions now generate **`trade_log.xlsx`** with concrete timeline columns (`trade_date`, `entry_time_inferred`, `exit_time_actual`, `time_in_trade_seconds`, etc.), wrapped text columns, width capped at 40 chars, rounded SOL/P&L/market-cap formatting, and no CSV generation. The companion **`trade_log.md`** stays in the session root, uses the same date/time labels, embeds the session GIF at top, and embeds per-trade screenshots.
+- **Trade session folder cleanup (local branch):** Trade session roots are kept to polished outputs: GIF, `prompt.txt`, `transcript.txt`, `trade_log.xlsx`, `trade_log.md`, plus the `Inputs/` folder. Raw/support files move under **`Inputs/`** (`mockape.json`, `extraction_response.json`, `markers.json`, `annotations.json`, `NEXT_STEPS.md`, `adherence_report.md`). Trade marker captures live under **`Inputs/trade-screenshots/`**.
+- **Trade XLSX dependency (local branch):** Added **`jszip`** as a runtime dependency to emit XLSX files directly from the Electron main process without requiring Excel automation.
+- **Trade marker shortcut update (local branch):** Default marker hotkey is **`Ctrl+Shift+X`** ("X marks the spot"). Updated config defaults, Settings reset defaults, HUD/launcher fallback labels, README, and install guide references.
+- **v1.0.8 local installer build (local branch):** Fresh NSIS build succeeded at **`release-v1.0.8-trade-workbook-xhotkey/Snipalot-1.0.8-setup.exe`** after switching away from a locked prior output directory. SHA256: `33D9483B872BF7BE5616E3781786DF75C854992534814D03250E764556DF53C4`.
 - **Processing escape hatch + window show-race hardening (local branch):**
   - Launcher now exposes **Abandon** during post-stop `processing`. It cancels the in-flight pipeline/trade pipeline, closes any trade-context / response-paste windows, deletes the current session folder, and resets Snipalot to idle.
   - The latest parent-level `recording.mp4` is intentionally preserved when abandoning; session-folder artifacts are cleared.
@@ -79,12 +84,12 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
   - The HUD snapshot camera tooltip now uses the configured `snapshot` hotkey from main state (default `Ctrl+Shift+P`) instead of a hardcoded description, and pause/annotate tooltips also track configured hotkeys.
   - Completed annotations are now one-shot: after a valid shape/line/text annotation is committed, the overlay exits annotation mode and becomes click-through while leaving the annotation visible until clear/snapshot behavior removes it.
 - **Trade HUD marker control (local branch):**
-  - During trade-mode recordings, the HUD camera button changes to a target-style marker control bound to the configured `tradeMarker` hotkey (default `Ctrl+Shift+M`) instead of the normal `snapshot` hotkey.
-  - Trade markers now record offset/label metadata and capture a marker screenshot under `trade-markers/` without triggering the normal snapshot chapter/annotation reset.
+  - During trade-mode recordings, the HUD camera button changes to a target-style marker control bound to the configured `tradeMarker` hotkey (default `Ctrl+Shift+X`) instead of the normal `snapshot` hotkey.
+  - Trade markers now record offset/label metadata and capture a marker screenshot under `Inputs/trade-screenshots/` without triggering the normal snapshot chapter/annotation reset.
   - The trade extraction prompt now treats markers as entry/decision anchors and MockApe/Padre timestamps as outcome anchors, with explicit instructions to inspect the interval between them for partial entries/exits.
-- **Trade CSV display formatting (local branch):**
-  - `trade_log.csv` now wraps `rationale`, `pre_transcript_excerpt`, and `post_transcript_excerpt` with embedded line breaks around 40 characters (CSV cannot store real pixel widths/wrap styles).
-  - CSV SOL fields (`sol_invested`, `sol_received`, `pnl_sol`) are exported to two decimals, `pnl_percentage` to one decimal, and exit market-cap fields are rounded to whole dollars with comma formatting.
+- **Trade workbook display formatting (local branch):**
+  - `trade_log.xlsx` wraps `rationale`, `pre_transcript_excerpt`, and `post_transcript_excerpt`, caps auto-fit column widths at 40 characters, and avoids CSV output.
+  - XLSX SOL fields (`sol_invested`, `sol_received`, `pnl_sol`) are exported to two decimals, `pnl_percentage` to one decimal, and exit market-cap fields are rounded to whole dollars with comma formatting.
 - **Gemini CLI settings-test fallback + diagnostics (local branch):**
  - `settings:test-llm-connection` now retries the prompt probe with a positional prompt when Gemini returns the known "`--prompt` + positional" parser conflict, preventing false negatives from runtime argv quirks.
  - Added structured, non-secret `settings` logs for each Gemini test stage (launch/version/prompt/fallback success/failure) with sanitized stderr tails for faster root-cause support.
@@ -117,7 +122,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - `saveConfig()` is now transactional: it writes the merged config to disk before replacing in-memory config, throws on filesystem errors, and Settings keeps the window open with an error instead of reporting a false successful save.
  - Added `npm test` with `tests/config-persistence.test.mjs` covering successful config writes and disk-write failure behavior.
 - **Trade extraction UX + scale-out prompt hardening (v1.0.8 local branch):**
- - `src/main/pipeline.ts` now `await`s `runTradePipeline()` for trade sessions, so launcher processing state and step text stay active through Gemini/API auto-extraction instead of dropping to idle before `trade_log.csv` exists.
+ - `src/main/pipeline.ts` now `await`s `runTradePipeline()` for trade sessions, so launcher processing state and step text stay active through Gemini/API auto-extraction instead of dropping to idle before `trade_log.xlsx` exists.
  - Trade processing ETA in `src/main/index.ts` now budgets a real LLM extraction window for trade mode (instead of a 5-second placeholder), so the progress bar no longer races to the end before Gemini finishes.
  - Gemini CLI default/recommended model is `gemini-3.1-pro-preview`. Current official Gemini 3 docs list Gemini 3.1 Pro with model id `gemini-3.1-pro-preview` and state all Gemini 3 models are currently preview; Settings includes current Gemini 3.1/3 preview ids in the curated model list and warns users to test CLI/account access before saving.
  - Trade extraction schema/prompt now includes `leg_index`, `leg_count`, and `position_fraction`, with explicit instructions to split scaled entries/exits into multiple rows when the transcript indicates partial fills/trims.

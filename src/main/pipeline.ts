@@ -136,7 +136,7 @@ export interface PipelineInput {
    */
   tradeMarkers?: TradeMarkerRecord[];
   /**
-   * Called by trade-pipeline once extraction_prompt.md is written. index.ts
+   * Called by trade-pipeline once prompt.txt is written. index.ts
    * supplies this to open the response-paste window, eliminating the manual
    * "save extraction_response.json to disk" step. Optional — if omitted the
    * pipeline falls back to the disk-poll-only path.
@@ -977,6 +977,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // Use a pre-created dir (for live snaps) if available, otherwise create one.
   const sessionDir = input.preCreatedSessionDir ?? path.join(input.outputRoot, sessionBasename);
   ensureDir(sessionDir);
+  const sessionInputsDir = mode === 'trade' ? path.join(sessionDir, 'Inputs') : sessionDir;
+  ensureDir(sessionInputsDir);
   log('pipeline', 'session start', { sessionDir, annotations: input.annotations.length });
 
   // Fixed-name MP4 in the parent output root — overwritten on each run, so
@@ -990,7 +992,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const wavPath = path.join(input.outputRoot, 'recording.wav');
   const gifPath = path.join(sessionDir, `${sessionBasename}.gif`);
   const transcriptPath = path.join(sessionDir, 'transcript.txt');
-  const annotationsPath = path.join(sessionDir, 'annotations.json');
+  const annotationsPath = path.join(sessionInputsDir, 'annotations.json');
   const promptPath = path.join(sessionDir, 'prompt.txt');
 
   // Helper: best-effort step notification. UI bookkeeping must never break
@@ -1232,15 +1234,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // trade artifacts so the file isn't missing.
   if (mode === 'trade') {
     const stub = [
-      'This is a trade-mode session. The Snipalot prompt for your LLM is in:',
-      '  extraction_prompt.md',
+      'This is a trade-mode session. The Snipalot extraction prompt will be written here shortly.',
       '',
-      'Paste that into Claude Code / Gemini / Cursor, then save the JSON',
-      'reply as extraction_response.json in this folder. Snipalot will',
-      'pick it up and generate trade_log.csv + trade_log.md.',
+      'Paste prompt.txt into Claude Code / Gemini / Cursor, then save the JSON',
+      'reply as Inputs/extraction_response.json. Snipalot will',
+      'pick it up and generate trade_log.xlsx + trade_log.md.',
       '',
       'For richer reporting, also drop your MockApe trade export into',
-      'this folder as mockape.json — the trade-pipeline will join it to',
+      'Inputs/mockape.json — the trade-pipeline will join it to',
       'your spoken trades by token name + timestamp and enrich the log',
       'with actual entry/exit market caps + P&L per trade.',
       '',
@@ -1277,8 +1278,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   }
 
   // 10. Trade-mode extension: after the legacy pipeline finishes, run the
-  //     trade-pipeline which writes extraction_prompt.md (M4) and once the
-  //     user pastes a response, generates trade_log.csv + .md (M5). This
+  //     trade-pipeline which writes prompt.txt (M4) and once the
+  //     user pastes a response, generates trade_log.xlsx + trade_log.md (M5). This
   //     is fire-and-forget — the launcher already exited 'processing' so
   //     trade work happens in the background. M3 scaffold logs only.
   if (mode === 'trade') {
@@ -1290,6 +1291,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         transcriptSegments,
         tradeMarkers: input.tradeMarkers ?? [],
         startedAtMs: input.startedAtMs,
+        durationMs: input.durationMs,
         onStep: input.onStep,
         onPromptReady: input.onTradePromptReady,
         abortSignal,

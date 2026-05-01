@@ -24,7 +24,7 @@ let tickHandle: number | null = null;
 let annotateHotkey = 'Ctrl+Shift+A';
 let snapshotHotkey = 'Ctrl+Shift+P';
 let pauseResumeHotkey = 'Ctrl+Shift+B';
-let tradeMarkerHotkey = 'Ctrl+Shift+M';
+let tradeMarkerHotkey = 'Ctrl+Shift+X';
 let sessionMode: 'record' | 'trade' = 'record';
 let annotationActive = false;
 

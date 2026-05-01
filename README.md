@@ -1,5 +1,11 @@
 # Snipalot
 
+## Download for Windows
+
+**Latest installer:** [Download Snipalot-1.0.8-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.8/Snipalot-1.0.8-setup.exe)
+
+Run the installer, then open Snipalot from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. The installer includes Whisper transcription and the base English model, so recording and transcription work without installing Whisper separately.
+
 A Windows desktop tool for giving AI feedback on your screen — by talking, annotating, and capturing. Three capture modes cover everything from a quick screenshot to a long trading session.
 
 ---
@@ -37,15 +43,14 @@ Saved output (in your configured output folder): annotated PNG with legend + `pr
 Designed for traders who narrate during live sessions. Records one long session (up to ~2 hours), then runs a post-session extraction pipeline:
 
 1. **Record** — one continuous recording; the trader narrates entries, targets, rationale, exits, and post-trade commentary naturally
-2. **Mark trades** — optional `Ctrl+Shift+M` hotkey (default; rebindable in Settings) stamps timestamps as anchor points for the LLM (works without markers, they just improve accuracy)
+2. **Mark trades** — optional `Ctrl+Shift+X` hotkey (default; rebindable in Settings) stamps timestamps and screenshots as anchor points for the LLM (works without markers, they just improve accuracy)
 3. **Add MockApe data** — after stopping, a data-entry window lets you paste your MockApe JSON or CSV export; Snipalot matches trades to the recording window and attaches entry/exit market caps and PnL
-4. **LLM extraction** — Snipalot writes `extraction_prompt.md` containing the full transcript, trade markers, and MockApe data, formatted for a structured extraction pass
-5. **Paste and receive** — open the prompt in Claude Code, Gemini CLI, Cursor, or any LLM; paste back the JSON response as `extraction_response.json`
+4. **LLM extraction** — Snipalot writes `prompt.txt` containing the full transcript, trade markers, screenshots, and MockApe data, formatted for a structured extraction pass
+5. **Paste and receive** — Snipalot can run Gemini CLI automatically; if manual review is needed, paste the JSON response into the response window or save it as `Inputs/extraction_response.json`
 6. **Auto-output** — Snipalot detects the response file and immediately generates:
-   - `trade_log.csv` — one row per trade; columns include token name, pre-call and post-call timestamps, target range, entry/exit market cap, PnL from MockApe, adherence self-assessment, and confidence score
-   - `trade_log.md` — human-readable version of the same data with per-trade notes
-   - `adherence_report.md` — session-level aggregate stats (hit rate, average PnL, adherence score)
-   - `extraction_prompt.md` — kept as an audit trail regardless of auto/manual path
+   - `trade_log.xlsx` — formatted workbook with one row per trade, concrete timeline columns, wrapped rationale/excerpt fields, rounded SOL/PnL/market-cap fields, and inferred/actual entry/exit times
+   - `trade_log.md` — human-readable version with the session GIF at the top and per-trade screenshots embedded
+   - `Inputs/adherence_report.md` — session-level aggregate stats and review notes
 
 ---
 
@@ -83,7 +88,7 @@ During recording, a compact HUD overlays your screen with:
 |--------|---------|
 | Start/stop recording | `Ctrl+Shift+S` |
 | Start / stop trade session | `Ctrl+Shift+T` (toggle from idle or while trading) |
-| Mark trade event | `Ctrl+Shift+M` (only while a trade recording is active) |
+| Mark trade event | `Ctrl+Shift+X` (only while a trade recording is active) |
 | Mid-session snapshot | `Ctrl+Shift+P` |
 | Annotate (during recording) | `Ctrl+Shift+A` |
 | Pause / resume | `Ctrl+Shift+B` |
@@ -110,17 +115,19 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
   prompt.md
 
 {stamp} trade/            ← Trade mode session
-  recording.mp4
   {stamp} trade.gif
+  prompt.txt              ← paste-ready trade extraction prompt
   transcript.txt
-  mic_diagnostics.json    ← which mic was captured (labels, device ids, errors)
-  markers.json
-  extraction_prompt.md
-  extraction_response.json   (written by user after LLM pass)
-  trade_log.csv
+  trade_log.xlsx          ← formatted trade workbook
   trade_log.md
-  adherence_report.md
-  snapshots/
+  Inputs/
+    annotations.json
+    mic_diagnostics.json
+    markers.json
+    mockape.json             (optional MockApe/Padre export)
+    extraction_response.json (manual LLM response, if needed)
+    adherence_report.md
+    trade-screenshots/
 ```
 
 ---
@@ -138,7 +145,7 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 The Windows installer bundles the local Whisper transcription engine and the `ggml-base.en.bin` model, so recording/transcription works without a separate post-install download.
 
-**Trade mode + Gemini / API keys:** step-by-step guide in **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)** (same content as **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)**; the doc in `docs/` carries the current download URL).
+**Trade mode + Gemini / API keys:** step-by-step guide in **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)** (same content as **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)**; the doc in `docs/` carries the current download URL). Current Gemini CLI default is `gemini-3.1-pro-preview`; Settings can fetch available Gemini CLI models on the target machine.
 
 **No audio after recording?** Each session folder can include **`mic_diagnostics.json`** (which microphone was used and any capture errors). See the troubleshooting table in the install guide above.
 
@@ -175,7 +182,7 @@ This runs `electron-builder` and writes the NSIS setup (and related artifacts) u
 
 ## Status
 
-Actively developed. Record, Screenshot/Annotator, and Trade modes (M1–M5) are fully functional. Trade mode is on the `trade-mode` branch pending a full real-session verification pass before merging to `main`.
+Actively developed. Record, Screenshot/Annotator, and Trade modes are functional on Windows. Trade mode now writes formatted XLSX output and keeps raw trade inputs under `Inputs/`.
 
 Deferred:
 - Window-picker capture mode — current options are region (drag to select) and fullscreen; per-window capture is marked "coming soon" in Settings

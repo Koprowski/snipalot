@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { clipboard, Notification, shell } from 'electron';
-import { stringify as csvStringify } from 'csv-stringify/sync';
+import JSZip from 'jszip';
 import { log } from './logger';
 import { getConfig } from './config';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
@@ -55,12 +55,13 @@ export interface TradeEvent {
   leg_index?: number | null;
   leg_count?: number | null;
   position_fraction?: number | null;
-  // ── Optional Padre/MockApe outcome fields (filled by joinMockApe) ──
+  // â”€â”€ Optional Padre/MockApe outcome fields (filled by joinMockApe) â”€â”€
   /** Matched MockApe trade id for traceability. */
   mockape_trade_id?: string | null;
   /** Confidence of the mockape join: 'high' = exact token + tight time match,
    *  'medium' = token match but loose time, 'low' = fuzzy token. */
   mockape_join_confidence?: 'high' | 'medium' | 'low' | null;
+  mockape_timestamp_ms?: number | null;
   entry_mc_actual?: number | null;
   exit_mc_actual?: number | null;
   sol_invested?: number | null;
@@ -89,12 +90,14 @@ export interface TradePipelineInput {
    * the MockApe export's unix-epoch timestamp field.
    */
   startedAtMs: number;
+  /** Recording duration in ms. Used for concrete video timeline columns in XLSX output. */
+  durationMs: number;
   /** Step callback for launcher UI (mirrors PipelineInput.onStep). */
   onStep?: (step: string) => void;
   /**
-   * Called immediately after extraction_prompt.md is written, with the
+   * Called immediately after prompt.txt is written, with the
    * paths the response-paste window needs. index.ts passes a function
-   * that opens the BrowserWindow — the pipeline stays decoupled from the
+   * that opens the BrowserWindow â€” the pipeline stays decoupled from the
    * window layer.
    */
   onPromptReady?: (sessionDir: string, responsePath: string, promptPath: string) => void;
@@ -105,7 +108,7 @@ export interface TradePipelineInput {
  * Schema for the MockApe / Padre trade export. The user pastes their
  * exported JSON into mockape.json in the session folder; the trade-
  * pipeline parses, joins by tokenName + timestamp, and enriches the
- * trade_log.csv with actual entry/exit market caps + P&L.
+ * trade_log.xlsx with actual entry/exit market caps + P&L.
  */
 export interface MockApeTrade {
   chain: string;
@@ -117,18 +120,20 @@ export interface MockApeTrade {
   pnlSol: number;
   solInvested: number;
   solReceived: number;
-  /** Unix epoch ms — matches Date.now() output. */
+  /** Unix epoch ms â€” matches Date.now() output. */
   timestamp: number;
   tokenName: string;
 }
 
 export interface TradePipelineResult {
-  /** Path to extraction_prompt.md (always written in M4+). */
+  /** Path to prompt.txt (always written in M4+). */
   extractionPromptPath: string | null;
   /** Path to extraction_response.json (written by user paste OR M6 auto-call). */
   extractionResponsePath: string | null;
-  /** Path to trade_log.csv (written in M5+ once extraction is parsed). */
+  /** Deprecated: CSV generation is disabled; kept for IPC shape compatibility. */
   tradeLogCsvPath: string | null;
+  /** Path to trade_log.xlsx (formatted workbook view of the trade log). */
+  tradeLogXlsxPath: string | null;
   /** Path to trade_log.md (written in M5+ once extraction is parsed). */
   tradeLogMdPath: string | null;
   /** Path to adherence_report.md (written in M5+ once extraction is parsed). */
@@ -165,8 +170,9 @@ export async function runTradePipeline(
   // Write markers.json (also useful for the M4 extraction prompt, which
   // formats markers as [MARKER N at M:SS] anchor tags). Always written
   // even if empty so downstream tooling can rely on the file existing.
-  if (onStep) onStep('Writing trade markers…');
-  const markersPath = path.join(sessionDir, 'markers.json');
+  if (onStep) onStep('Writing trade markersâ€¦');
+  const inputsDir = getTradeInputsDir(sessionDir);
+  const markersPath = path.join(inputsDir, 'markers.json');
   try {
     const payload = {
       markers: tradeMarkers.map((marker, i) => ({
@@ -183,12 +189,12 @@ export async function runTradePipeline(
     log('trade-pipeline', 'markers.json fail', { err: String(err) });
   }
 
-  // ── Wait for the trade-context window to close (user submits MockApe
+  // â”€â”€ Wait for the trade-context window to close (user submits MockApe
   //    data or clicks Skip). Main opens the window in stopRecording
   //    so it's already up and parallel to whisper / mp4 / gif work.
   //    If autoPromptForTradeData is off, main writes the .skipped
-  //    sentinel directly — wait returns immediately. ──
-  if (onStep) onStep('Waiting for trade-context decision…');
+  //    sentinel directly â€” wait returns immediately. â”€â”€
+  if (onStep) onStep('Waiting for trade-context decisionâ€¦');
   await waitForTradeContextDecision(sessionDir, undefined, abortSignal);
 
   // Load the MockApe data NOW (before rendering the prompt) so the
@@ -198,8 +204,8 @@ export async function runTradePipeline(
     log('trade-pipeline', 'mockape data loaded for prompt embed', { trades: mockape.length });
   }
 
-  // ── M4: write the extraction prompt + wait for the user's LLM response ──
-  if (onStep) onStep('Writing trade extraction prompt…');
+  // â”€â”€ M4: write the extraction prompt + wait for the user's LLM response â”€â”€
+  if (onStep) onStep('Writing trade extraction promptâ€¦');
   throwIfAborted(abortSignal);
   const promptText = renderExtractionPrompt(
     transcriptSegments,
@@ -209,7 +215,7 @@ export async function runTradePipeline(
   );
   const { promptPath, responsePath } = writeExtractionPrompt(sessionDir, promptText);
 
-  // ── Auto-extraction backend selection ───────────────────────────────
+  // â”€â”€ Auto-extraction backend selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Preferred mode is Gemini CLI (local command invocation, no API key).
   // API mode remains available for Gemini/OpenRouter/OpenAI flows.
   const cfg = getConfig().trade;
@@ -260,22 +266,22 @@ export async function runTradePipeline(
   }
 
   if (autoSucceeded) {
-    if (onStep) onStep(`${autoLabel} extracted trades — generating trade log…`);
+    if (onStep) onStep(`${autoLabel} extracted trades â€” generating trade logâ€¦`);
     if (Notification.isSupported()) {
       new Notification({
-        title: 'Snipalot Trade · auto-extracted',
-        body: `${autoLabel} extracted your trades automatically. Generating trade log…`,
+        title: 'Snipalot Trade Â· auto-extracted',
+        body: `${autoLabel} extracted your trades automatically. Generating trade logâ€¦`,
         silent: false,
       }).show();
     }
   } else {
-    // Notify the caller (index.ts) that the prompt is ready — it opens the
+    // Notify the caller (index.ts) that the prompt is ready â€” it opens the
     // response-paste window so the user can paste the LLM reply without
     // manually saving a file.
     if (input.onPromptReady) {
       input.onPromptReady(sessionDir, responsePath, promptPath);
     }
-    if (onStep) onStep('Waiting for LLM response (paste into the response window)…');
+    if (onStep) onStep('Waiting for LLM response (paste into the response window)â€¦');
   }
 
   if (!autoSucceeded) {
@@ -284,6 +290,7 @@ export async function runTradePipeline(
       sessionDir,
       mockape,
       input.startedAtMs,
+      input.durationMs,
       abortSignal
     ).catch((err) => {
       log('trade-pipeline', 'background finalize failed', { err: String(err), responsePath });
@@ -292,6 +299,7 @@ export async function runTradePipeline(
       extractionPromptPath: promptPath,
       extractionResponsePath: null,
       tradeLogCsvPath: null,
+      tradeLogXlsxPath: null,
       tradeLogMdPath: null,
       adherenceReportPath: null,
       warnings,
@@ -309,21 +317,22 @@ export async function runTradePipeline(
       extractionPromptPath: promptPath,
       extractionResponsePath: null,
       tradeLogCsvPath: null,
+      tradeLogXlsxPath: null,
       tradeLogMdPath: null,
       adherenceReportPath: null,
       warnings,
     };
   }
 
-  // ── MockApe / Padre outcome enrichment ──
+  // â”€â”€ MockApe / Padre outcome enrichment â”€â”€
   // mockape was already loaded earlier (before prompt render). The LLM
   // received it in the prompt and (ideally) populated mockape_trade_id
-  // for matched trades — joinMockApeById just looks up by ID and copies
+  // for matched trades â€” joinMockApeById just looks up by ID and copies
   // PnL fields. If the LLM missed the assignment, fall back to fuzzy
   // tokenName + timestamp matching for unjoined trades.
   let mockApeJoinStats = { matched: 0, unmatched: 0 };
   if (mockape) {
-    if (onStep) onStep('Joining MockApe outcomes by id…');
+    if (onStep) onStep('Joining MockApe outcomes by idâ€¦');
     mockApeJoinStats = joinMockApeById(trades, mockape);
     // Any trades the LLM didn't tag get a fallback fuzzy attempt.
     const unjoined = trades.filter((t) => !t.mockape_trade_id);
@@ -334,18 +343,20 @@ export async function runTradePipeline(
     }
     log('trade-pipeline', 'mockape join total', mockApeJoinStats);
   } else {
-    log('trade-pipeline', 'no mockape.json — actual P&L columns will be blank');
+    log('trade-pipeline', 'no mockape.json â€” actual P&L columns will be blank');
   }
 
-  // ── M5: generate trade_log.csv + trade_log.md + adherence_report.md ──
-  if (onStep) onStep('Generating trade log + adherence report…');
+  // â”€â”€ Generate trade_log.xlsx + companion Markdown reports â”€â”€
+  if (onStep) onStep('Generating trade workbook + adherence reportâ€¦');
   let csvPath: string | null = null;
+  let xlsxPath: string | null = null;
   let mdPath: string | null = null;
   let reportPath: string | null = null;
   try {
-    csvPath = writeTradeLogCsv(sessionDir, trades);
-    mdPath = writeTradeLogMd(sessionDir, trades);
-    reportPath = writeAdherenceReport(sessionDir, trades);
+    xlsxPath = await writeTradeLogXlsx(sessionDir, trades, input.startedAtMs, input.durationMs);
+    mdPath = writeTradeLogMd(sessionDir, trades, input.startedAtMs, input.durationMs);
+    reportPath = writeAdherenceReport(getTradeInputsDir(sessionDir), trades);
+    organizeTradeSessionRoot(sessionDir);
   } catch (err) {
     warnings.push(`trade output generators failed: ${(err as Error).message}`);
     log('trade-pipeline', 'output gen fail', { err: String(err) });
@@ -354,13 +365,14 @@ export async function runTradePipeline(
   log('trade-pipeline', 'session complete', {
     trades: trades.length,
     csvPath,
+    xlsxPath,
     mdPath,
     reportPath,
   });
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Snipalot Trade · log ready',
-      body: `${trades.length} trade${trades.length === 1 ? '' : 's'} logged. trade_log.csv + .md in:\n${sessionDir}`,
+      title: 'Snipalot Trade Â· log ready',
+      body: `${trades.length} trade${trades.length === 1 ? '' : 's'} logged. trade_log.xlsx + companions in:\n${sessionDir}`,
       silent: false,
     }).show();
   }
@@ -369,13 +381,14 @@ export async function runTradePipeline(
     extractionPromptPath: promptPath,
     extractionResponsePath: responsePath,
     tradeLogCsvPath: csvPath,
+    tradeLogXlsxPath: xlsxPath,
     tradeLogMdPath: mdPath,
     adherenceReportPath: reportPath,
     warnings,
   };
 }
 
-// ─── Auto-extraction backends ───────────────────────────────────────
+// â”€â”€â”€ Auto-extraction backends â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function tryGeminiCli(
   promptText: string,
@@ -388,7 +401,7 @@ async function tryGeminiCli(
 ): Promise<boolean> {
   if (!cliCommand) return false;
   throwIfAborted(abortSignal);
-  if (onStep) onStep('Auto-extracting via Gemini CLI…');
+  if (onStep) onStep('Auto-extracting via Gemini CLIâ€¦');
   log('trade-pipeline', 'gemini-cli: attempting auto-extraction', { cliCommand, model });
 
   const resolvedCli = resolveGeminiCliExecutable(cliCommand);
@@ -401,7 +414,7 @@ async function tryGeminiCli(
     // electron.exe (process.execPath under Electron) needs this to behave
     // as a Node runtime when running the gemini-cli JS bundle.
     ELECTRON_RUN_AS_NODE: '1',
-    // Skip the gemini-cli self-respawn — it bypasses our argv shim and
+    // Skip the gemini-cli self-respawn â€” it bypasses our argv shim and
     // re-triggers the yargs phantom-positional bug under Electron.
     GEMINI_CLI_NO_RELAUNCH: 'true',
   };
@@ -555,7 +568,7 @@ async function tryOpenAiApi(
   throwIfAborted(abortSignal);
 
   const label = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
-  if (onStep) onStep(`Auto-extracting via ${label}…`);
+  if (onStep) onStep(`Auto-extracting via ${label}â€¦`);
   log('trade-pipeline', 'openai-api: attempting auto-extraction', { baseUrl, model });
 
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
@@ -629,7 +642,7 @@ function formatOffset(ms: number): string {
  * The trader's transcript is included with [MARKER N at M:SS] anchor tags
  * inserted at the offsets the user pressed the trade-marker hotkey. The model uses
  * markers as focal points but isn't required to find one trade per marker
- * — content alone is enough.
+ * â€” content alone is enough.
  */
 /**
  * Wait until either mockape.json or mockape.json.skipped exists in the
@@ -637,7 +650,7 @@ function formatOffset(ms: number): string {
  * user clicks Continue/Skip, OR main writes the .skipped sentinel
  * directly when autoPromptForTradeData is off. Polls every 1s; max wait
  * a few minutes (defensive if the window is dismissed without writing
- * files — closed-window-handler in main also writes the sentinel).
+ * files â€” closed-window-handler in main also writes the sentinel).
  */
 async function waitForTradeContextDecision(
   sessionDir: string,
@@ -645,22 +658,29 @@ async function waitForTradeContextDecision(
   timeoutMs: number = 3 * 60 * 1000,
   abortSignal?: AbortSignal
 ): Promise<void> {
-  const dataPath = path.join(sessionDir, 'mockape.json');
-  const skipPath = path.join(sessionDir, 'mockape.json.skipped');
+  const dataPath = getTradeInputPath(sessionDir, 'mockape.json');
+  const skipPath = getTradeInputPath(sessionDir, 'mockape.json.skipped');
+  const legacyDataPath = path.join(sessionDir, 'mockape.json');
+  const legacySkipPath = path.join(sessionDir, 'mockape.json.skipped');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     throwIfAborted(abortSignal);
-    if (fs.existsSync(dataPath) || fs.existsSync(skipPath)) {
+    if (
+      fs.existsSync(dataPath) ||
+      fs.existsSync(skipPath) ||
+      fs.existsSync(legacyDataPath) ||
+      fs.existsSync(legacySkipPath)
+    ) {
       log('trade-pipeline', 'trade-context decision detected', {
-        hasData: fs.existsSync(dataPath),
-        skipped: fs.existsSync(skipPath),
+        hasData: fs.existsSync(dataPath) || fs.existsSync(legacyDataPath),
+        skipped: fs.existsSync(skipPath) || fs.existsSync(legacySkipPath),
       });
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throwIfAborted(abortSignal);
-  log('trade-pipeline', 'trade-context wait timed out — proceeding without trade data');
+  log('trade-pipeline', 'trade-context wait timed out â€” proceeding without trade data');
 }
 
 function renderExtractionPrompt(
@@ -706,7 +726,7 @@ function renderExtractionPrompt(
     lines.push('nearby transcript clearly says it was an exit or trim marker.');
     lines.push('');
     sortedMarkers.forEach((marker, i) => {
-      const screenshot = marker.screenshotPath ? ` · screenshot=${path.basename(marker.screenshotPath)}` : '';
+      const screenshot = marker.screenshotPath ? ` Â· screenshot=${path.basename(marker.screenshotPath)}` : '';
       lines.push(`${i + 1}. marker at **${marker.offsetLabel || formatOffset(marker.offsetMs)}**${screenshot}`);
     });
     lines.push('');
@@ -734,7 +754,7 @@ function renderExtractionPrompt(
       const offsetLabel = offsetMs >= 0 ? formatOffset(offsetMs) : '(before recording)';
       const pnlSign = t.pnlSol >= 0 ? '+' : '';
       lines.push(
-        `${i + 1}. **${t.tokenName}** · entry $${formatMcInline(t.entryMarketCap)} → exit $${formatMcInline(t.exitMarketCap)} · ${pnlSign}${t.pnlSol.toFixed(4)} SOL (${pnlSign}${t.pnlPercentage.toFixed(2)}%) · fired at **${offsetLabel}** in session · trade_id=${t.id}`
+        `${i + 1}. **${t.tokenName}** Â· entry $${formatMcInline(t.entryMarketCap)} â†’ exit $${formatMcInline(t.exitMarketCap)} Â· ${pnlSign}${t.pnlSol.toFixed(4)} SOL (${pnlSign}${t.pnlPercentage.toFixed(2)}%) Â· fired at **${offsetLabel}** in session Â· trade_id=${t.id}`
       );
     });
     lines.push('');
@@ -781,7 +801,7 @@ spoken context in the transcript:
 - The trader's commentary near the MockApe timestamp is the **post-trade
   callout** (exit, outcome, adherence assessment).
 - If the trader mentions a coin in the transcript but it has no matching
-  MockApe trade (musing only — no actual entry), include it as an
+  MockApe trade (musing only â€” no actual entry), include it as an
   EXTRA row at the end with mockape_trade_id=null.
 
 Token-name disambiguation: whisper transcripts mishear meme coin names
@@ -795,7 +815,7 @@ and how it went). Either side can be missing.`}
 ## Output schema
 
 Return a JSON array, one object per trade. The shape below uses
-\`<PLACEHOLDER>\` markers — your actual output must replace each
+\`<PLACEHOLDER>\` markers â€” your actual output must replace each
 placeholder with the real value from the MockApe list and transcript
 above. The placeholder names are NOT example data; do NOT include
 them verbatim in your output.
@@ -830,7 +850,7 @@ Use null for any field the transcript / data genuinely doesn't speak to.
 ]
 
 Rules:
-- Market cap values are integers in dollars ("80k" → 80000, "1.2m" → 1200000).
+- Market cap values are integers in dollars ("80k" â†’ 80000, "1.2m" â†’ 1200000).
 - ${hasMockape ? 'mockape_trade_id MUST match the trade_id from the MockApe list above for matched trades. Use null for spoken-only musings with no actual trade.' : 'mockape_trade_id should be null (no MockApe data was provided this session).'}
 - pre_call_offset_label / pre_call_offset_ms = where in the recording (M:SS
   + same value in ms) the trader spoke the prediction.
@@ -848,15 +868,15 @@ Rules:
 - DO NOT invent rationale ("strong fundamentals", "bullish setup",
   "good entry") if the trader didn't say something equivalent. If the
   trader only said "this looks fun" or "let's see what happens", the
-  rationale is "this looks fun" — not a synthesized investment thesis.
+  rationale is "this looks fun" â€” not a synthesized investment thesis.
 - DO NOT infer target market caps from the actual entry/exit prices.
   Targets must come from the trader's spoken prediction. If they only
-  said "I'm going to double this", target_high_mc = entry × 2 IS a
+  said "I'm going to double this", target_high_mc = entry Ã— 2 IS a
   defensible inference (double is a clear quantitative claim). If they
   said nothing about a target, target_low_mc and target_high_mc are null.
 - pre_transcript_excerpt and post_transcript_excerpt must be VERBATIM
   quotes from the transcript (or near-verbatim with [...] for elision).
-  These are evidence — the trader will read them to verify your
+  These are evidence â€” the trader will read them to verify your
   extraction is honest.
 - If a field would require speculation, set it to null. A null is more
   useful than a fabricated value because the trader can see what wasn't
@@ -867,7 +887,7 @@ Rules:
 **PARTIAL EXITS:**
 - Mock Ape's export sometimes shows ONE entry/exit pair per trade even
   if the trader scaled out in pieces. The transcript may mention
-  "selling half now" then later "all out" — both refer to the same
+  "selling half now" then later "all out" â€” both refer to the same
   underlying trade_id. Treat partial-exit commentary as part of the
   SAME trade, not separate trades. post_transcript_excerpt should
   combine the partial-exit statements ("selling half now [...] all
@@ -897,7 +917,7 @@ function formatMcInline(mc: number): string {
 }
 
 /**
- * Write extraction_prompt.md to the session folder + put the prompt text
+ * Write prompt.txt to the session folder + put the prompt text
  * on the clipboard so the user can paste it directly into their LLM
  * without opening the file. Notification surfaces the next step.
  */
@@ -905,20 +925,21 @@ function writeExtractionPrompt(
   sessionDir: string,
   promptText: string
 ): { promptPath: string; responsePath: string } {
-  const promptPath = path.join(sessionDir, 'extraction_prompt.md');
-  const responsePath = path.join(sessionDir, 'extraction_response.json');
+  const inputsDir = getTradeInputsDir(sessionDir);
+  const promptPath = path.join(sessionDir, 'prompt.txt');
+  const responsePath = path.join(inputsDir, 'extraction_response.json');
   fs.writeFileSync(promptPath, promptText, 'utf-8');
   clipboard.writeText(promptText);
 
   // Drop a clear NEXT_STEPS.md into the folder so anyone browsing it
   // can immediately see the manual-paste workflow without reading a
   // notification or hunting through the codebase.
-  const nextStepsPath = path.join(sessionDir, 'NEXT_STEPS.md');
+  const nextStepsPath = path.join(inputsDir, 'NEXT_STEPS.md');
   const nextSteps = `# Next steps for this Trade session
 
 Snipalot has finished recording, transcribing, and packaging your session.
 Now it needs YOU to do two things, then it'll automatically generate the
-final \`trade_log.csv\` + \`trade_log.md\` + \`adherence_report.md\`.
+final \`trade_log.xlsx\` plus companion review docs in \`Inputs\`.
 
 ## 1. Generate the structured trade JSON via your LLM
 
@@ -933,45 +954,44 @@ Paste that prompt into one of these and let it think:
 - Or any other LLM you have access to (ChatGPT, etc.)
 
 The LLM will return a JSON array of trade events. **Save that JSON
-into this folder as \`extraction_response.json\`** (exact filename).
+into \`Inputs/extraction_response.json\`** (exact filename).
 
 If the file is missing or you forgot to copy the prompt: open
-\`extraction_prompt.md\` in this folder — the same prompt is there.
+\`prompt.txt\` in this folder â€” the same prompt is there.
 
 ## 2. (Optional but recommended) Drop your MockApe trade export
 
 If you exported trades from MockApe / Padre, save the JSON array into
-this folder as \`mockape.json\` (exact filename). Snipalot will:
+the \`Inputs\` folder as \`mockape.json\` (exact filename). Snipalot will:
 - Match each spoken trade to its actual MockApe entry by token name +
   timestamp
 - Add real entry/exit market caps, P&L SOL, P&L %, win/loss columns
-  to \`trade_log.csv\`
-- Surface aggregate P&L stats in \`adherence_report.md\`
+  to \`trade_log.xlsx\`
+- Surface aggregate P&L stats in \`Inputs/adherence_report.md\`
 
-If you skip this, the trade log still ships — just without the actual
+If you skip this, the trade log still ships â€” just without the actual
 P&L columns.
 
 ## 3. Wait
 
 Snipalot is polling this folder every 2 seconds. As soon as
-\`extraction_response.json\` shows up and validates, it generates:
-- \`trade_log.csv\` — analysis-ready, one row per trade
-- \`trade_log.md\` — human-readable per-trade view
-- \`adherence_report.md\` — aggregate stats
+\`Inputs/extraction_response.json\` shows up and validates, it generates:
+- \`trade_log.xlsx\` â€” formatted workbook, one row per trade
+- \`Inputs/trade_log.md\` â€” human-readable per-trade view
+- \`Inputs/adherence_report.md\` â€” aggregate stats
 
 The polling timeout is 60 minutes from the moment the recording stopped.
 
 ## Files in this folder right now
 
-- \`recording.mp4\` — the raw recording (in this session folder)
-- \`transcript.txt\` — whisper-generated transcript
-- \`markers.json\` — your Ctrl+Shift+M marker timestamps
-- \`extraction_prompt.md\` — paste-ready LLM prompt (also on clipboard)
-- \`NEXT_STEPS.md\` — this file
+- \`transcript.txt\` â€” whisper-generated transcript
+- \`prompt.txt\` â€” paste-ready LLM prompt (also on clipboard)
+- \`Inputs/markers.json\` â€” your Ctrl+Shift+X marker timestamps
+- \`Inputs/NEXT_STEPS.md\` â€” this file
 - _(after you save extraction_response.json:)_
-  - \`extraction_response.json\` — your LLM's JSON answer
-  - \`mockape.json\` — your Padre export (optional)
-  - \`trade_log.csv\`, \`trade_log.md\`, \`adherence_report.md\` — the deliverables
+  - \`Inputs/extraction_response.json\` â€” your LLM's JSON answer
+  - \`Inputs/mockape.json\` â€” your Padre export (optional)
+  - \`trade_log.xlsx\` plus \`Inputs/trade_log.md\`, \`Inputs/adherence_report.md\` â€” the deliverables
 `;
   fs.writeFileSync(nextStepsPath, nextSteps, 'utf-8');
 
@@ -987,7 +1007,7 @@ The polling timeout is 60 minutes from the moment the recording stopped.
 
   if (Notification.isSupported()) {
     new Notification({
-      title: 'Snipalot Trade · prompt ready',
+      title: 'Snipalot Trade Â· prompt ready',
       body:
         `Paste the prompt into Claude Code / Gemini / Cursor, then paste ` +
         `the JSON reply into the Snipalot response window. ` +
@@ -1002,7 +1022,7 @@ The polling timeout is 60 minutes from the moment the recording stopped.
  * Poll for extraction_response.json in the session folder. Resolves with
  * the parsed TradeEvent[] when the file appears and validates, or null if
  * the timeout (default 60 minutes) elapses first. fs.watch is unreliable
- * cross-platform, so we poll every 2s — overhead is negligible.
+ * cross-platform, so we poll every 2s â€” overhead is negligible.
  */
 async function waitForExtractionResponse(
   responsePath: string,
@@ -1025,7 +1045,7 @@ async function waitForExtractionResponse(
         });
         if (Notification.isSupported()) {
           new Notification({
-            title: 'Snipalot Trade · response invalid',
+            title: 'Snipalot Trade Â· response invalid',
             body: `extraction_response.json couldn't be parsed: ${(err as Error).message}. Fix and re-save.`,
             silent: false,
           }).show();
@@ -1050,6 +1070,7 @@ async function finalizeTradeOutputsFromResponsePath(
   sessionDir: string,
   mockape: MockApeTrade[] | null,
   startedAtMs: number,
+  durationMs: number,
   abortSignal?: AbortSignal
 ): Promise<void> {
   const trades = await waitForExtractionResponse(responsePath, undefined, abortSignal);
@@ -1064,9 +1085,10 @@ async function finalizeTradeOutputsFromResponsePath(
     }
   }
   throwIfAborted(abortSignal);
-  writeTradeLogCsv(sessionDir, trades);
-  writeTradeLogMd(sessionDir, trades);
-  writeAdherenceReport(sessionDir, trades);
+  await writeTradeLogXlsx(sessionDir, trades, startedAtMs, durationMs);
+  writeTradeLogMd(sessionDir, trades, startedAtMs, durationMs);
+  writeAdherenceReport(getTradeInputsDir(sessionDir), trades);
+  organizeTradeSessionRoot(sessionDir);
   log('trade-pipeline', 'background finalize complete', { sessionDir, trades: trades.length });
 }
 
@@ -1119,6 +1141,7 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
       // When present, joinMockApeById short-circuits the fuzzy matcher
       // and just enriches with PnL from the matching trade.
       mockape_trade_id: strOrNull(e.mockape_trade_id),
+      mockape_timestamp_ms: numOrNull(e.mockape_timestamp_ms),
     };
   });
 }
@@ -1134,66 +1157,7 @@ function confOrNull(v: unknown): 'low' | 'medium' | 'high' | null {
   return null;
 }
 
-// ─── M5: trade_log.csv + trade_log.md + adherence_report.md ──────────
-
-/**
- * Write trade_log.csv to the session folder. Column order matches the
- * PRD schema. Pre/post fields are emitted as separate columns; null
- * becomes empty string for clean Excel parsing.
- */
-function writeTradeLogCsv(sessionDir: string, trades: TradeEvent[]): string {
-  const csvPath = path.join(sessionDir, 'trade_log.csv');
-  const rows = trades.map((t) => {
-    const targetMid =
-      t.target_low_mc !== null && t.target_high_mc !== null
-        ? Math.round((t.target_low_mc + t.target_high_mc) / 2)
-        : '';
-    const timeInTradeSec =
-      t.pre_call_offset_ms !== null && t.post_call_offset_ms !== null
-        ? Math.round((t.post_call_offset_ms - t.pre_call_offset_ms) / 1000)
-        : '';
-    return {
-      trade_id: t.trade_id,
-      token_name: t.token_name,
-      leg_index: t.leg_index ?? '',
-      leg_count: t.leg_count ?? '',
-      position_fraction: t.position_fraction ?? '',
-      pre_call_timestamp: t.pre_call_offset_label ?? '',
-      post_call_timestamp: t.post_call_offset_label ?? '',
-      target_low_mc: t.target_low_mc ?? '',
-      target_high_mc: t.target_high_mc ?? '',
-      target_midpoint_mc: targetMid,
-      rationale: wrapCsvText(t.rationale),
-      pre_transcript_excerpt: wrapCsvText(t.pre_transcript_excerpt),
-      post_transcript_excerpt: wrapCsvText(t.post_transcript_excerpt),
-      exit_mc_estimate: formatWholeNumberWithCommas(t.exit_mc_estimate),
-      outcome_summary: t.outcome_summary ?? '',
-      adherence_self_assessment: t.adherence_self_assessment ?? '',
-      time_in_trade_seconds: timeInTradeSec,
-      // Filled from mockape.json join when present (else blank)
-      entry_mc_actual: t.entry_mc_actual ?? '',
-      exit_mc_actual: formatWholeNumberWithCommas(t.exit_mc_actual),
-      sol_invested: formatFixedDecimal(t.sol_invested, 2),
-      sol_received: formatFixedDecimal(t.sol_received, 2),
-      pnl_sol: formatFixedDecimal(t.pnl_sol, 2),
-      pnl_percentage: formatFixedDecimal(t.pnl_percentage, 1),
-      target_hit_low: t.target_hit_low === null || t.target_hit_low === undefined ? '' : (t.target_hit_low ? 'true' : 'false'),
-      target_hit_high: t.target_hit_high === null || t.target_hit_high === undefined ? '' : (t.target_hit_high ? 'true' : 'false'),
-      exit_scenario: t.exit_scenario ?? '',
-      mockape_trade_id: t.mockape_trade_id ?? '',
-      mockape_join_confidence: t.mockape_join_confidence ?? '',
-      // Extraction quality
-      pre_extraction_confidence: t.pre_confidence ?? '',
-      post_extraction_confidence: t.post_confidence ?? '',
-      needs_review: t.needs_review ? 'true' : 'false',
-      notes: t.notes ?? '',
-    };
-  });
-  const csv = csvStringify(rows, { header: true });
-  fs.writeFileSync(csvPath, csv, 'utf-8');
-  log('trade-pipeline', 'trade_log.csv written', { csvPath, rows: rows.length });
-  return csvPath;
-}
+// Trade workbook + Markdown helpers
 
 function wrapCsvText(value: string | null | undefined, width = 40): string {
   if (!value) return '';
@@ -1226,48 +1190,370 @@ function formatWholeNumberWithCommas(value: number | null | undefined): string {
   return Math.round(value).toLocaleString('en-US');
 }
 
+function getTradeInputsDir(sessionDir: string): string {
+  const inputsDir = path.join(sessionDir, 'Inputs');
+  if (!fs.existsSync(inputsDir)) fs.mkdirSync(inputsDir, { recursive: true });
+  return inputsDir;
+}
+
+function getTradeInputPath(sessionDir: string, fileName: string): string {
+  return path.join(getTradeInputsDir(sessionDir), fileName);
+}
+
+const XLSX_COLUMNS = [
+  'trade_id',
+  'token_name',
+  'trade_date',
+  'video_start_time',
+  'entry_commentary_time',
+  'entry_time_inferred',
+  'exit_commentary_time',
+  'exit_time_actual',
+  'time_in_trade_seconds',
+  'video_end_time',
+  'entry_mc_actual',
+  'exit_mc_actual',
+  'sol_invested',
+  'sol_received',
+  'pnl_sol',
+  'pnl_percentage',
+  'rationale',
+  'pre_transcript_excerpt',
+  'post_transcript_excerpt',
+  'adherence_self_assessment',
+  'notes',
+  'needs_review',
+  'mockape_trade_id',
+] as const;
+
+type XlsxColumn = typeof XLSX_COLUMNS[number];
+type XlsxRow = Record<XlsxColumn, string>;
+
+async function writeTradeLogXlsx(
+  sessionDir: string,
+  trades: TradeEvent[],
+  recordingStartedAtMs: number,
+  durationMs: number
+): Promise<string> {
+  const xlsxPath = path.join(sessionDir, 'trade_log.xlsx');
+  const rows = trades.map((trade) => buildTradeXlsxRow(trade, recordingStartedAtMs, durationMs));
+  const widths = computeXlsxColumnWidths(rows);
+  const zip = new JSZip();
+
+  zip.file('[Content_Types].xml', contentTypesXml());
+  zip.folder('_rels')?.file('.rels', rootRelsXml());
+  const xl = zip.folder('xl');
+  xl?.file('workbook.xml', workbookXml());
+  xl?.file('styles.xml', stylesXml());
+  xl?.folder('_rels')?.file('workbook.xml.rels', workbookRelsXml());
+  xl?.folder('worksheets')?.file('sheet1.xml', worksheetXml(rows, widths));
+  zip.folder('docProps')?.file('app.xml', appPropsXml());
+  zip.folder('docProps')?.file('core.xml', corePropsXml());
+
+  const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  fs.writeFileSync(xlsxPath, buffer);
+  log('trade-pipeline', 'trade_log.xlsx written', { xlsxPath, rows: rows.length });
+  return xlsxPath;
+}
+
+function buildTradeXlsxRow(
+  trade: TradeEvent,
+  recordingStartedAtMs: number,
+  durationMs: number
+): XlsxRow {
+  const timeline = buildTradeTimeline(trade, recordingStartedAtMs, durationMs);
+  return {
+    trade_id: String(trade.trade_id),
+    token_name: trade.token_name,
+    trade_date: formatTradeDate(timeline.tradeDate),
+    video_start_time: formatTradeTime(timeline.videoStart),
+    entry_commentary_time: formatTradeTime(timeline.entryCommentary),
+    entry_time_inferred: formatTradeTime(timeline.entryInferred),
+    exit_commentary_time: formatTradeTime(timeline.exitCommentary),
+    exit_time_actual: formatTradeTime(timeline.exitActual),
+    time_in_trade_seconds: timeline.timeInTradeSeconds === null ? '' : String(timeline.timeInTradeSeconds),
+    video_end_time: formatTradeTime(timeline.videoEnd),
+    entry_mc_actual: formatWholeNumberWithCommas(trade.entry_mc_actual),
+    exit_mc_actual: formatWholeNumberWithCommas(trade.exit_mc_actual),
+    sol_invested: formatFixedDecimal(trade.sol_invested, 2),
+    sol_received: formatFixedDecimal(trade.sol_received, 2),
+    pnl_sol: formatFixedDecimal(trade.pnl_sol, 2),
+    pnl_percentage: formatFixedDecimal(trade.pnl_percentage, 1),
+    rationale: wrapSpreadsheetText(trade.rationale),
+    pre_transcript_excerpt: wrapSpreadsheetText(trade.pre_transcript_excerpt),
+    post_transcript_excerpt: wrapSpreadsheetText(trade.post_transcript_excerpt),
+    adherence_self_assessment: wrapSpreadsheetText(trade.adherence_self_assessment),
+    notes: wrapSpreadsheetText(trade.notes),
+    needs_review: trade.needs_review ? 'true' : 'false',
+    mockape_trade_id: trade.mockape_trade_id ?? '',
+  };
+}
+
+function buildTradeTimeline(
+  trade: TradeEvent,
+  recordingStartedAtMs: number,
+  durationMs: number
+): {
+  tradeDate: Date;
+  videoStart: Date;
+  videoEnd: Date;
+  entryCommentary: Date | null;
+  entryInferred: Date | null;
+  exitCommentary: Date | null;
+  exitActual: Date | null;
+  timeInTradeSeconds: number | null;
+} {
+  const videoStart = new Date(recordingStartedAtMs);
+  const videoEnd = new Date(recordingStartedAtMs + Math.max(0, durationMs));
+  const entryCommentary = dateFromOffset(recordingStartedAtMs, trade.pre_call_offset_ms);
+  const exitCommentary = dateFromOffset(recordingStartedAtMs, trade.post_call_offset_ms);
+  const exitActual = trade.mockape_timestamp_ms ? new Date(trade.mockape_timestamp_ms) : null;
+  const timeInTradeSeconds = getTimeInTradeSeconds(trade);
+  const entryInferred =
+    exitActual && timeInTradeSeconds !== null
+      ? new Date(exitActual.getTime() - timeInTradeSeconds * 1000)
+      : null;
+
+  return {
+    tradeDate: exitActual ?? videoStart,
+    videoStart,
+    videoEnd,
+    entryCommentary,
+    entryInferred,
+    exitCommentary,
+    exitActual,
+    timeInTradeSeconds,
+  };
+}
+
+function getTimeInTradeSeconds(trade: TradeEvent): number | null {
+  if (trade.pre_call_offset_ms === null || trade.post_call_offset_ms === null) return null;
+  const diff = trade.post_call_offset_ms - trade.pre_call_offset_ms;
+  if (!Number.isFinite(diff) || diff < 0) return null;
+  return Math.round(diff / 1000);
+}
+
+function dateFromOffset(recordingStartedAtMs: number, offsetMs: number | null): Date | null {
+  if (offsetMs === null || !Number.isFinite(offsetMs)) return null;
+  return new Date(recordingStartedAtMs + offsetMs);
+}
+
+function formatTradeDate(date: Date | null): string {
+  if (!date) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: '2-digit',
+  }).format(date);
+}
+
+function formatTradeTime(date: Date | null): string {
+  if (!date) return '';
+  return new Intl.DateTimeFormat('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }).format(date);
+}
+
+function wrapSpreadsheetText(value: string | null | undefined, width = 40): string {
+  if (!value) return '';
+  return wrapCsvText(value, width);
+}
+
+function computeXlsxColumnWidths(rows: XlsxRow[]): number[] {
+  return XLSX_COLUMNS.map((column) => {
+    const values = [column, ...rows.map((row) => row[column])];
+    const maxLineLength = values.reduce((max, value) => {
+      const lines = String(value ?? '').split(/\r?\n/);
+      return Math.max(max, ...lines.map((line) => line.length));
+    }, 0);
+    return Math.min(40, maxLineLength);
+  });
+}
+
+function worksheetXml(rows: XlsxRow[], widths: number[]): string {
+  const headerCells = XLSX_COLUMNS.map((column, i) =>
+    inlineStringCell(cellRef(i, 1), column, 1)
+  ).join('');
+  const dataRows = rows.map((row, rowIndex) => {
+    const rowNumber = rowIndex + 2;
+    const values = XLSX_COLUMNS.map((column, columnIndex) =>
+      inlineStringCell(cellRef(columnIndex, rowNumber), row[column], 2)
+    ).join('');
+    const maxLines = Math.max(
+      1,
+      ...XLSX_COLUMNS.map((column) => String(row[column] ?? '').split(/\r?\n/).length)
+    );
+    const height = Math.min(120, maxLines * 15);
+    return `<row r="${rowNumber}" ht="${height}" customHeight="1">${values}</row>`;
+  }).join('');
+  const colXml = widths.map((width, i) =>
+    `<col min="${i + 1}" max="${i + 1}" width="${width}" customWidth="1"/>`
+  ).join('');
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <cols>${colXml}</cols>
+  <sheetData>
+    <row r="1">${headerCells}</row>
+    ${dataRows}
+  </sheetData>
+  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</worksheet>`;
+}
+
+function inlineStringCell(ref: string, value: string, style: number): string {
+  return `<c r="${ref}" t="inlineStr" s="${style}"><is><t xml:space="preserve">${xmlText(value)}</t></is></c>`;
+}
+
+function cellRef(columnIndex: number, row: number): string {
+  return `${columnName(columnIndex)}${row}`;
+}
+
+function columnName(columnIndex: number): string {
+  let name = '';
+  let n = columnIndex + 1;
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    name = String.fromCharCode(65 + rem) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
+}
+
+function xmlText(value: string): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\r?\n/g, '&#10;');
+}
+
+function contentTypesXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`;
+}
+
+function rootRelsXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`;
+}
+
+function workbookXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Trade Log" sheetId="1" r:id="rId1"/></sheets>
+</workbook>`;
+}
+
+function workbookRelsXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+}
+
+function stylesXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>
+  <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F2937"/><bgColor indexed="64"/></patternFill></fill></fills>
+  <borders count="2"><border/><border><left style="thin"><color rgb="FFD1D5DB"/></left><right style="thin"><color rgb="FFD1D5DB"/></right><top style="thin"><color rgb="FFD1D5DB"/></top><bottom style="thin"><color rgb="FFD1D5DB"/></bottom></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="3">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`;
+}
+
+function appPropsXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Snipalot</Application></Properties>`;
+}
+
+function corePropsXml(): string {
+  const now = new Date().toISOString();
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:creator>Snipalot</dc:creator>
+  <cp:lastModifiedBy>Snipalot</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`;
+}
+
 /**
- * Write trade_log.md — human-readable view of the same data, one section
+ * Write trade_log.md â€” human-readable view of the same data, one section
  * per trade with the key fields formatted for easy review.
  */
-function writeTradeLogMd(sessionDir: string, trades: TradeEvent[]): string {
+function writeTradeLogMd(
+  sessionDir: string,
+  trades: TradeEvent[],
+  recordingStartedAtMs: number,
+  durationMs: number
+): string {
   const mdPath = path.join(sessionDir, 'trade_log.md');
   const lines: string[] = [];
   lines.push('# Trade Log');
   lines.push('');
-  lines.push(`Generated by Snipalot Trade-mode · ${new Date().toLocaleString()}`);
+  lines.push(`Generated by Snipalot Trade-mode - ${new Date().toLocaleString()}`);
   lines.push(`Total trades: ${trades.length}`);
+  const gifPath = findSessionGifPath(sessionDir);
+  if (gifPath) {
+    lines.push('');
+    lines.push(`![Session GIF](./${markdownPath(path.basename(gifPath))})`);
+  }
   lines.push('');
   if (trades.length === 0) {
     lines.push('_No trades extracted from this session._');
   }
   for (const t of trades) {
-    const targetRange =
-      t.target_low_mc !== null && t.target_high_mc !== null
-        ? `$${formatMc(t.target_low_mc)} – $${formatMc(t.target_high_mc)}`
-        : '_(no target)_';
-    const exit = t.exit_mc_estimate !== null ? `$${formatMc(t.exit_mc_estimate)}` : '_(no exit)_';
-    const flag = t.needs_review ? ' ⚠️ needs review' : '';
+    const timeline = buildTradeTimeline(t, recordingStartedAtMs, durationMs);
+    const flag = t.needs_review ? ' needs review' : '';
     lines.push('---');
     lines.push('');
-    lines.push(`## #${t.trade_id} · ${t.token_name}${flag}`);
+    lines.push(`## #${t.trade_id} - ${t.token_name}${flag}`);
     lines.push('');
-    lines.push(`- **Pre-call:** ${t.pre_call_offset_label ?? '_(unknown)_'} · target ${targetRange}`);
-    lines.push(`- **Post-call:** ${t.post_call_offset_label ?? '_(unknown)_'} · spoken exit ${exit}`);
-    // MockApe / Padre actuals (only present if mockape.json was joined)
+    lines.push(`- **Trade date:** ${formatTradeDate(timeline.tradeDate)}`);
+    lines.push(`- **Video start:** ${formatTradeTime(timeline.videoStart)}`);
+    lines.push(`- **Entry commentary time:** ${formatTradeTime(timeline.entryCommentary) || 'unknown'}`);
+    lines.push(`- **Entry time inferred:** ${formatTradeTime(timeline.entryInferred) || 'unknown'}`);
+    lines.push(`- **Exit commentary time:** ${formatTradeTime(timeline.exitCommentary) || 'unknown'}`);
+    lines.push(`- **Exit time actual:** ${formatTradeTime(timeline.exitActual) || 'unknown'}`);
+    lines.push(`- **Time in trade seconds:** ${timeline.timeInTradeSeconds ?? 'unknown'}`);
+    lines.push(`- **Video end:** ${formatTradeTime(timeline.videoEnd)}`);
     if (t.entry_mc_actual !== null && t.entry_mc_actual !== undefined) {
       const pnlSol = t.pnl_sol !== null && t.pnl_sol !== undefined ? t.pnl_sol : 0;
       const pnlPct = t.pnl_percentage !== null && t.pnl_percentage !== undefined ? t.pnl_percentage : 0;
       const pnlSign = pnlSol >= 0 ? '+' : '';
-      const pnlEmoji = pnlSol > 0 ? '🟢' : pnlSol < 0 ? '🔴' : '⚪';
       lines.push(
-        `- **Padre actuals:** entry $${formatMc(t.entry_mc_actual!)} → exit $${formatMc(t.exit_mc_actual ?? 0)} · ${pnlEmoji} ${pnlSign}${pnlSol.toFixed(4)} SOL (${pnlSign}${pnlPct.toFixed(2)}%)`
+        `- **MockApe actuals:** entry $${formatWholeNumberWithCommas(t.entry_mc_actual)} -> exit $${formatWholeNumberWithCommas(t.exit_mc_actual)}; ${pnlSign}${pnlSol.toFixed(2)} SOL (${pnlSign}${pnlPct.toFixed(1)}%)`
       );
       if (t.exit_scenario) {
-        lines.push(`- **Exit vs target:** ${t.exit_scenario}${t.target_hit_low ? ' · hit low' : ''}${t.target_hit_high ? ' · hit high' : ''}`);
+        lines.push(`- **Exit vs target:** ${t.exit_scenario}${t.target_hit_low ? '; hit low' : ''}${t.target_hit_high ? '; hit high' : ''}`);
       }
       if (t.mockape_join_confidence) {
-        lines.push(`- **Padre match confidence:** ${t.mockape_join_confidence}`);
+        lines.push(`- **MockApe match confidence:** ${t.mockape_join_confidence}`);
       }
     }
     if (t.rationale) lines.push(`- **Rationale:** ${t.rationale}`);
@@ -1287,6 +1573,16 @@ function writeTradeLogMd(sessionDir: string, trades: TradeEvent[]): string {
       lines.push('');
       lines.push(`**Notes:** ${t.notes}`);
     }
+    const screenshots = findScreenshotsForTrade(sessionDir, t);
+    if (screenshots.length > 0) {
+      lines.push('');
+      lines.push('**Trade screenshots:**');
+      lines.push('');
+      for (const screenshot of screenshots) {
+        lines.push(`![Trade screenshot](${markdownPath(path.relative(sessionDir, screenshot))})`);
+        lines.push('');
+      }
+    }
     lines.push('');
   }
   fs.writeFileSync(mdPath, lines.join('\n'), 'utf-8');
@@ -1294,8 +1590,50 @@ function writeTradeLogMd(sessionDir: string, trades: TradeEvent[]): string {
   return mdPath;
 }
 
+function findSessionGifPath(sessionDir: string): string | null {
+  const gif = fs
+    .readdirSync(sessionDir)
+    .filter((name) => name.toLowerCase().endsWith('.gif'))
+    .sort()[0];
+  return gif ? path.join(sessionDir, gif) : null;
+}
+
+function findScreenshotsForTrade(sessionDir: string, trade: TradeEvent): string[] {
+  const dir = path.join(sessionDir, 'Inputs', 'trade-screenshots');
+  if (!fs.existsSync(dir)) return [];
+  const candidates = fs
+    .readdirSync(dir)
+    .filter((name) => /^marker-\d+\.png$/i.test(name))
+    .sort((a, b) => Number(a.match(/\d+/)?.[0] ?? 0) - Number(b.match(/\d+/)?.[0] ?? 0))
+    .map((name) => path.join(dir, name));
+  if (candidates.length === 0) return [];
+  const direct = candidates[trade.trade_id - 1];
+  return direct ? [direct] : candidates;
+}
+
+function markdownPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/ /g, '%20');
+}
+
+function organizeTradeSessionRoot(sessionDir: string): void {
+  const inputsDir = getTradeInputsDir(sessionDir);
+  const keep = new Set(['Inputs', 'prompt.txt', 'transcript.txt', 'trade_log.xlsx', 'trade_log.md']);
+  try {
+    for (const entry of fs.readdirSync(sessionDir, { withFileTypes: true })) {
+      const name = entry.name;
+      if (keep.has(name) || name.toLowerCase().endsWith('.gif')) continue;
+      const from = path.join(sessionDir, name);
+      const to = path.join(inputsDir, name);
+      if (from === to || fs.existsSync(to)) continue;
+      fs.renameSync(from, to);
+    }
+  } catch (err) {
+    log('trade-pipeline', 'session root organization failed', { err: (err as Error).message, sessionDir });
+  }
+}
+
 /**
- * Write adherence_report.md — aggregate stats across all trades. PnL
+ * Write adherence_report.md â€” aggregate stats across all trades. PnL
  * fields land in M7 (Padre join); for M5 we report only what extraction
  * gives us: target ranges, exit-vs-target, confidence, review flags.
  */
@@ -1330,12 +1668,12 @@ function writeAdherenceReport(sessionDir: string, trades: TradeEvent[]): string 
   const actualEarly = matched.filter((t) => t.exit_scenario === 'early').length;
   const actualOvershoot = matched.filter((t) => t.exit_scenario === 'overshoot').length;
 
-  const pct = (n: number, d: number): string => (d === 0 ? '–' : `${Math.round((n / d) * 100)}%`);
+  const pct = (n: number, d: number): string => (d === 0 ? 'â€“' : `${Math.round((n / d) * 100)}%`);
 
   const lines: string[] = [];
   lines.push('# Adherence Report');
   lines.push('');
-  lines.push(`Generated by Snipalot Trade-mode · ${new Date().toLocaleString()}`);
+  lines.push(`Generated by Snipalot Trade-mode Â· ${new Date().toLocaleString()}`);
   lines.push('');
   lines.push('## Summary');
   lines.push('');
@@ -1360,7 +1698,7 @@ function writeAdherenceReport(sessionDir: string, trades: TradeEvent[]): string 
   lines.push('- "In range" (above) uses the trader\'s spoken exit_mc_estimate vs spoken targets. Padre actuals (below) use the real exit price.');
   lines.push('');
 
-  // ── Padre / MockApe actuals (only present when mockape.json was joined) ──
+  // â”€â”€ Padre / MockApe actuals (only present when mockape.json was joined) â”€â”€
   if (matched.length > 0) {
     lines.push('## Padre / MockApe actuals');
     lines.push('');
@@ -1399,19 +1737,21 @@ function formatMc(mc: number): string {
   return mc.toString();
 }
 
-// ─── MockApe / Padre outcome join ─────────────────────────────────────
+// â”€â”€â”€ MockApe / Padre outcome join â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * If the user dropped a mockape.json into the session folder, parse it
  * as MockApeTrade[] and return. Returns null if the file isn't there or
- * fails to parse — joining is optional, the trade log just lacks the
+ * fails to parse â€” joining is optional, the trade log just lacks the
  * actual P&L columns when no MockApe data is available.
  */
 function loadMockApeTrades(sessionDir: string): MockApeTrade[] | null {
-  const mockApePath = path.join(sessionDir, 'mockape.json');
-  if (!fs.existsSync(mockApePath)) return null;
+  const mockApePath = getTradeInputPath(sessionDir, 'mockape.json');
+  const legacyMockApePath = path.join(sessionDir, 'mockape.json');
+  const actualPath = fs.existsSync(mockApePath) ? mockApePath : legacyMockApePath;
+  if (!fs.existsSync(actualPath)) return null;
   try {
-    const raw = fs.readFileSync(mockApePath, 'utf-8');
+    const raw = fs.readFileSync(actualPath, 'utf-8');
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) {
       log('trade-pipeline', 'mockape.json not an array, skipping join');
@@ -1441,7 +1781,7 @@ function loadMockApeTrades(sessionDir: string): MockApeTrade[] | null {
         });
       }
     }
-    log('trade-pipeline', 'mockape.json loaded', { entries: trades.length });
+    log('trade-pipeline', 'mockape.json loaded', { entries: trades.length, mockApePath: actualPath });
     return trades;
   } catch (err) {
     log('trade-pipeline', 'mockape.json parse fail', { err: (err as Error).message });
@@ -1451,7 +1791,7 @@ function loadMockApeTrades(sessionDir: string): MockApeTrade[] | null {
 
 /**
  * Loose token-name match: case-insensitive, alphanumerics-only. Tolerates
- * whisper mishears like "peep" → "pepe" by checking if either string is
+ * whisper mishears like "peep" â†’ "pepe" by checking if either string is
  * a prefix of the other (after normalization). Returns true on match.
  */
 function tokenNameMatches(spoken: string, mockape: string): boolean {
@@ -1516,6 +1856,7 @@ function enrichTradeFromMockape(
 ): void {
   trade.mockape_trade_id = m.id;
   trade.mockape_join_confidence = confidence;
+  trade.mockape_timestamp_ms = m.timestamp;
   trade.entry_mc_actual = m.entryMarketCap;
   trade.exit_mc_actual = m.exitMarketCap;
   trade.sol_invested = roundTo(m.solInvested * share, 6);
@@ -1555,8 +1896,8 @@ function roundTo(value: number, decimals: number): number {
  * market caps + P&L. Match confidence depends on token exactness and
  * timestamp closeness.
  *
- * The match window is ±10 minutes from the post_call moment (or pre_call
- * if post is missing). MockApe trades match at most one TradeEvent — once
+ * The match window is Â±10 minutes from the post_call moment (or pre_call
+ * if post is missing). MockApe trades match at most one TradeEvent â€” once
  * matched, removed from the candidate pool so a single mockape entry isn't
  * double-counted.
  */
@@ -1565,7 +1906,7 @@ function joinMockApe(
   mockape: MockApeTrade[],
   recordingStartedAtMs: number
 ): { matched: number; unmatched: number } {
-  const matchWindowMs = 10 * 60 * 1000; // ±10 minutes
+  const matchWindowMs = 10 * 60 * 1000; // Â±10 minutes
   const remaining = [...mockape];
   let matched = 0;
   let unmatched = 0;
@@ -1603,8 +1944,8 @@ function joinMockApe(
       // No match within window. Leave fields null + flag for review.
       trade.mockape_join_confidence = null;
       trade.needs_review = trade.needs_review || true;
-      trade.notes = (trade.notes ? trade.notes + ' · ' : '') +
-        'No matching MockApe trade within ±10min window';
+      trade.notes = (trade.notes ? trade.notes + ' Â· ' : '') +
+        'No matching MockApe trade within Â±10min window';
       unmatched++;
       continue;
     }
@@ -1626,4 +1967,3 @@ function joinMockApe(
   });
   return { matched, unmatched };
 }
-

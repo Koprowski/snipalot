@@ -417,7 +417,7 @@ function unregisterSnapshotHotkey(): void {
  * Trade-marker hotkey: only registered while recording AND mode === 'trade'.
  * Each press appends a recording-relative ms offset to currentTradeMarkers,
  * which the trade-pipeline uses as anchor tags for the LLM extraction prompt.
- * (Default combo is Ctrl+Shift+M; rebindable in Settings — not the same as startTrade.)
+ * (Default combo is Ctrl+Shift+X; rebindable in Settings — not the same as startTrade.)
  * No separate recording is started — markers are lightweight metadata only.
  */
 function registerTradeMarkerHotkey(): void {
@@ -1045,9 +1045,14 @@ function openTradeContextWindow(
     // sentinel only if neither has already happened (the IPC handlers
     // below also write it; this is the fallback).
     if (pendingTradeContext) {
-      const skipPath = path.join(pendingTradeContext.sessionDir, 'mockape.json.skipped');
+      const skipPath = path.join(pendingTradeContext.sessionDir, 'Inputs', 'mockape.json.skipped');
+      const legacySkipPath = path.join(pendingTradeContext.sessionDir, 'mockape.json.skipped');
       try {
+        const inputDir = path.dirname(skipPath);
+        if (!fs.existsSync(inputDir)) fs.mkdirSync(inputDir, { recursive: true });
         if (!fs.existsSync(skipPath) &&
+            !fs.existsSync(legacySkipPath) &&
+            !fs.existsSync(path.join(pendingTradeContext.sessionDir, 'Inputs', 'mockape.json')) &&
             !fs.existsSync(path.join(pendingTradeContext.sessionDir, 'mockape.json'))) {
           fs.writeFileSync(skipPath, '', 'utf-8');
           log('trade-context', 'window dismissed without submit/skip → wrote .skipped sentinel');
@@ -1071,8 +1076,10 @@ ipcMain.handle(
   (_evt, payload: { trades: unknown[]; dontAskAgain: boolean }) => {
     if (!pendingTradeContext) return;
     const { sessionDir } = pendingTradeContext;
-    const mockApePath = path.join(sessionDir, 'mockape.json');
+    const mockApePath = path.join(sessionDir, 'Inputs', 'mockape.json');
     try {
+      const inputDir = path.dirname(mockApePath);
+      if (!fs.existsSync(inputDir)) fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(mockApePath, JSON.stringify(payload.trades, null, 2), 'utf-8');
       log('trade-context', 'mockape.json written via submit', {
         mockApePath,
@@ -1093,8 +1100,10 @@ ipcMain.handle(
 ipcMain.handle('trade-context:skip', (_evt, payload: { dontAskAgain: boolean }) => {
   if (!pendingTradeContext) return;
   const { sessionDir } = pendingTradeContext;
-  const skipPath = path.join(sessionDir, 'mockape.json.skipped');
+  const skipPath = path.join(sessionDir, 'Inputs', 'mockape.json.skipped');
   try {
+    const inputDir = path.dirname(skipPath);
+    if (!fs.existsSync(inputDir)) fs.mkdirSync(inputDir, { recursive: true });
     fs.writeFileSync(skipPath, '', 'utf-8');
     log('trade-context', 'skip sentinel written', { skipPath });
   } catch (err) {
@@ -2737,7 +2746,10 @@ function stopRecording(reason: string): void {
       // User opted out of the prompt — write the .skipped sentinel so
       // trade-pipeline doesn't wait.
       try {
-        fs.writeFileSync(path.join(liveSessionDir, 'mockape.json.skipped'), '', 'utf-8');
+        const skipPath = path.join(liveSessionDir, 'Inputs', 'mockape.json.skipped');
+        const inputDir = path.dirname(skipPath);
+        if (!fs.existsSync(inputDir)) fs.mkdirSync(inputDir, { recursive: true });
+        fs.writeFileSync(skipPath, '', 'utf-8');
         log('trade-context', 'auto-skipped (autoPromptForTradeData=false)');
       } catch {
         /* ignore */
@@ -3422,7 +3434,7 @@ async function runTradeMarker(): Promise<void> {
   };
 
   if (recorderWindow && liveSessionDir) {
-    const markerDir = path.join(liveSessionDir, 'trade-markers');
+    const markerDir = path.join(liveSessionDir, 'Inputs', 'trade-screenshots');
     if (!fs.existsSync(markerDir)) fs.mkdirSync(markerDir, { recursive: true });
     const screenshotPath = path.join(markerDir, `marker-${markerIndex}.png`);
     const buffer = await new Promise<ArrayBuffer | null>((resolve) => {
@@ -3551,7 +3563,7 @@ ipcMain.handle('launcher:get-pin-state', () => {
  *
  * Session-kind detection from folder suffix:
  *   "{stamp} feedback"   → record (uses prompt.txt)
- *   "{stamp} trade"      → trade  (uses extraction_prompt.md, falls back to prompt.txt stub)
+ *   "{stamp} trade"      → trade  (uses prompt.txt)
  *   "{stamp} screenshot" → screenshot (uses prompt.md)
  *
  * Sorted by mtime so we always grab the newest regardless of session type.
@@ -3585,14 +3597,9 @@ ipcMain.handle('launcher:copy-last-prompt', () => {
       entry.name.endsWith(' feedback') ? 'record' :
       // Unknown suffix — try anyway, kind will default to 'record'
       'record';
-    // Candidate filenames per session kind. Trade folders contain a
-    // prompt.txt stub that's just a pointer ("see extraction_prompt.md")
-    // — we deliberately do NOT fall back to it. If extraction_prompt.md
-    // isn't there yet (e.g. user clicked Copy before the trade-context
-    // window was submitted), walk to the previous session that has a
-    // real prompt instead.
+    // Candidate filenames per session kind.
     const candidates = kind === 'trade'
-      ? ['extraction_prompt.md']
+      ? ['prompt.txt']
       : kind === 'screenshot'
       ? ['prompt.md']
       : ['prompt.txt'];

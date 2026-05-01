@@ -4,7 +4,7 @@
  * Exposes IPC for the "Paste LLM Response" window that appears after the
  * extraction prompt is ready. The user pastes the LLM's JSON reply here;
  * main writes it to extraction_response.json and the existing pipeline
- * poller picks it up to generate trade_log.csv / .md / adherence_report.md.
+ * poller picks it up to generate trade_log.xlsx / trade_log.md / adherence_report.md.
  */
 
 import { contextBridge, ipcRenderer } from 'electron';

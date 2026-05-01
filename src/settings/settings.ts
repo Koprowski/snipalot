@@ -52,7 +52,7 @@ const HOTKEY_LABELS: Record<string, string> = {
 const DEFAULT_HOTKEYS: Record<string, string> = {
   startStop: 'Ctrl+Shift+S',
   startTrade: 'Ctrl+Shift+T',
-  tradeMarker: 'Ctrl+Shift+M',
+  tradeMarker: 'Ctrl+Shift+X',
   annotate: 'Ctrl+Shift+A',
   snapshot: 'Ctrl+Shift+P',
   clear: 'Ctrl+Shift+C',

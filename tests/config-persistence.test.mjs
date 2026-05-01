@@ -74,6 +74,42 @@ test('loadConfig preserves custom trade marker hotkey', () => {
   runConfigChild(home, code);
 });
 
+test('loadConfig migrates old default Gemini CLI model', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-migrate-gemini-model-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ trade: { geminiCliModel: 'gemini-2.5-flash' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.trade.geminiCliModel, 'gemini-3.1-pro-preview');
+  `;
+  runConfigChild(home, code);
+});
+
+test('loadConfig preserves custom Gemini CLI model', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-custom-gemini-model-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ trade: { geminiCliModel: 'gemini-2.5-pro' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.trade.geminiCliModel, 'gemini-2.5-pro');
+  `;
+  runConfigChild(home, code);
+});
+
 test('loadConfig accepts UTF-8 BOM config files', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-bom-'));
   const configDir = path.join(home, '.snipalot');

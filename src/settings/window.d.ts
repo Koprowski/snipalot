@@ -58,6 +58,12 @@ interface Window {
       stdoutTail?: string;
       stderrTail?: string;
     }>;
+    installNode: () => Promise<{
+      ok: boolean;
+      message: string;
+      stdoutTail?: string;
+      stderrTail?: string;
+    }>;
     installWhisper: () => Promise<{
       ok: boolean;
       message: string;

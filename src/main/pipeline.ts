@@ -30,6 +30,16 @@ import { log } from './logger';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ffmpegPathRaw: string | null = require('ffmpeg-static');
 
+function resolveFfmpegPath(rawPath: string | null): string | null {
+  if (!rawPath) return null;
+  if (fs.existsSync(rawPath)) return rawPath;
+  const unpackedPath = rawPath.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+  if (unpackedPath !== rawPath && fs.existsSync(unpackedPath)) return unpackedPath;
+  return rawPath;
+}
+
+const ffmpegPath = resolveFfmpegPath(ffmpegPathRaw);
+
 /**
  * Annotation schema v2 (discriminated union). Mirrors the shape types the
  * overlay produces; typed here as a loose record so pipeline-side callers
@@ -182,12 +192,12 @@ function throwIfAborted(abortSignal?: AbortSignal): void {
 function runFfmpeg(args: string[], label: string, abortSignal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     throwIfAborted(abortSignal);
-    if (!ffmpegPathRaw) {
+    if (!ffmpegPath) {
       reject(new Error('ffmpeg-static did not resolve a binary path'));
       return;
     }
-    log('ffmpeg', label, { args });
-    const proc = spawn(ffmpegPathRaw, args, { windowsHide: true });
+    log('ffmpeg', label, { args, ffmpegPath });
+    const proc = spawn(ffmpegPath, args, { windowsHide: true });
     let stderr = '';
     const onAbort = () => {
       try {
@@ -406,6 +416,8 @@ function findWhisperBinary(): { exe: string; model: string } | null {
     const exeCandidates = [
       path.join(binDir, 'whisper-cli.exe'),
       path.join(binDir, 'main.exe'),
+      path.join(binDir, 'Release', 'whisper-cli.exe'),
+      path.join(binDir, 'Release', 'main.exe'),
     ];
     const exe = exeCandidates.find((p) => fs.existsSync(p));
     if (!exe) continue;

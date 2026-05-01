@@ -251,4 +251,11 @@ function migrateLoadedConfig(
       to: config.hotkeys.tradeMarker,
     });
   }
+  if (parsed.trade?.geminiCliModel === 'gemini-2.5-flash') {
+    config.trade.geminiCliModel = DEFAULT_CONFIG.trade.geminiCliModel;
+    log('config', 'migrated old default Gemini CLI model', {
+      from: 'gemini-2.5-flash',
+      to: config.trade.geminiCliModel,
+    });
+  }
 }

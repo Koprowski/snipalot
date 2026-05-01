@@ -7,6 +7,44 @@
     <link rel="stylesheet" href="settings.css" />
   </head>
   <body>
+    <div class="setup-modal-backdrop" id="setup-modal" style="display:none">
+      <div class="setup-modal-card" role="dialog" aria-modal="true" aria-labelledby="setup-modal-title">
+        <div class="setup-modal-title" id="setup-modal-title">Complete Snipalot setup</div>
+        <p class="setup-modal-copy">
+          You have dependencies missing in order to completely benefit from Snipalot.
+          Click Next to install the selected missing dependencies.
+        </p>
+        <div class="setup-checklist" id="setup-modal-checklist">
+          <label class="setup-check-row">
+            <input type="checkbox" id="setup-check-whisper" checked />
+            <span>
+              <strong>Whisper</strong>
+              <small>Local transcription engine and English speech model.</small>
+            </span>
+          </label>
+          <label class="setup-check-row">
+            <input type="checkbox" id="setup-check-node" checked />
+            <span>
+              <strong>Node.js LTS</strong>
+              <small>Required for installing and running Gemini CLI.</small>
+            </span>
+          </label>
+          <label class="setup-check-row">
+            <input type="checkbox" id="setup-check-gemini" checked />
+            <span>
+              <strong>Gemini CLI</strong>
+              <small>Recommended no-key trade extraction backend.</small>
+            </span>
+          </label>
+        </div>
+        <div class="setup-modal-status" id="setup-modal-status"></div>
+        <div class="setup-modal-actions">
+          <button class="btn" id="btn-setup-skip" type="button">Skip</button>
+          <button class="btn primary" id="btn-setup-next" type="button">Next</button>
+        </div>
+      </div>
+    </div>
+
     <div class="titlebar">
       <h1><span class="dot"></span> Snipalot Settings</h1>
       <button class="close-btn" id="btn-close" title="Close">✕</button>
@@ -146,7 +184,7 @@
             <button class="btn" id="btn-check-dependencies" type="button">Check Dependencies</button>
             <button class="btn" id="btn-install-whisper" type="button">Install Whisper</button>
             <button class="btn" id="btn-install-gemini-cli" type="button">Install Gemini CLI</button>
-            <button class="btn" id="btn-open-nodejs" type="button">Open Node.js Download</button>
+            <button class="btn" id="btn-install-node" type="button">Install Node.js</button>
           </div>
           <p class="info" style="margin-top:6px;font-size:11px">
             Whisper downloads the local speech engine and English model. If Gemini CLI is not installed, Snipalot can install it with npm when Node.js is available. After that, use Sign in with Google below.

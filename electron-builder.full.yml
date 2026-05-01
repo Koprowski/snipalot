@@ -9,6 +9,8 @@ files:
   - package.json
   - '!**/*.ts'
   - '!**/*.map'
+asarUnpack:
+  - node_modules/ffmpeg-static/**/*
 extraResources:
   - from: resources
     to: resources

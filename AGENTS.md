@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.14)
+## Recent improvements (v1.0.1 onward; current release v1.0.15)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -148,6 +148,13 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Screenshot capture now forces countdown `0` regardless of the Record/Trade countdown setting; there should never be a 3-2-1 countdown for screenshots.
  - Overlay confirm no longer pre-promotes a selected region into `recordingRegion`/dashed outline. Recording ownership is set only after main sends `overlay:owns-recording`; screenshot exits selection with no lingering dotted outline.
  - Config loading strips a UTF-8 BOM before `JSON.parse`, preventing PowerShell-written config files from resetting Snipalot to defaults. Covered by `tests/config-persistence.test.mjs`.
+- **First-run setup hardening (v1.0.15 local branch):**
+ - Settings first-run onboarding now opens a dependency modal with Whisper, Node.js LTS, and Gemini CLI preselected when missing.
+ - Node/npm detection no longer relies only on the already-running Electron process PATH; it probes standard Windows Node install folders and runs `npm.cmd` through `cmd.exe` to avoid `spawn EINVAL`.
+ - Whisper setup recognizes current whisper.cpp zip layout where `whisper-cli.exe` extracts under `bin/whisper/Release/`, so successful downloads verify correctly.
+ - Packaged ffmpeg now resolves `app.asar.unpacked` and `electron-builder` explicitly unpacks `node_modules/ffmpeg-static`, fixing packaged transcription/video export failures caused by trying to spawn ffmpeg inside `app.asar`.
+ - Settings install buttons keep real failure messages visible instead of immediately overwriting them with a generic dependency recheck.
+ - Existing configs using the old default Gemini CLI model `gemini-2.5-flash` migrate to `gemini-3.1-pro-preview`; custom model choices remain user-controlled.
 
 ## Packaged app logs
 

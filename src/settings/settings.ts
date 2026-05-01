@@ -17,7 +17,7 @@ const btnCheckUpdates = document.getElementById('btn-check-updates') as HTMLButt
 const btnCheckDependencies = document.getElementById('btn-check-dependencies') as HTMLButtonElement;
 const btnInstallWhisper = document.getElementById('btn-install-whisper') as HTMLButtonElement;
 const btnInstallGeminiCli = document.getElementById('btn-install-gemini-cli') as HTMLButtonElement;
-const btnOpenNodejs = document.getElementById('btn-open-nodejs') as HTMLButtonElement;
+const btnInstallNode = document.getElementById('btn-install-node') as HTMLButtonElement;
 const dependencyStatusEl = document.getElementById('dependency-status') as HTMLElement;
 const geminiCliMissingHelpEl = document.getElementById('gemini-cli-missing-help') as HTMLElement;
 const geminiCliMissingTitleEl = document.getElementById('gemini-cli-missing-title') as HTMLElement;
@@ -35,6 +35,13 @@ const versionLabelEl = document.getElementById('settings-version') as HTMLElemen
 const settingsStatusEl = document.getElementById('status') as HTMLElement;
 const hotkeysBody = document.getElementById('hotkeys-body') as HTMLTableSectionElement;
 const firstRunBanner = document.getElementById('first-run-banner') as HTMLElement;
+const setupModalEl = document.getElementById('setup-modal') as HTMLElement;
+const setupModalStatusEl = document.getElementById('setup-modal-status') as HTMLElement;
+const btnSetupNext = document.getElementById('btn-setup-next') as HTMLButtonElement;
+const btnSetupSkip = document.getElementById('btn-setup-skip') as HTMLButtonElement;
+const setupCheckWhisper = document.getElementById('setup-check-whisper') as HTMLInputElement;
+const setupCheckNode = document.getElementById('setup-check-node') as HTMLInputElement;
+const setupCheckGemini = document.getElementById('setup-check-gemini') as HTMLInputElement;
 
 // ─── hotkey label map ──────────────────────────────────────────────────
 
@@ -88,6 +95,9 @@ let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostP
 let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 let editedCountdownSec = 3;
 let lastGeminiCliDocsUrl = 'https://github.com/google-gemini/gemini-cli#installation';
+type DependencyStatus = Awaited<ReturnType<typeof api.checkDependencies>>;
+let lastDependencyStatus: DependencyStatus | null = null;
+let firstRunOnboarding = false;
 
 async function init(): Promise<void> {
   const config = await api.getConfig();
@@ -99,6 +109,7 @@ async function init(): Promise<void> {
 
   // First-run banner
   if (config.firstRun) {
+    firstRunOnboarding = true;
     firstRunBanner.style.display = 'block';
   }
 
@@ -235,33 +246,74 @@ async function init(): Promise<void> {
   btnInstallGeminiCli.addEventListener('click', () => {
     void installGeminiCliFromSettings();
   });
-  btnOpenNodejs.addEventListener('click', async () => {
-    await api.openUrl('https://nodejs.org/en/download');
+  btnInstallNode.addEventListener('click', () => {
+    void installNodeFromSettings();
   });
-  void refreshDependencyStatus();
+  btnSetupSkip.addEventListener('click', () => {
+    setupModalEl.style.display = 'none';
+  });
+  btnSetupNext.addEventListener('click', () => {
+    void runSetupModalInstall();
+  });
+  void refreshDependencyStatus({ maybeShowFirstRunModal: config.firstRun });
 
   // ── Gemini CLI Google sign-in wiring ─────────────────────────────
   initGeminiSignin();
 }
 
-async function refreshDependencyStatus(): Promise<void> {
+function formatDependencyStatus(result: DependencyStatus): string {
+  return [
+    `${result.whisper.ok ? 'OK' : 'Missing'} - Whisper: ${result.whisper.message}`,
+    `${result.node.ok ? 'OK' : 'Missing'} - Node/npm: ${result.node.message}`,
+    `${result.geminiCli.ok ? 'OK' : 'Missing'} - Gemini CLI: ${result.geminiCli.message}`,
+  ].join('\n');
+}
+
+function updateDependencyButtons(result: DependencyStatus): void {
+  btnInstallWhisper.disabled = result.whisper.ok;
+  btnInstallNode.disabled = result.node.ok;
+  btnInstallGeminiCli.disabled = !result.node.ok || result.geminiCli.ok;
+}
+
+function updateSetupModalChecklist(result: DependencyStatus): void {
+  const rows = [
+    { input: setupCheckWhisper, ok: result.whisper.ok },
+    { input: setupCheckNode, ok: result.node.ok },
+    { input: setupCheckGemini, ok: result.geminiCli.ok },
+  ];
+  for (const row of rows) {
+    row.input.checked = !row.ok;
+    row.input.disabled = row.ok;
+    row.input.closest('.setup-check-row')?.classList.toggle('installed', row.ok);
+  }
+}
+
+function maybeShowSetupModal(result: DependencyStatus): void {
+  if (!firstRunOnboarding) return;
+  if (result.whisper.ok && result.node.ok && result.geminiCli.ok) return;
+  updateSetupModalChecklist(result);
+  setupModalStatusEl.textContent = formatDependencyStatus(result);
+  setupModalEl.style.display = 'flex';
+}
+
+async function refreshDependencyStatus(options?: { maybeShowFirstRunModal?: boolean }): Promise<DependencyStatus | null> {
   dependencyStatusEl.textContent = 'Checking dependencies...';
   btnCheckDependencies.disabled = true;
   try {
     const result = await api.checkDependencies({
       geminiCliCommand: editedGeminiCliCommand.trim() || 'gemini',
     });
-    dependencyStatusEl.textContent = [
-      `${result.whisper.ok ? 'OK' : 'Missing'} - Whisper: ${result.whisper.message}`,
-      `${result.node.ok ? 'OK' : 'Missing'} - Node/npm: ${result.node.message}`,
-      `${result.geminiCli.ok ? 'OK' : 'Missing'} - Gemini CLI: ${result.geminiCli.message}`,
-    ].join('\n');
-    btnInstallWhisper.disabled = result.whisper.ok;
-    btnInstallGeminiCli.disabled = !result.node.ok || result.geminiCli.ok;
+    lastDependencyStatus = result;
+    dependencyStatusEl.textContent = formatDependencyStatus(result);
+    updateDependencyButtons(result);
+    if (options?.maybeShowFirstRunModal) maybeShowSetupModal(result);
+    return result;
   } catch (err) {
     dependencyStatusEl.textContent = `Dependency check failed: ${(err as Error).message}`;
     btnInstallWhisper.disabled = false;
+    btnInstallNode.disabled = false;
     btnInstallGeminiCli.disabled = false;
+    return null;
   } finally {
     btnCheckDependencies.disabled = false;
   }
@@ -270,34 +322,131 @@ async function refreshDependencyStatus(): Promise<void> {
 async function installWhisperFromSettings(): Promise<void> {
   btnInstallWhisper.disabled = true;
   btnCheckDependencies.disabled = true;
+  const previousLabel = btnInstallWhisper.textContent || 'Install Whisper';
+  btnInstallWhisper.textContent = 'Installing...';
   dependencyStatusEl.textContent = 'Installing Whisper... downloading the local speech model can take a few minutes.';
   try {
     const result = await api.installWhisper();
-    dependencyStatusEl.textContent = result.ok
-      ? `${result.message}\n\nRechecking dependencies...`
-      : result.message;
+    if (!result.ok) {
+      dependencyStatusEl.textContent = result.message;
+      btnInstallWhisper.disabled = false;
+      return;
+    }
+    dependencyStatusEl.textContent = `${result.message}\n\nRechecking dependencies...`;
     await refreshDependencyStatus();
   } catch (err) {
     dependencyStatusEl.textContent = `Whisper install failed: ${(err as Error).message}`;
+    btnInstallWhisper.disabled = false;
   } finally {
     btnCheckDependencies.disabled = false;
+    btnInstallWhisper.textContent = previousLabel;
+  }
+}
+
+async function installNodeFromSettings(): Promise<void> {
+  btnInstallNode.disabled = true;
+  btnCheckDependencies.disabled = true;
+  const previousLabel = btnInstallNode.textContent || 'Install Node.js';
+  btnInstallNode.textContent = 'Installing...';
+  dependencyStatusEl.textContent = 'Installing Node.js LTS with winget... Windows may ask you to confirm the install.';
+  try {
+    const result = await api.installNode();
+    if (!result.ok) {
+      dependencyStatusEl.textContent = `${result.message}${result.stderrTail ? `\n\n${result.stderrTail}` : ''}`;
+      btnInstallNode.disabled = false;
+      return;
+    }
+    dependencyStatusEl.textContent = `${result.message}\n\nRechecking dependencies...`;
+    await refreshDependencyStatus();
+  } catch (err) {
+    dependencyStatusEl.textContent = `Node.js install failed: ${(err as Error).message}`;
+    btnInstallNode.disabled = false;
+  } finally {
+    btnCheckDependencies.disabled = false;
+    btnInstallNode.textContent = previousLabel;
   }
 }
 
 async function installGeminiCliFromSettings(): Promise<void> {
   btnInstallGeminiCli.disabled = true;
   btnCheckDependencies.disabled = true;
+  const previousLabel = btnInstallGeminiCli.textContent || 'Install Gemini CLI';
+  btnInstallGeminiCli.textContent = 'Installing...';
   dependencyStatusEl.textContent = 'Installing Gemini CLI with npm... this can take a minute.';
   try {
     const result = await api.installGeminiCli();
-    dependencyStatusEl.textContent = result.ok
-      ? `${result.message}\n\nRechecking dependencies...`
-      : `${result.message}${result.stderrTail ? `\n\n${result.stderrTail}` : ''}`;
+    if (!result.ok) {
+      dependencyStatusEl.textContent = `${result.message}${result.stderrTail ? `\n\n${result.stderrTail}` : ''}`;
+      btnInstallGeminiCli.disabled = false;
+      return;
+    }
+    dependencyStatusEl.textContent = `${result.message}\n\nRechecking dependencies...`;
     await refreshDependencyStatus();
   } catch (err) {
     dependencyStatusEl.textContent = `Gemini CLI install failed: ${(err as Error).message}`;
+    btnInstallGeminiCli.disabled = false;
   } finally {
     btnCheckDependencies.disabled = false;
+    btnInstallGeminiCli.textContent = previousLabel;
+  }
+}
+
+async function runSetupModalInstall(): Promise<void> {
+  btnSetupNext.disabled = true;
+  btnSetupSkip.disabled = true;
+  btnSetupNext.textContent = 'Installing...';
+  const lines: string[] = [];
+  const setModalStatus = (line: string): void => {
+    lines.push(line);
+    setupModalStatusEl.textContent = lines.join('\n');
+  };
+
+  try {
+    const before = lastDependencyStatus ?? await refreshDependencyStatus();
+    if (!before) {
+      setModalStatus('Could not check dependencies. Use the checklist in Settings below.');
+      return;
+    }
+
+    if (setupCheckNode.checked && !before.node.ok) {
+      setModalStatus('Installing Node.js LTS...');
+      const node = await api.installNode();
+      setModalStatus(node.message);
+      await refreshDependencyStatus();
+    }
+
+    if (setupCheckWhisper.checked && !(lastDependencyStatus?.whisper.ok)) {
+      setModalStatus('Installing Whisper...');
+      const whisper = await api.installWhisper();
+      setModalStatus(whisper.message);
+      await refreshDependencyStatus();
+    }
+
+    if (setupCheckGemini.checked && !(lastDependencyStatus?.geminiCli.ok)) {
+      if (!(lastDependencyStatus?.node.ok)) {
+        setModalStatus('Gemini CLI needs Node/npm. If Node was just installed, restart Snipalot and run setup again.');
+      } else {
+        setModalStatus('Installing Gemini CLI...');
+        const gemini = await api.installGeminiCli();
+        setModalStatus(gemini.ok ? gemini.message : `${gemini.message}${gemini.stderrTail ? `\n${gemini.stderrTail}` : ''}`);
+        await refreshDependencyStatus();
+      }
+    }
+
+    const finalStatus = await refreshDependencyStatus();
+    if (finalStatus) {
+      updateSetupModalChecklist(finalStatus);
+      if (finalStatus.whisper.ok && finalStatus.node.ok && finalStatus.geminiCli.ok) {
+        setModalStatus('Setup complete. Next, sign in with Google in the Trade Mode section.');
+        setTimeout(() => { setupModalEl.style.display = 'none'; }, 1200);
+      } else {
+        setModalStatus('Some items still need attention. Use the setup checklist below for details.');
+      }
+    }
+  } finally {
+    btnSetupNext.disabled = false;
+    btnSetupSkip.disabled = false;
+    btnSetupNext.textContent = 'Next';
   }
 }
 

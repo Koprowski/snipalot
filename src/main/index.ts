@@ -1534,7 +1534,7 @@ async function testGeminiCliConnection(
     /(enoent|not found|is not recognized|cannot find|no such file)/i.test(value);
   const cliCommand = (command || 'gemini').trim();
   const resolvedCli = resolveGeminiCliExecutable(cliCommand);
-  const cliModel = (model || 'gemini-2.5-flash').trim();
+  const cliModel = (model || 'gemini-3.1-pro-preview').trim();
   // Strip GEMINI_API_KEY from the spawn env so the CLI uses whatever
   // auth method is configured in ~/.gemini/settings.json (OAuth via
   // Google account = free tier, vs. paid API key auth). Without this,
@@ -1782,7 +1782,12 @@ function findBundledWhisperDependency(): {
   for (const root of roots) {
     if (!root || !fs.existsSync(root)) continue;
     const binDir = path.join(root, 'bin', 'whisper');
-    const exe = [path.join(binDir, 'whisper-cli.exe'), path.join(binDir, 'main.exe')]
+    const exe = [
+      path.join(binDir, 'whisper-cli.exe'),
+      path.join(binDir, 'main.exe'),
+      path.join(binDir, 'Release', 'whisper-cli.exe'),
+      path.join(binDir, 'Release', 'main.exe'),
+    ]
       .find((candidate) => fs.existsSync(candidate));
     const model = path.join(root, 'models', 'ggml-base.en.bin');
     if (exe && fs.existsSync(model)) {
@@ -1834,7 +1839,9 @@ async function installWhisperDependency(): Promise<{ ok: boolean; message: strin
 
     const exeExists =
       fs.existsSync(path.join(binDir, 'whisper-cli.exe')) ||
-      fs.existsSync(path.join(binDir, 'main.exe'));
+      fs.existsSync(path.join(binDir, 'main.exe')) ||
+      fs.existsSync(path.join(binDir, 'Release', 'whisper-cli.exe')) ||
+      fs.existsSync(path.join(binDir, 'Release', 'main.exe'));
     if (!exeExists) {
       const bytes = await downloadFile(WHISPER_ZIP_URL, zipPath);
       log('settings', 'whisper binary zip downloaded', { zipPath, bytes });
@@ -1850,6 +1857,7 @@ async function installWhisperDependency(): Promise<{ ok: boolean; message: strin
 
     const installed = findBundledWhisperDependency();
     if (!installed.ok) {
+      log('settings', 'whisper install verify failed', { root });
       return {
         ok: false,
         message: 'Whisper downloaded, but Snipalot could not verify the executable and model.',
@@ -1907,8 +1915,79 @@ function runDependencyProbe(
   });
 }
 
-function npmCommand(): string {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+function dependencyPathEntries(): string[] {
+  if (process.platform !== 'win32') return [];
+  return [
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'nodejs') : '',
+    process.env['ProgramFiles(x86)'] ? path.join(process.env['ProgramFiles(x86)'], 'nodejs') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'nodejs') : '',
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : '',
+  ].filter((entry) => !!entry && fs.existsSync(entry));
+}
+
+function dependencyProbeEnv(): NodeJS.ProcessEnv {
+  if (process.platform !== 'win32') return { ...process.env };
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'Path';
+  const existingPath = process.env[pathKey] ?? '';
+  const extra = dependencyPathEntries();
+  return {
+    ...process.env,
+    [pathKey]: [...extra, existingPath].filter(Boolean).join(path.delimiter),
+  };
+}
+
+function resolveNpmExecutable(env: NodeJS.ProcessEnv): string {
+  if (process.platform !== 'win32') return 'npm';
+  const candidates = [
+    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, 'nodejs', 'npm.cmd') : '',
+    process.env['ProgramFiles(x86)'] ? path.join(process.env['ProgramFiles(x86)'], 'nodejs', 'npm.cmd') : '',
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs', 'nodejs', 'npm.cmd') : '',
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  try {
+    const found = execSync('where.exe npm.cmd', {
+      env,
+      encoding: 'utf-8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => !!line && fs.existsSync(line));
+    if (found) return found;
+  } catch {
+    // Fall through to PATH lookup through cmd.exe below.
+  }
+  return 'npm.cmd';
+}
+
+function quoteCmdArg(arg: string): string {
+  if (!/[\s&()^|<>"]/g.test(arg)) return arg;
+  return `"${arg.replace(/"/g, '\\"')}"`;
+}
+
+function runNpmDependencyProbe(
+  args: string[],
+  timeoutMs = 15_000
+): Promise<{ ok: boolean; code: number | null; stdout: string; stderr: string; error?: string; timedOut: boolean }> {
+  const env = dependencyProbeEnv();
+  if (process.platform !== 'win32') {
+    return runDependencyProbe('npm', args, timeoutMs, env);
+  }
+  const npm = resolveNpmExecutable(env);
+  const comspec = process.env.ComSpec || 'cmd.exe';
+  return runDependencyProbe(
+    comspec,
+    ['/d', '/s', '/c', [quoteCmdArg(npm), ...args.map(quoteCmdArg)].join(' ')],
+    timeoutMs,
+    env
+  );
+}
+
+function wingetCommand(): string {
+  return process.platform === 'win32' ? 'winget.exe' : 'winget';
 }
 
 function sanitizeSupportLog(contents: string): string {
@@ -1966,7 +2045,7 @@ async function copySupportLogToClipboard(): Promise<
 
 ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCliCommand?: string }) => {
   const whisper = findBundledWhisperDependency();
-  const npmProbe = await runDependencyProbe(npmCommand(), ['--version'], 10_000);
+  const npmProbe = await runNpmDependencyProbe(['--version'], 10_000);
   const nodeStatus = npmProbe.ok
     ? {
         ok: true,
@@ -2019,8 +2098,7 @@ ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCli
 
 ipcMain.handle('settings:install-gemini-cli', async () => {
   log('settings', 'gemini-cli install start');
-  const result = await runDependencyProbe(
-    npmCommand(),
+  const result = await runNpmDependencyProbe(
     ['install', '-g', '@google/gemini-cli'],
     5 * 60 * 1000
   );
@@ -2053,6 +2131,52 @@ ipcMain.handle('settings:install-gemini-cli', async () => {
 
 ipcMain.handle('settings:install-whisper', async () => {
   return installWhisperDependency();
+});
+
+ipcMain.handle('settings:install-node', async () => {
+  if (process.platform !== 'win32') {
+    return { ok: false, message: 'Automatic Node.js install is only supported on Windows. Open nodejs.org/download to install Node.js LTS.' };
+  }
+  log('settings', 'node install start via winget');
+  const result = await runDependencyProbe(
+    wingetCommand(),
+    [
+      'install',
+      '--id',
+      'OpenJS.NodeJS.LTS',
+      '-e',
+      '--source',
+      'winget',
+      '--accept-package-agreements',
+      '--accept-source-agreements',
+    ],
+    10 * 60 * 1000
+  );
+  const stdoutTail = result.stdout.slice(-1000);
+  const stderrTail = result.stderr.slice(-1000);
+  if (!result.ok) {
+    log('settings', 'node install failed', {
+      code: result.code,
+      timedOut: result.timedOut,
+      error: result.error,
+      stderrTail,
+    });
+    return {
+      ok: false,
+      message: result.error
+        ? `Could not start winget: ${result.error}. Open nodejs.org/download to install Node.js LTS.`
+        : `Node.js install failed${result.timedOut ? ' (timed out)' : ''}. Open nodejs.org/download if needed.`,
+      stdoutTail,
+      stderrTail,
+    };
+  }
+  log('settings', 'node install complete', { stdoutTail, stderrTail });
+  return {
+    ok: true,
+    message: 'Node.js LTS install completed. If npm is still missing, restart Snipalot so Windows refreshes PATH.',
+    stdoutTail,
+    stderrTail,
+  };
 });
 
 interface OpenRouterModelSummary {

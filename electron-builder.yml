@@ -34,6 +34,8 @@ nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  createStartMenuShortcut: true
+  shortcutName: Snipalot
   runAfterFinish: false
   warningsAsErrors: false
   artifactName: Snipalot-${version}-setup.exe

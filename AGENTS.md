@@ -175,6 +175,8 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - HUD is shown immediately once a record/trade region is accepted instead of waiting for the recorder's MediaRecorder `started` callback.
  - Packaged ffmpeg lookup now checks `app.asar.unpacked` explicitly and logs all candidates when missing; this fixes missing transcript/commentary caused by trying to spawn ffmpeg inside `app.asar`.
  - Settings dependency checks log npm probe diagnostics, and Settings no longer logs raw config/API keys.
+- **Installer shortcut explicitness (local branch):**
+ - NSIS config now explicitly sets `createStartMenuShortcut: true` and `shortcutName: Snipalot` for both light and full installers so Start Menu shortcut creation no longer relies only on electron-builder defaults.
 
 ## Packaged app logs
 

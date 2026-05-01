@@ -1163,20 +1163,20 @@ function writeTradeLogCsv(sessionDir: string, trades: TradeEvent[]): string {
       target_low_mc: t.target_low_mc ?? '',
       target_high_mc: t.target_high_mc ?? '',
       target_midpoint_mc: targetMid,
-      rationale: t.rationale ?? '',
-      pre_transcript_excerpt: t.pre_transcript_excerpt ?? '',
-      post_transcript_excerpt: t.post_transcript_excerpt ?? '',
-      exit_mc_estimate: t.exit_mc_estimate ?? '',
+      rationale: wrapCsvText(t.rationale),
+      pre_transcript_excerpt: wrapCsvText(t.pre_transcript_excerpt),
+      post_transcript_excerpt: wrapCsvText(t.post_transcript_excerpt),
+      exit_mc_estimate: formatWholeNumberWithCommas(t.exit_mc_estimate),
       outcome_summary: t.outcome_summary ?? '',
       adherence_self_assessment: t.adherence_self_assessment ?? '',
       time_in_trade_seconds: timeInTradeSec,
       // Filled from mockape.json join when present (else blank)
       entry_mc_actual: t.entry_mc_actual ?? '',
-      exit_mc_actual: t.exit_mc_actual ?? '',
-      sol_invested: t.sol_invested ?? '',
-      sol_received: t.sol_received ?? '',
-      pnl_sol: t.pnl_sol ?? '',
-      pnl_percentage: t.pnl_percentage ?? '',
+      exit_mc_actual: formatWholeNumberWithCommas(t.exit_mc_actual),
+      sol_invested: formatFixedDecimal(t.sol_invested, 2),
+      sol_received: formatFixedDecimal(t.sol_received, 2),
+      pnl_sol: formatFixedDecimal(t.pnl_sol, 2),
+      pnl_percentage: formatFixedDecimal(t.pnl_percentage, 1),
       target_hit_low: t.target_hit_low === null || t.target_hit_low === undefined ? '' : (t.target_hit_low ? 'true' : 'false'),
       target_hit_high: t.target_hit_high === null || t.target_hit_high === undefined ? '' : (t.target_hit_high ? 'true' : 'false'),
       exit_scenario: t.exit_scenario ?? '',
@@ -1193,6 +1193,37 @@ function writeTradeLogCsv(sessionDir: string, trades: TradeEvent[]): string {
   fs.writeFileSync(csvPath, csv, 'utf-8');
   log('trade-pipeline', 'trade_log.csv written', { csvPath, rows: rows.length });
   return csvPath;
+}
+
+function wrapCsvText(value: string | null | undefined, width = 40): string {
+  if (!value) return '';
+  const words = value.replace(/\s+/g, ' ').trim().split(' ');
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    if (!line) {
+      line = word;
+      continue;
+    }
+    if (`${line} ${word}`.length > width) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = `${line} ${word}`;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.join('\n');
+}
+
+function formatFixedDecimal(value: number | null | undefined, decimals: number): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '';
+  return value.toFixed(decimals);
+}
+
+function formatWholeNumberWithCommas(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '';
+  return Math.round(value).toLocaleString('en-US');
 }
 
 /**

@@ -82,6 +82,9 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
   - During trade-mode recordings, the HUD camera button changes to a target-style marker control bound to the configured `tradeMarker` hotkey (default `Ctrl+Shift+M`) instead of the normal `snapshot` hotkey.
   - Trade markers now record offset/label metadata and capture a marker screenshot under `trade-markers/` without triggering the normal snapshot chapter/annotation reset.
   - The trade extraction prompt now treats markers as entry/decision anchors and MockApe/Padre timestamps as outcome anchors, with explicit instructions to inspect the interval between them for partial entries/exits.
+- **Trade CSV display formatting (local branch):**
+  - `trade_log.csv` now wraps `rationale`, `pre_transcript_excerpt`, and `post_transcript_excerpt` with embedded line breaks around 40 characters (CSV cannot store real pixel widths/wrap styles).
+  - CSV SOL fields (`sol_invested`, `sol_received`, `pnl_sol`) are exported to two decimals, `pnl_percentage` to one decimal, and exit market-cap fields are rounded to whole dollars with comma formatting.
 - **Gemini CLI settings-test fallback + diagnostics (local branch):**
  - `settings:test-llm-connection` now retries the prompt probe with a positional prompt when Gemini returns the known "`--prompt` + positional" parser conflict, preventing false negatives from runtime argv quirks.
  - Added structured, non-secret `settings` logs for each Gemini test stage (launch/version/prompt/fallback success/failure) with sanitized stderr tails for faster root-cause support.

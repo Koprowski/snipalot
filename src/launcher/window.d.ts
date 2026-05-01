@@ -11,6 +11,8 @@ interface Window {
     closeToTray: () => Promise<void>;
     togglePin: () => Promise<boolean>;
     getPinState: () => Promise<boolean>;
+    getCaptureMode: () => Promise<'region' | 'fullscreen' | 'window'>;
+    setCaptureMode: (mode: 'region' | 'fullscreen' | 'window') => Promise<'region' | 'fullscreen' | 'window'>;
     copyLastPrompt: () => Promise<
       | { ok: true; kind: 'record' | 'trade' | 'screenshot'; sessionName: string; chars: number }
       | { ok: false; error: string }
@@ -37,6 +39,7 @@ interface Window {
         snapshotHotkey?: string;
         startTradeHotkey?: string;
         tradeMarkerHotkey?: string;
+        captureMode?: 'region' | 'fullscreen' | 'window';
         sessionMode?: 'record' | 'trade';
         canAbandonProcessing?: boolean;
         processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;

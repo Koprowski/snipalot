@@ -48,6 +48,11 @@
         </button>
         <button id="btn-settings" class="btn-icon btn-icon-sm" title="Settings">⚙</button>
       </div>
+      <div class="capture-mode" role="group" aria-label="Capture mode">
+        <button id="capture-select" class="capture-mode-btn active" type="button" data-mode="region" title="Drag to select a region">Select</button>
+        <button id="capture-fullscreen" class="capture-mode-btn" type="button" data-mode="fullscreen" title="Capture the full display under your cursor">Full screen</button>
+        <button id="capture-window" class="capture-mode-btn" type="button" data-mode="window" title="Specific window capture is coming soon" disabled>Window</button>
+      </div>
       <div class="controls">
         <button id="btn-primary" class="btn-primary" title="Record">
           <!-- Play-triangle glyph; sibling Screenshot button uses a

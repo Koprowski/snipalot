@@ -91,8 +91,7 @@ let editedGeminiCliCommand = 'gemini';
 let editedGeminiCliModel = 'gemini-3.1-pro-preview';
 let fetchedGeminiCliModels: Array<{ id: string; createdAtMs: number }> = [];
 let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostPer1M: number }> = [];
-// Working copy of the capture mode + countdown duration.
-let editedCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
+// Working copy of the countdown duration.
 let editedCountdownSec = 3;
 let lastGeminiCliDocsUrl = 'https://github.com/google-gemini/gemini-cli#installation';
 type DependencyStatus = Awaited<ReturnType<typeof api.checkDependencies>>;
@@ -130,19 +129,9 @@ async function init(): Promise<void> {
   radioClear.addEventListener('change', () => { if (radioClear.checked) editedSnapClearAfter = true; });
   radioKeep.addEventListener('change', () => { if (radioKeep.checked) editedSnapClearAfter = false; });
 
-  // Capture mode + countdown.
-  const cfgCap = (config as unknown as { capture?: { mode?: 'region' | 'fullscreen' | 'window'; countdownSec?: number } }).capture;
-  editedCaptureMode = cfgCap?.mode ?? 'region';
+  // Recording countdown. Capture mode is controlled from the launcher.
+  const cfgCap = (config as unknown as { capture?: { countdownSec?: number } }).capture;
   editedCountdownSec = cfgCap?.countdownSec ?? 3;
-  const capRegion = document.getElementById('capture-region') as HTMLInputElement;
-  const capFullscreen = document.getElementById('capture-fullscreen') as HTMLInputElement;
-  const capWindow = document.getElementById('capture-window') as HTMLInputElement;
-  if (editedCaptureMode === 'fullscreen') capFullscreen.checked = true;
-  else if (editedCaptureMode === 'window') capWindow.checked = true;
-  else capRegion.checked = true;
-  capRegion.addEventListener('change', () => { if (capRegion.checked) editedCaptureMode = 'region'; });
-  capFullscreen.addEventListener('change', () => { if (capFullscreen.checked) editedCaptureMode = 'fullscreen'; });
-  capWindow.addEventListener('change', () => { if (capWindow.checked) editedCaptureMode = 'window'; });
 
   // Countdown control: slider (0..10) + custom number input. The two
   // stay in sync — drag the slider, the number updates; type a number,
@@ -834,7 +823,7 @@ btnSave.addEventListener('click', async () => {
       firstRun: false,
       hotkeys: editedHotkeys as never,
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
-      capture: { mode: editedCaptureMode, countdownSec: editedCountdownSec } as never,
+      capture: { countdownSec: editedCountdownSec } as never,
       trade: {
         llmMode: editedLlmMode,
         geminiCliCommand: editedGeminiCliCommand,

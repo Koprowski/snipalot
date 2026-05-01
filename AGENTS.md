@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.15)
+## Recent improvements (v1.0.1 onward; current release v1.0.16)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -155,6 +155,11 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Packaged ffmpeg now resolves `app.asar.unpacked` and `electron-builder` explicitly unpacks `node_modules/ffmpeg-static`, fixing packaged transcription/video export failures caused by trying to spawn ffmpeg inside `app.asar`.
  - Settings install buttons keep real failure messages visible instead of immediately overwriting them with a generic dependency recheck.
  - Existing configs using the old default Gemini CLI model `gemini-2.5-flash` migrate to `gemini-3.1-pro-preview`; custom model choices remain user-controlled.
+- **Launcher capture-mode control (v1.0.16 local branch):**
+ - Capture mode moved from Settings to a visible launcher segmented control: **Select**, **Full screen**, and disabled **Window**.
+ - Record, Trade, and Screenshot now all use the launcher-selected mode, while Settings only keeps the recording countdown.
+ - Fullscreen Screenshot bypasses overlay region-select entirely and captures the cursor display directly into Annotator; Select Screenshot still uses the overlay only as a picker with zero countdown.
+ - Fullscreen Screenshot hides the launcher before grabbing the frame and uses a request id so cancel/state changes cannot still open Annotator with a stale capture.
 
 ## Packaged app logs
 

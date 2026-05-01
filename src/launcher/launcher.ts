@@ -25,6 +25,9 @@ const hintEl = document.getElementById('hint')!;
 const hkRecordEl = document.getElementById('hk-record')!;
 const hkScreenshotEl = document.getElementById('hk-screenshot')!;
 const hkTradeEl = document.getElementById('hk-trade')!;
+const captureModeButtons = Array.from(
+  document.querySelectorAll<HTMLButtonElement>('.capture-mode-btn')
+);
 
 let currentState:
   | 'idle'
@@ -45,6 +48,7 @@ let currentSnapshotHotkey = 'Ctrl+Shift+P';
 let currentStartTradeHotkey = 'Ctrl+Shift+T';
 // Mirrors config.hotkeys.tradeMarker. Used in the trade-recording hint only.
 let currentTradeMarkerHotkey = 'Ctrl+Shift+X';
+let currentCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
 // Tracks whether the active recording is record-mode or trade-mode (both
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';
@@ -79,6 +83,7 @@ function renderLauncherImpl(): void {
   );
   btnScreenshotEl.classList.toggle('selecting', isSelectingScreenshot);
   btnTradeEl.classList.toggle('selecting', isSelectingTrade);
+  renderCaptureModeButtons();
 
   // Disable the off-action buttons while another mode is mid-flight so the
   // user can't accidentally start a different mode partway through.
@@ -98,10 +103,14 @@ function renderLauncherImpl(): void {
     btnPrimaryLabelEl.textContent = 'Record';
     btnPrimaryEl.title = `Record (${currentStartStopHotkey})`;
     btnScreenshotLabelEl.textContent = 'Screenshot';
-    btnScreenshotEl.title = 'Screenshot — capture a region for annotation';
+    btnScreenshotEl.title = currentCaptureMode === 'fullscreen'
+      ? 'Screenshot - capture the full display for annotation'
+      : 'Screenshot - capture a selected region for annotation';
     btnTradeLabelEl.textContent = 'Trade';
     btnTradeEl.title = 'Trade — record a session for trade-log extraction';
-    hintEl.textContent = 'Use the keyboard shortcuts above to run these actions.';
+    hintEl.textContent = currentCaptureMode === 'fullscreen'
+      ? 'Full screen mode captures the display under your cursor.'
+      : 'Select mode lets you drag the area to capture.';
   } else if (currentState === 'selecting') {
     btnPrimaryLabelEl.textContent = 'Cancel';
     btnScreenshotLabelEl.textContent = 'Screenshot';
@@ -165,6 +174,25 @@ function formatProgressTime(sec: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function renderCaptureModeButtons(): void {
+  for (const button of captureModeButtons) {
+    const mode = button.dataset.mode as 'region' | 'fullscreen' | 'window' | undefined;
+    const active = mode === currentCaptureMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.disabled = currentState !== 'idle' || mode === 'window';
+  }
+}
+
+for (const button of captureModeButtons) {
+  button.addEventListener('click', async () => {
+    const mode = button.dataset.mode as 'region' | 'fullscreen' | 'window' | undefined;
+    if (!mode || mode === 'window' || currentState !== 'idle') return;
+    currentCaptureMode = await window.snipalotLauncher.setCaptureMode(mode);
+    renderLauncherImpl();
+  });
 }
 
 btnPrimaryEl.addEventListener('click', () => {
@@ -303,6 +331,7 @@ window.snipalotLauncher.onState((state) => {
   if (state.snapshotHotkey) currentSnapshotHotkey = state.snapshotHotkey;
   if (state.startTradeHotkey) currentStartTradeHotkey = state.startTradeHotkey;
   if (state.tradeMarkerHotkey) currentTradeMarkerHotkey = state.tradeMarkerHotkey;
+  if (state.captureMode) currentCaptureMode = state.captureMode;
   if (state.sessionMode) currentSessionMode = state.sessionMode;
   currentCanAbandonProcessing = state.canAbandonProcessing ?? false;
   currentProcessingProgress = state.processingProgress ?? null;
@@ -310,4 +339,10 @@ window.snipalotLauncher.onState((state) => {
 });
 
 renderLauncherImpl();
+window.snipalotLauncher.getCaptureMode()
+  .then((mode) => {
+    currentCaptureMode = mode;
+    renderLauncherImpl();
+  })
+  .catch(() => { /* ignore */ });
 window.snipalotLauncher.log('boot', 'launcher ready');

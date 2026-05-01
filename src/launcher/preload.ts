@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
   togglePin: (): Promise<boolean> => ipcRenderer.invoke('launcher:toggle-pin'),
   /** Read the current pin state on boot so the button starts in sync. */
   getPinState: (): Promise<boolean> => ipcRenderer.invoke('launcher:get-pin-state'),
+  getCaptureMode: (): Promise<'region' | 'fullscreen' | 'window'> =>
+    ipcRenderer.invoke('launcher:get-capture-mode'),
+  setCaptureMode: (mode: 'region' | 'fullscreen' | 'window'): Promise<'region' | 'fullscreen' | 'window'> =>
+    ipcRenderer.invoke('launcher:set-capture-mode', mode),
   /** Copy the most recent session's prompt back to the clipboard. Useful
       when the user pasted something else over the auto-copied prompt. */
   copyLastPrompt: (): Promise<
@@ -45,6 +49,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
       snapshotHotkey?: string;
       startTradeHotkey?: string;
       tradeMarkerHotkey?: string;
+      captureMode?: 'region' | 'fullscreen' | 'window';
       canAbandonProcessing?: boolean;
     }) => void
   ) => ipcRenderer.on('launcher:state', (_evt, state) => cb(state)),

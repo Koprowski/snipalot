@@ -2,7 +2,7 @@
 
 ## Download for Windows
 
-**Latest installer:** [Download Snipalot-1.0.15-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.15/Snipalot-1.0.15-setup.exe)
+**Latest installer:** [Download Snipalot-1.0.16-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.16/Snipalot-1.0.16-setup.exe)
 
 Run the installer, then open Snipalot from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. This is the light installer: Settings includes a setup checklist that can download Whisper for local transcription and install/sign in to Gemini CLI for trade extraction.
 
@@ -58,12 +58,13 @@ Designed for traders who narrate during live sessions. Records one long session 
 
 The launcher is a small always-available control panel that lives in your taskbar or system tray.
 
-- **Record** (red) — start a region-select recording session
-- **Screenshot** (blue) — capture a region and open the annotation workspace
-- **Trade** (purple) — start a region-select trade recording session
+- **Capture mode** — choose Select or Full screen for Record, Screenshot, and Trade; Window is shown disabled until implemented
+- **Record** (red) — start a recording session using the selected capture mode
+- **Screenshot** (blue) — capture using the selected capture mode and open the annotation workspace
+- **Trade** (purple) — start a trade recording session using the selected capture mode
 - **Copy Last Prompt** — copies the most recent generated prompt to clipboard without reopening anything
 - **Pin** — keeps the launcher on top of other windows
-- **Settings** — output folder, hotkeys, capture mode, countdown duration
+- **Settings** — output folder, hotkeys, recording countdown duration
 - **Settings → Trade Mode → Setup checklist** — install/check Whisper, Node/npm, Gemini CLI, and Google sign-in
 - **X** — exits Snipalot. Minimize keeps the launcher available from the taskbar.
 
@@ -186,7 +187,7 @@ This runs `electron-builder` and writes the NSIS setup (and related artifacts) u
 Actively developed. Record, Screenshot/Annotator, and Trade modes are functional on Windows. Trade mode now writes formatted XLSX output and keeps raw trade inputs under `Inputs/`.
 
 Deferred:
-- Window-picker capture mode — current options are region (drag to select) and fullscreen; per-window capture is marked "coming soon" in Settings
+- Window-picker capture mode — current launcher options are Select and Full screen; per-window capture is visible but disabled until implemented
 
 ---
 

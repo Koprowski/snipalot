@@ -180,6 +180,7 @@ interface OverlayRect {
 let pendingRegion: RegionSelection | null = null;
 let activeDisplayId: string | null = null;
 let activeSourceId: string | null = null;
+let activeScreenshotCaptureId = 0;
 
 // Latest annotation snapshot from the owning overlay. Updated on every
 // add / undo / clear. Captured at stop time into pendingProcessing so the
@@ -545,6 +546,7 @@ function broadcastStateToLauncher(): void {
     snapshotHotkey: getConfig().hotkeys.snapshot,
     startTradeHotkey: getConfig().hotkeys.startTrade,
     tradeMarkerHotkey: getConfig().hotkeys.tradeMarker,
+    captureMode: getConfig().capture.mode,
     sessionMode: currentSessionMode,
     canAbandonProcessing: appState === 'processing' && activeProcessingRun !== null,
     processingProgress: computeProcessingProgress(),
@@ -704,11 +706,9 @@ function createLauncherWindow(): BrowserWindow {
   // Bumped to 480 to fit three primary actions side by side
   // (Record + Screenshot + Trade) without label truncation.
   const w = 480;
-  // Custom title bar 28px + content ~140px. The extra ~30px (vs the prior
-  // 140 total) makes room for the progress bar block under the hint that
-  // shows during the 'processing' state. Hidden during idle but reserves
-  // the layout space so transitions don't cause window-size jumps.
-  const h = 156;
+  // Custom title bar 28px + content includes the launcher capture-mode
+  // segmented control, action row, shortcuts, hint, and processing bar.
+  const h = 188;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;
@@ -2830,6 +2830,10 @@ function showNotification(title: string, body: string): void {
   new Notification({ title, body, silent: false }).show();
 }
 
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Single-frame capture for the Screenshot flow. Asks desktopCapturer for
  * a thumbnail of the chosen display at the display's full device pixel
@@ -2876,6 +2880,63 @@ async function captureStillFrame(
   });
   const cropped = thumb.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
   return cropped.toPNG();
+}
+
+async function captureScreenshotToAnnotator(
+  displayId: string,
+  region: RegionSelection,
+  reason: string,
+  options?: { requestId?: number; hideLauncherForCapture?: boolean }
+): Promise<void> {
+  try {
+    const requestId = options?.requestId ?? activeScreenshotCaptureId;
+    const isCurrentRequest = (): boolean =>
+      appState === 'selecting-screenshot' && requestId === activeScreenshotCaptureId;
+
+    if (!isCurrentRequest()) {
+      log('screenshot', 'capture skipped; request no longer current', { reason, requestId, activeScreenshotCaptureId, appState });
+      return;
+    }
+    if (options?.hideLauncherForCapture && launcherWindow && !launcherWindow.isDestroyed() && launcherWindow.isVisible()) {
+      launcherWindow.hide();
+      await waitMs(150);
+    }
+    if (!isCurrentRequest()) {
+      log('screenshot', 'capture cancelled before frame grab', { reason, requestId, activeScreenshotCaptureId, appState });
+      return;
+    }
+    const png = await captureStillFrame(displayId, region);
+    if (!isCurrentRequest()) {
+      log('screenshot', 'capture discarded after cancel', { reason, requestId, activeScreenshotCaptureId, appState });
+      return;
+    }
+    if (!png) {
+      showNotification('Snipalot', 'Screenshot capture failed (no source)');
+      setAppState('idle', 'screenshot capture failed');
+      broadcastOverlay('overlay:exit-region-select');
+      return;
+    }
+    const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
+    pendingAnnotatorImage = {
+      dataUrl,
+      sessionStamp: formatSessionStamp(new Date()),
+    };
+    log('screenshot', 'captured + queued for annotator', {
+      bytes: png.length,
+      sessionStamp: pendingAnnotatorImage.sessionStamp,
+      reason,
+      displayId,
+      region,
+    });
+    setAppState('idle', 'screenshot captured');
+    broadcastOverlay('overlay:exit-region-select');
+    openAnnotator();
+  } catch (err) {
+    log('screenshot', 'capture error', { err: (err as Error).message, reason, displayId });
+    showNotification('Snipalot', `Screenshot failed: ${(err as Error).message}`);
+    setAppState('idle', 'screenshot error');
+    broadcastOverlay('overlay:exit-region-select');
+  }
 }
 
 // ffmpeg webm → mp4 logic lives in ./pipeline.ts now.
@@ -2943,9 +3004,20 @@ function enterSelectingScreenshot(): void {
   setAppState('selecting-screenshot', 'screenshot button from idle');
   const cfg = getConfig().capture;
   log('state', 'enterSelectingScreenshot capture config', { ...cfg, effectiveCountdownSec: 0 });
+  const requestId = ++activeScreenshotCaptureId;
+  if (cfg.mode === 'fullscreen') {
+    const displayId = getCursorDisplayId();
+    void captureScreenshotToAnnotator(
+      displayId,
+      { xPct: 0, yPct: 0, wPct: 1, hPct: 1 },
+      'fullscreen launcher mode',
+      { requestId, hideLauncherForCapture: true }
+    );
+    return;
+  }
   // Screenshots should capture immediately after the user picks a region.
   // The countdown preference is for recording/trade sessions only.
-  dispatchRegionEntry(cfg.mode, 0);
+  dispatchRegionEntry('region', 0);
 }
 
 /**
@@ -2973,6 +3045,7 @@ function exitSelecting(reason: string): void {
     appState !== 'selecting-screenshot' &&
     appState !== 'selecting-trade'
   ) return;
+  if (appState === 'selecting-screenshot') activeScreenshotCaptureId++;
   setAppState('idle', `exitSelecting: ${reason}`);
   broadcastOverlay('overlay:exit-region-select');
   pendingRegion = null;
@@ -3376,33 +3449,7 @@ ipcMain.handle(
 
     // ── SCREENSHOT branch: capture single PNG, queue for annotator, open. ──
     if (intent === 'screenshot') {
-      try {
-        const png = await captureStillFrame(payload.displayId, region);
-        if (!png) {
-          showNotification('Snipalot', 'Screenshot capture failed (no source)');
-          setAppState('idle', 'screenshot capture failed');
-          broadcastOverlay('overlay:exit-region-select');
-          return;
-        }
-        const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
-        pendingAnnotatorImage = {
-          dataUrl,
-          sessionStamp: formatSessionStamp(new Date()),
-        };
-        log('screenshot', 'captured + queued for annotator', {
-          bytes: png.length,
-          sessionStamp: pendingAnnotatorImage.sessionStamp,
-        });
-        // Drop region-select state, hide the overlay, then open the annotator.
-        setAppState('idle', 'screenshot captured');
-        broadcastOverlay('overlay:exit-region-select');
-        openAnnotator();
-      } catch (err) {
-        log('screenshot', 'capture error', { err: (err as Error).message });
-        showNotification('Snipalot', `Screenshot failed: ${(err as Error).message}`);
-        setAppState('idle', 'screenshot error');
-        broadcastOverlay('overlay:exit-region-select');
-      }
+      await captureScreenshotToAnnotator(payload.displayId, region, 'region selected');
       return;
     }
 
@@ -3962,7 +4009,7 @@ ipcMain.handle('launcher:record', () => {
 
 ipcMain.handle('launcher:cancel', () => {
   log('launcher', 'cancel click', { appState });
-  if (appState === 'selecting' || appState === 'selecting-screenshot') {
+  if (appState === 'selecting' || appState === 'selecting-screenshot' || appState === 'selecting-trade') {
     exitSelecting('launcher cancel');
   }
 });
@@ -4007,6 +4054,20 @@ ipcMain.handle('launcher:get-pin-state', () => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return false;
   launcherWindow.setAlwaysOnTop(false);
   return false;
+});
+
+ipcMain.handle('launcher:get-capture-mode', () => getConfig().capture.mode);
+
+ipcMain.handle('launcher:set-capture-mode', (_evt, mode: 'region' | 'fullscreen' | 'window') => {
+  const nextMode = mode === 'fullscreen' ? 'fullscreen' : mode === 'window' ? 'window' : 'region';
+  if (nextMode === 'window') {
+    log('launcher', 'window capture mode ignored; not implemented');
+    return getConfig().capture.mode;
+  }
+  saveConfig({ capture: { mode: nextMode } } as never);
+  log('launcher', 'capture mode saved', { mode: nextMode });
+  broadcastStateToLauncher();
+  return nextMode;
 });
 
 /**

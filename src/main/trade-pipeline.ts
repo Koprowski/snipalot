@@ -17,7 +17,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
-import { clipboard, Notification, shell } from 'electron';
+import { clipboard, Notification } from 'electron';
 import JSZip from 'jszip';
 import { log } from './logger';
 import { getConfig } from './config';
@@ -1000,10 +1000,6 @@ The polling timeout is 60 minutes from the moment the recording stopped.
     nextStepsPath,
     chars: promptText.length,
   });
-
-  // Open the session folder in Explorer so the user actually sees the
-  // files and the workflow is impossible to miss.
-  void shell.openPath(sessionDir);
 
   if (Notification.isSupported()) {
     new Notification({

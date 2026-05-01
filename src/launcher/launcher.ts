@@ -25,6 +25,7 @@ const hintEl = document.getElementById('hint')!;
 const hkRecordEl = document.getElementById('hk-record')!;
 const hkScreenshotEl = document.getElementById('hk-screenshot')!;
 const hkTradeEl = document.getElementById('hk-trade')!;
+const captureModeEl = document.querySelector('.capture-mode') as HTMLDivElement;
 const captureModeButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('.capture-mode-btn')
 );
@@ -177,6 +178,9 @@ function formatProgressTime(sec: number): string {
 }
 
 function renderCaptureModeButtons(): void {
+  captureModeEl.classList.toggle('mode-region', currentCaptureMode === 'region');
+  captureModeEl.classList.toggle('mode-fullscreen', currentCaptureMode === 'fullscreen');
+  captureModeEl.classList.toggle('mode-window', currentCaptureMode === 'window');
   for (const button of captureModeButtons) {
     const mode = button.dataset.mode as 'region' | 'fullscreen' | 'window' | undefined;
     const active = mode === currentCaptureMode;

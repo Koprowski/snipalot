@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.17)
+## Recent improvements (v1.0.1 onward; current release v1.0.18)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -163,6 +163,18 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **Installer Finish responsiveness (v1.0.17 local branch):**
  - NSIS `runAfterFinish` is disabled for both light and full installers, removing the Finish-page auto-launch path that could make the installer window appear unresponsive while Windows scanned/launched the freshly installed Electron app.
  - Users should launch Snipalot from the Start menu or desktop shortcut after setup closes.
+- **Launcher capture-mode polish (local branch):**
+ - Capture-mode helper/status text now sits directly under the Select / Full screen / Window control.
+ - The capture-mode control is styled as a three-state sliding toggle; Window remains visible but disabled/unselectable until implemented.
+- **Annotator note-entry focus (local branch):**
+ - New screenshot-annotator shapes queue focus to their matching sidebar note textarea after mouse-up so users can start typing immediately; text annotations focus their display-text input.
+- **Trade processing visibility + packaged media fix (v1.0.18 local branch):**
+ - Launcher is forced visible/topmost while post-recording processing is active, then returns to normal window behavior on completion.
+ - Session folders no longer auto-open at trade prompt/response-paste time; Explorer opens only after the full pipeline finishes and outputs are ready.
+ - Pipeline warnings/failures now show an explicit modal before opening the folder, so missing transcript/GIF/workbook symptoms are not only discoverable by noticing absent files.
+ - HUD is shown immediately once a record/trade region is accepted instead of waiting for the recorder's MediaRecorder `started` callback.
+ - Packaged ffmpeg lookup now checks `app.asar.unpacked` explicitly and logs all candidates when missing; this fixes missing transcript/commentary caused by trying to spawn ffmpeg inside `app.asar`.
+ - Settings dependency checks log npm probe diagnostics, and Settings no longer logs raw config/API keys.
 
 ## Packaged app logs
 

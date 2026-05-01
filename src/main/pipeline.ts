@@ -32,9 +32,17 @@ const ffmpegPathRaw: string | null = require('ffmpeg-static');
 
 function resolveFfmpegPath(rawPath: string | null): string | null {
   if (!rawPath) return null;
-  if (fs.existsSync(rawPath)) return rawPath;
-  const unpackedPath = rawPath.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
-  if (unpackedPath !== rawPath && fs.existsSync(unpackedPath)) return unpackedPath;
+  const candidates = [
+    rawPath,
+    rawPath.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`),
+    app.isPackaged
+      ? path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', 'ffmpeg.exe')
+      : '',
+    path.join(process.cwd(), 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'),
+  ].filter((candidate, index, arr) => Boolean(candidate) && arr.indexOf(candidate) === index);
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (found) return found;
+  log('ffmpeg', 'binary not found in known locations', { rawPath, candidates });
   return rawPath;
 }
 

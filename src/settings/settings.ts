@@ -100,7 +100,14 @@ let firstRunOnboarding = false;
 
 async function init(): Promise<void> {
   const config = await api.getConfig();
-  api.log('settings', 'loaded config', config);
+  api.log('settings', 'loaded config', {
+    outputDir: config.outputDir,
+    llmMode: config.trade?.llmMode,
+    geminiCliModel: config.trade?.geminiCliModel,
+    hasOpenAiApiKey: Boolean(config.trade?.openaiApiKey),
+    captureMode: config.capture?.mode,
+    firstRun: config.firstRun,
+  });
   await refreshVersionAndUpdateStatus();
 
   // Output dir

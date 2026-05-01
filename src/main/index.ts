@@ -559,7 +559,15 @@ function updateLauncherVisibility(): void {
   // During 'processing' it stays visible so the user can watch progress.
   if (appState === 'recording') {
     if (launcherWindow.isVisible()) launcherWindow.hide();
+    launcherWindow.setAlwaysOnTop(false);
+  } else if (appState === 'processing') {
+    if (launcherWindow.isMinimized()) launcherWindow.restore();
+    if (!launcherWindow.isVisible()) launcherWindow.show();
+    launcherWindow.setAlwaysOnTop(true, 'floating');
+    launcherWindow.moveTop();
+    launcherWindow.focus();
   } else {
+    launcherWindow.setAlwaysOnTop(false);
     if (!launcherWindow.isVisible()) launcherWindow.show();
   }
 }
@@ -809,6 +817,49 @@ function createHudWindow(onDisplay: Display): BrowserWindow {
     log('main', 'hud closed');
   });
   return win;
+}
+
+function showHudForDisplay(display: Display): void {
+  if (!hudWindow || hudWindow.isDestroyed()) hudWindow = createHudWindow(display);
+  const showHud = () => {
+    if (!hudWindow || hudWindow.isDestroyed()) return;
+    if (!hudWindow.isVisible()) hudWindow.show();
+    hudWindow.moveTop();
+    broadcastRecordingState();
+  };
+  if (hudWindow.webContents.isLoading()) {
+    hudWindow.once('ready-to-show', showHud);
+  } else {
+    showHud();
+  }
+}
+
+async function showProcessingIssueDialog(
+  title: string,
+  message: string,
+  details: string[],
+  willOpenFolder = true
+): Promise<void> {
+  const parent = launcherWindow && !launcherWindow.isDestroyed() ? launcherWindow : undefined;
+  const clipped = details.slice(0, 6);
+  const extra = details.length > clipped.length
+    ? `\n\n...and ${details.length - clipped.length} more warning(s).`
+    : '';
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title,
+    message,
+    detail: `${clipped.map((w) => `- ${w}`).join('\n')}${extra}\n\n${
+      willOpenFolder
+        ? 'The session folder will open next.'
+        : 'Use the bug icon in the launcher to copy the troubleshooting log.'
+    }`,
+    buttons: [willOpenFolder ? 'Open folder' : 'OK'],
+    defaultId: 0,
+    noLink: true,
+  };
+  if (parent) await dialog.showMessageBox(parent, options);
+  else await dialog.showMessageBox(options);
 }
 
 let framePickerWindow: BrowserWindow | null = null;
@@ -1220,8 +1271,6 @@ ipcMain.handle('response-paste:submit', (_evt, jsonStr: string) => {
       if (responsePasteWindow && !responsePasteWindow.isDestroyed()) {
         responsePasteWindow.close();
       }
-      // Open session folder so the user can see the CSV when it appears.
-      void shell.openPath(sessionDir);
     }, 1200);
     return { ok: true };
   } catch (err) {
@@ -1429,6 +1478,13 @@ function sanitizeSettingsPartialForLog(
     if (typeof clone.trade.openaiApiKey === 'string' && clone.trade.openaiApiKey.length > 0) {
       clone.trade.openaiApiKey = '[REDACTED]';
       redacted.push('trade.openaiApiKey');
+    }
+    if (
+      typeof (clone.trade as unknown as { geminiApiKey?: unknown }).geminiApiKey === 'string' &&
+      ((clone.trade as unknown as { geminiApiKey?: string }).geminiApiKey ?? '').length > 0
+    ) {
+      (clone.trade as unknown as { geminiApiKey?: string }).geminiApiKey = '[REDACTED]';
+      redacted.push('trade.geminiApiKey');
     }
   }
   if (redacted.length > 0) clone.redactedKeys = redacted;
@@ -2091,6 +2147,11 @@ ipcMain.handle('settings:check-dependencies', async (_evt, payload?: { geminiCli
   log('settings', 'dependency check', {
     whisperOk: whisper.ok,
     npmOk: nodeStatus.ok,
+    npmCode: npmProbe.code,
+    npmError: npmProbe.error,
+    npmTimedOut: npmProbe.timedOut,
+    npmStdoutTail: npmProbe.stdout.slice(-300),
+    npmStderrTail: npmProbe.stderr.slice(-300),
     geminiOk: geminiCli.ok,
   });
   return { whisper, node: nodeStatus, geminiCli };
@@ -3485,6 +3546,7 @@ ipcMain.handle(
       broadcastOverlay('overlay:exit-region-select');
       // Tell the active display's overlay to draw the region outline + receive annotations.
       targetOverlay(activeDisplayId, 'overlay:owns-recording', { rect: payload.rect });
+      showHudForDisplay(display);
 
       dispatchRecorderStart(region);
     } catch (err) {
@@ -3598,7 +3660,7 @@ ipcMain.handle(
       onTradePromptReady: (sDir, rPath, pPath) => openResponsePasteWindow(sDir, rPath, pPath),
       abortSignal: run?.abortController.signal,
     })
-      .then((result) => {
+      .then(async (result) => {
         if (run?.abandoned) {
           cleanupSessionDir(result.sessionDir);
           return;
@@ -3616,10 +3678,18 @@ ipcMain.handle(
           'Snipalot',
           `Ready · prompt on clipboard${warningsLine}. Folder: ${result.sessionDir}`
         );
+        if (result.warnings.length > 0) {
+          await showProcessingIssueDialog(
+            'Snipalot finished with warnings',
+            'Some outputs may be incomplete.',
+            result.warnings
+          );
+        }
         activeProcessingRun = null;
         setAppState('idle', 'pipeline complete');
+        void shell.openPath(result.sessionDir);
       })
-      .catch((err) => {
+      .catch(async (err) => {
         const msg = (err as Error).message;
         if (run?.abandoned) {
           cleanupSessionDir(run.sessionDir);
@@ -3627,6 +3697,12 @@ ipcMain.handle(
         }
         log('recorder', 'pipeline fail', { err: msg });
         showNotification('Snipalot', `Pipeline failed: ${msg}`);
+        await showProcessingIssueDialog(
+          'Snipalot processing failed',
+          'The recording stopped, but post-processing did not complete.',
+          [msg],
+          false
+        );
         activeProcessingRun = null;
         setAppState('idle', 'pipeline failed');
       });
@@ -3725,18 +3801,7 @@ ipcMain.handle(
       const display = screen
         .getAllDisplays()
         .find((d) => String(d.id) === activeDisplayId) ?? screen.getPrimaryDisplay();
-      if (!hudWindow) hudWindow = createHudWindow(display);
-      const showHud = () => {
-        if (!hudWindow || hudWindow.isDestroyed()) return;
-        if (!hudWindow.isVisible()) hudWindow.show();
-        hudWindow.moveTop();
-        broadcastRecordingState();
-      };
-      if (hudWindow.webContents.isLoading()) {
-        hudWindow.once('ready-to-show', showHud);
-      } else {
-        showHud();
-      }
+      showHudForDisplay(display);
       broadcastRecordingState();
       // Aggressively keep the HUD above the overlay. See hudKeepOnTopInterval
       // declaration for the rationale (same alwaysOnTop level → racy z-order).

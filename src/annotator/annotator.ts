@@ -24,6 +24,7 @@
   let annotations = []; // { id, x, y, w, h, color, opacity, note, type, isArrow, x2, y2 }
   let nextId = 1;
   let selectedId = null;
+  let pendingAnnotationFocusId = null;
 
   // Overlay images
   let overlays = []; // { id, el, imgObj, src, x, y, w, h }
@@ -872,10 +873,7 @@
       updatePrompt();
       if (ann) {
         _pushHistory();
-        setTimeout(() => {
-          const ta = document.querySelector(`[data-ann-id="${ann.id}"] textarea`);
-          if (ta) { ta.focus(); ta.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
-        }, 60);
+        queueAnnotationInputFocus(ann.id);
       }
       return;
     }
@@ -906,10 +904,7 @@
     updatePrompt();
     if (ann) {
       _pushHistory();
-      setTimeout(() => {
-        const ta = document.querySelector(`[data-ann-id="${ann.id}"] textarea`);
-        if (ta) { ta.focus(); ta.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
-      }, 60);
+      queueAnnotationInputFocus(ann.id);
     }
   }
 
@@ -1689,17 +1684,43 @@
           ${body}
         </div>`;
     }).join('');
+
+    if (pendingAnnotationFocusId !== null) {
+      requestAnimationFrame(focusPendingAnnotationInput);
+    }
   }
 
   function selectAnnotation(id) {
     selectedId = id;
     renderAnnotations();
     renderSidePanel();
-    // Focus the textarea for the newly selected annotation
-    setTimeout(() => {
-      const ta = document.querySelector(`[data-ann-id="${id}"] textarea`);
-      if (ta) ta.focus();
-    }, 30);
+    queueAnnotationInputFocus(id);
+  }
+
+  function queueAnnotationInputFocus(id) {
+    pendingAnnotationFocusId = id;
+    requestAnimationFrame(focusPendingAnnotationInput);
+    setTimeout(focusPendingAnnotationInput, 80);
+  }
+
+  function focusPendingAnnotationInput() {
+    const id = pendingAnnotationFocusId;
+    if (id === null) return;
+    const ann = annotations.find(a => a.id === id);
+    const item = document.querySelector(`[data-ann-id="${id}"]`);
+    if (!ann || !item) return;
+
+    const selector = ann.shape === 'text'
+      ? 'textarea.ann-text-input'
+      : 'textarea.ann-note:not(.ann-text-input)';
+    const ta = item.querySelector(selector) || item.querySelector('textarea.ann-note');
+    if (!ta) return;
+
+    ta.focus({ preventScroll: true });
+    const len = ta.value.length;
+    if (typeof ta.setSelectionRange === 'function') ta.setSelectionRange(len, len);
+    ta.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    pendingAnnotationFocusId = null;
   }
 
   function deleteAnnotation(id) {

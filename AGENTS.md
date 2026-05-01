@@ -78,6 +78,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **HUD shortcut tooltip + one-shot annotations (local branch):**
   - The HUD snapshot camera tooltip now uses the configured `snapshot` hotkey from main state (default `Ctrl+Shift+P`) instead of a hardcoded description, and pause/annotate tooltips also track configured hotkeys.
   - Completed annotations are now one-shot: after a valid shape/line/text annotation is committed, the overlay exits annotation mode and becomes click-through while leaving the annotation visible until clear/snapshot behavior removes it.
+- **Trade HUD marker control (local branch):**
+  - During trade-mode recordings, the HUD camera button changes to a target-style marker control bound to the configured `tradeMarker` hotkey (default `Ctrl+Shift+M`) instead of the normal `snapshot` hotkey.
+  - Trade markers now record offset/label metadata and capture a marker screenshot under `trade-markers/` without triggering the normal snapshot chapter/annotation reset.
+  - The trade extraction prompt now treats markers as entry/decision anchors and MockApe/Padre timestamps as outcome anchors, with explicit instructions to inspect the interval between them for partial entries/exits.
 - **Gemini CLI settings-test fallback + diagnostics (local branch):**
  - `settings:test-llm-connection` now retries the prompt probe with a positional prompt when Gemini returns the known "`--prompt` + positional" parser conflict, preventing false negatives from runtime argv quirks.
  - Added structured, non-secret `settings` logs for each Gemini test stage (launch/version/prompt/fallback success/failure) with sanitized stderr tails for faster root-cause support.

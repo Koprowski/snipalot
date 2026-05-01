@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { execSync } from 'node:child_process';
 import { log } from './logger';
-import { runPipeline, AnnotationRecord, ChapterRecord, formatSessionStamp } from './pipeline';
+import { runPipeline, AnnotationRecord, ChapterRecord, TradeMarkerRecord, formatSessionStamp } from './pipeline';
 import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
@@ -222,7 +222,7 @@ let currentSessionMode: 'record' | 'trade' = 'record';
  * uses these as anchor tags in the LLM extraction prompt so the model
  * focuses on the trader-flagged moments.
  */
-let currentTradeMarkers: number[] = [];
+let currentTradeMarkers: TradeMarkerRecord[] = [];
 
 interface PendingProcessing {
   annotations: AnnotationRecord[];
@@ -232,7 +232,7 @@ interface PendingProcessing {
   preCreatedSessionDir: string | null;
   chapters: ChapterRecord[];
   mode: 'record' | 'trade';
-  tradeMarkers: number[];
+  tradeMarkers: TradeMarkerRecord[];
 }
 // Snapshot of the stopping recording's metadata. The webm buffer arrives
 // async via recorder:save-webm and the pipeline picks up from here.
@@ -424,14 +424,8 @@ function registerTradeMarkerHotkey(): void {
   const accel = toAccelerator(getConfig().hotkeys.tradeMarker);
   if (globalShortcut.isRegistered(accel)) return;
   const ok = globalShortcut.register(accel, () => {
-    if (appState !== 'recording' || currentSessionMode !== 'trade' || recordingStartedAt === null) {
-      log('hotkey', `${accel} fired but not in trade-recording state`, { appState, currentSessionMode });
-      return;
-    }
-    const offsetMs = Date.now() - recordingStartedAt - totalPausedMs;
-    currentTradeMarkers.push(offsetMs);
-    log('hotkey', `${accel} trade marker added`, { offsetMs, totalMarkers: currentTradeMarkers.length });
-    showNotification('Snipalot Trade', `Marker #${currentTradeMarkers.length} at ${formatMs(offsetMs)}`);
+    log('hotkey', `${accel} fired (trade marker)`, { appState, currentSessionMode });
+    void doTradeMarker();
   });
   log('hotkey', `${accel} registered (trade-recording started)`, { ok });
 }
@@ -2382,6 +2376,7 @@ function broadcastRecordingState(): void {
     startedAt: recordingStartedAt ?? Date.now(),
     paused: recordingPaused,
     totalPausedMs,
+    sessionMode: currentSessionMode,
     annotateHotkey: hotkeys.annotate,
     snapshotHotkey: hotkeys.snapshot,
     pauseResumeHotkey: hotkeys.pauseResume,
@@ -3395,6 +3390,63 @@ async function runSnapshot(): Promise<void> {
 }
 
 ipcMain.handle('hud:snap', () => doSnapshot());
+ipcMain.handle('hud:trade-marker', () => doTradeMarker());
+
+function doTradeMarker(): Promise<void> {
+  snapshotChain = snapshotChain
+    .then(() => runTradeMarker())
+    .catch((err) => {
+      log('hud', 'trade marker chain error', { err: (err as Error).message });
+    });
+  return snapshotChain;
+}
+
+async function runTradeMarker(): Promise<void> {
+  if (appState !== 'recording' || currentSessionMode !== 'trade' || recordingStartedAt === null) {
+    log('hud', 'trade marker ignored (not in trade recording)', { appState, currentSessionMode });
+    return;
+  }
+
+  const offsetMs = Math.max(0, Date.now() - recordingStartedAt - totalPausedMs);
+  const markerIndex = currentTradeMarkers.length + 1;
+  const marker: TradeMarkerRecord = {
+    offsetMs,
+    offsetLabel: formatMs(offsetMs),
+  };
+
+  if (recorderWindow && liveSessionDir) {
+    const markerDir = path.join(liveSessionDir, 'trade-markers');
+    if (!fs.existsSync(markerDir)) fs.mkdirSync(markerDir, { recursive: true });
+    const screenshotPath = path.join(markerDir, `marker-${markerIndex}.png`);
+    const buffer = await new Promise<ArrayBuffer | null>((resolve) => {
+      ipcMain.once('recorder:snap-result', (_evt, buf: ArrayBuffer | null) => resolve(buf));
+      recorderWindow!.webContents.send('recorder:snap');
+    });
+    if (buffer) {
+      fs.writeFileSync(screenshotPath, Buffer.from(buffer));
+      marker.screenshotPath = screenshotPath;
+      log('hud', 'trade marker screenshot saved', {
+        markerIndex,
+        offsetMs,
+        screenshotPath,
+        bytes: buffer.byteLength,
+      });
+    } else {
+      log('hud', 'trade marker screenshot failed: no buffer from renderer', { markerIndex, offsetMs });
+    }
+  }
+
+  currentTradeMarkers.push(marker);
+  log('hud', 'trade marker added', {
+    markerIndex,
+    offsetMs,
+    offsetLabel: marker.offsetLabel,
+    screenshotPath: marker.screenshotPath ?? null,
+    totalMarkers: currentTradeMarkers.length,
+  });
+  showNotification('Snipalot Trade', `Trade marker #${markerIndex} at ${marker.offsetLabel}`);
+  broadcastRecordingState();
+}
 
 // Overlay reports its chapter-closed annotations after receiving
 // `overlay:snapshot-reset`. We merge with the pre-reserved PNG path

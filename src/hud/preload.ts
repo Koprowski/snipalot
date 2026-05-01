@@ -9,11 +9,13 @@ contextBridge.exposeInMainWorld('snipalotHud', {
   toggleOutline: () => ipcRenderer.invoke('hud:toggle-outline'),
   enterAnnotation: () => ipcRenderer.invoke('hud:enter-annotation'),
   snap: () => ipcRenderer.invoke('hud:snap'),
+  tradeMarker: () => ipcRenderer.invoke('hud:trade-marker'),
   onState: (
     cb: (payload: {
       startedAt: number;
       paused: boolean;
       totalPausedMs: number;
+      sessionMode?: 'record' | 'trade';
       annotateHotkey?: string;
       snapshotHotkey?: string;
       pauseResumeHotkey?: string;

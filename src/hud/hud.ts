@@ -24,6 +24,8 @@ let tickHandle: number | null = null;
 let annotateHotkey = 'Ctrl+Shift+A';
 let snapshotHotkey = 'Ctrl+Shift+P';
 let pauseResumeHotkey = 'Ctrl+Shift+B';
+let tradeMarkerHotkey = 'Ctrl+Shift+M';
+let sessionMode: 'record' | 'trade' = 'record';
 let annotationActive = false;
 
 function format(ms: number): string {
@@ -50,7 +52,15 @@ function renderTooltips(): void {
   btnAnnotateEl.title = annotationActive
     ? `Exit annotation (${annotateHotkey})`
     : `Annotate (${annotateHotkey})`;
-  btnSnapEl.title = `Snapshot / close chapter (${snapshotHotkey})`;
+  if (sessionMode === 'trade') {
+    btnSnapEl.textContent = '⌖';
+    btnSnapEl.title = `Mark trade + screenshot (${tradeMarkerHotkey})`;
+    btnSnapEl.setAttribute('aria-label', `Mark trade and capture screenshot (${tradeMarkerHotkey})`);
+  } else {
+    btnSnapEl.textContent = '📸';
+    btnSnapEl.title = `Snapshot / close chapter (${snapshotHotkey})`;
+    btnSnapEl.setAttribute('aria-label', `Snapshot / close chapter (${snapshotHotkey})`);
+  }
   btnPauseEl.title = `Pause / resume (${pauseResumeHotkey})`;
 }
 
@@ -80,7 +90,10 @@ btnDiscardEl.addEventListener('click', () => {
 });
 btnSnapEl.addEventListener('click', () => {
   btnSnapEl.disabled = true;
-  window.snipalotHud.snap().finally(() => { btnSnapEl.disabled = false; });
+  const action = sessionMode === 'trade'
+    ? window.snipalotHud.tradeMarker()
+    : window.snipalotHud.snap();
+  action.finally(() => { btnSnapEl.disabled = false; });
 });
 btnOutlineEl.addEventListener('click', () => {
   btnOutlineEl.classList.toggle('active');
@@ -94,9 +107,11 @@ window.snipalotHud.onState((payload) => {
   startedAt = payload.startedAt;
   paused = payload.paused;
   totalPausedMs = payload.totalPausedMs;
+  sessionMode = payload.sessionMode || sessionMode;
   annotateHotkey = payload.annotateHotkey || annotateHotkey;
   snapshotHotkey = payload.snapshotHotkey || snapshotHotkey;
   pauseResumeHotkey = payload.pauseResumeHotkey || pauseResumeHotkey;
+  tradeMarkerHotkey = payload.tradeMarkerHotkey || tradeMarkerHotkey;
   render();
   renderTooltips();
   startTicker();

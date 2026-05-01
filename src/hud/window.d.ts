@@ -8,11 +8,13 @@ interface Window {
     toggleOutline: () => Promise<void>;
     enterAnnotation: () => Promise<void>;
     snap: () => Promise<void>;
+    tradeMarker: () => Promise<void>;
     onState: (
       cb: (payload: {
         startedAt: number;
         paused: boolean;
         totalPausedMs: number;
+        sessionMode?: 'record' | 'trade';
         annotateHotkey?: string;
         snapshotHotkey?: string;
         pauseResumeHotkey?: string;

@@ -22,7 +22,7 @@ import { stringify as csvStringify } from 'csv-stringify/sync';
 import { log } from './logger';
 import { getConfig } from './config';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
-import { TranscriptSegment } from './pipeline';
+import { TranscriptSegment, TradeMarkerRecord } from './pipeline';
 
 /**
  * Schema for a single extracted trade event. Matches the JSON shape the
@@ -80,8 +80,8 @@ export interface TradePipelineInput {
   mp4Path: string;
   /** Whisper-parsed transcript segments (already produced by runPipeline). */
   transcriptSegments: TranscriptSegment[];
-  /** User-pressed trade marker offsets, ms relative to recording start. */
-  tradeMarkers: number[];
+  /** User-pressed trade markers, ms relative to recording start. */
+  tradeMarkers: TradeMarkerRecord[];
   /**
    * Recording start time (Date.now()-style ms epoch). Combined with
    * pre/post call offsets, lets the MockApe join convert recording-
@@ -169,10 +169,11 @@ export async function runTradePipeline(
   const markersPath = path.join(sessionDir, 'markers.json');
   try {
     const payload = {
-      markers: tradeMarkers.map((offsetMs, i) => ({
+      markers: tradeMarkers.map((marker, i) => ({
         index: i + 1,
-        offsetMs,
-        offsetLabel: formatOffset(offsetMs),
+        offsetMs: marker.offsetMs,
+        offsetLabel: marker.offsetLabel || formatOffset(marker.offsetMs),
+        screenshotPath: marker.screenshotPath ?? null,
       })),
     };
     fs.writeFileSync(markersPath, JSON.stringify(payload, null, 2), 'utf-8');
@@ -664,32 +665,52 @@ async function waitForTradeContextDecision(
 
 function renderExtractionPrompt(
   transcriptSegments: TranscriptSegment[],
-  tradeMarkers: number[],
+  tradeMarkers: TradeMarkerRecord[],
   mockape: MockApeTrade[] | null,
   recordingStartedAtMs: number
 ): string {
   // Build the annotated transcript: a stable line-per-segment dump with
   // marker tags spliced in at the closest segment boundary.
-  const sortedMarkers = [...tradeMarkers].sort((a, b) => a - b);
+  const sortedMarkers = [...tradeMarkers].sort((a, b) => a.offsetMs - b.offsetMs);
   let nextMarkerIdx = 0;
   const annotatedLines: string[] = [];
   for (const seg of transcriptSegments) {
     while (
       nextMarkerIdx < sortedMarkers.length &&
-      sortedMarkers[nextMarkerIdx] <= seg.startSec * 1000
+      sortedMarkers[nextMarkerIdx].offsetMs <= seg.startSec * 1000
     ) {
+      const marker = sortedMarkers[nextMarkerIdx];
       annotatedLines.push(
-        `[MARKER ${nextMarkerIdx + 1} at ${formatOffset(sortedMarkers[nextMarkerIdx])}]`
+        `[TRADE MARKER ${nextMarkerIdx + 1} at ${marker.offsetLabel || formatOffset(marker.offsetMs)}]`
       );
       nextMarkerIdx++;
     }
     annotatedLines.push(seg.text);
   }
   while (nextMarkerIdx < sortedMarkers.length) {
+    const marker = sortedMarkers[nextMarkerIdx];
     annotatedLines.push(
-      `[MARKER ${nextMarkerIdx + 1} at ${formatOffset(sortedMarkers[nextMarkerIdx])}]`
+      `[TRADE MARKER ${nextMarkerIdx + 1} at ${marker.offsetLabel || formatOffset(marker.offsetMs)}]`
     );
     nextMarkerIdx++;
+  }
+
+  let markerBlock = '';
+  if (sortedMarkers.length > 0) {
+    const lines: string[] = [];
+    lines.push('## Trader-entered trade markers');
+    lines.push('');
+    lines.push('These markers were created during the trade session by the trader');
+    lines.push('pressing the configured Trade Marker hotkey / HUD target button.');
+    lines.push('Treat each marker as an ENTRY / decision-time anchor unless the');
+    lines.push('nearby transcript clearly says it was an exit or trim marker.');
+    lines.push('');
+    sortedMarkers.forEach((marker, i) => {
+      const screenshot = marker.screenshotPath ? ` · screenshot=${path.basename(marker.screenshotPath)}` : '';
+      lines.push(`${i + 1}. marker at **${marker.offsetLabel || formatOffset(marker.offsetMs)}**${screenshot}`);
+    });
+    lines.push('');
+    markerBlock = lines.join('\n');
   }
 
   // If MockApe data is available, build a chronological context block
@@ -727,12 +748,14 @@ trading session.${hasMockape ? ' You have ONE additional data source: the trader
 ${hasMockape ? `
 
 ${mockapeBlock}` : ''}
+${markerBlock ? `\n${markerBlock}` : ''}
 
 ## Transcript
 
 The transcript below is a chronological narration with optional
-[MARKER N at M:SS] tags indicating moments the trader explicitly
-flagged as significant by pressing a hotkey.
+[TRADE MARKER N at M:SS] tags indicating moments the trader explicitly
+flagged as trade-entry / decision anchors by pressing the trade marker
+hotkey or HUD target button.
 
 \`\`\`
 ${annotatedLines.join('\n')}
@@ -742,10 +765,21 @@ ${annotatedLines.join('\n')}
 
 ${hasMockape ? `For EACH actual trade in the MockApe list above, find the matching
 spoken context in the transcript:
-- The trader's commentary RIGHT BEFORE the trade's "fired at" timestamp
-  is the **pre-trade callout** (target market cap range, rationale).
-- The trader's commentary RIGHT AFTER the trade's "fired at" timestamp
-  is the **post-trade callout** (outcome, adherence assessment).
+- Use TRADE MARKER tags as the strongest anchors for the entry / decision
+  moment. The trader presses these when entering or intentionally marking
+  the setup, because MockApe's timestamp often reflects the later exit or
+  resolved trade event rather than the original spoken entry.
+- Use the MockApe "fired at" timestamp as the strongest anchor for the
+  actual trade/outcome moment. Look seconds before and after it for exit
+  commentary, adherence assessment, and the final market-cap context.
+- The interval between the nearest entry marker and MockApe timestamp is
+  where partial entries, trims, and scale-outs are most likely to be
+  discussed. Search that interval before deciding there was only one
+  100% in / 100% out leg.
+- The trader's commentary near the entry marker is the **pre-trade
+  callout** (entry market cap, target market cap range, rationale).
+- The trader's commentary near the MockApe timestamp is the **post-trade
+  callout** (exit, outcome, adherence assessment).
 - If the trader mentions a coin in the transcript but it has no matching
   MockApe trade (musing only — no actual entry), include it as an
   EXTRA row at the end with mockape_trade_id=null.

@@ -83,6 +83,12 @@ export interface ChapterRecord {
   folderName: string;
 }
 
+export interface TradeMarkerRecord {
+  offsetMs: number;
+  offsetLabel: string;
+  screenshotPath?: string;
+}
+
 export interface PipelineInput {
   /** Raw webm buffer from the recorder renderer. */
   webmBuffer: Buffer;
@@ -128,7 +134,7 @@ export interface PipelineInput {
    * trade session. Markers are anchor points for the LLM extraction prompt;
    * extraction works without them, just less precisely.
    */
-  tradeMarkers?: number[];
+  tradeMarkers?: TradeMarkerRecord[];
   /**
    * Called by trade-pipeline once extraction_prompt.md is written. index.ts
    * supplies this to open the response-paste window, eliminating the manual

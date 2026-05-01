@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.24)
+## Recent improvements (v1.0.1 onward; current release v1.0.25)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -195,6 +195,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - GIF timecode generation now quotes/escapes the Windows `drawtext=textfile` path; verified a short ffmpeg GIF smoke test against `E:\Video Screencasts\recording.mp4`.
  - Whisper transcript post-processing now drops repeated adjacent hallucination segments and compacts repeated phrases before writing `transcript.txt` / feeding trade extraction.
  - Trade extraction schema/export now includes `stop_loss_mc`, and `trade_log.xlsx` includes `target_exit_low_mc`, `target_exit_high_mc`, and `stop_loss_mc`; Markdown trade logs print a Plan line with targets/stops.
+- **Snapshot hotkey + trade output cleanup (v1.0.25 local branch):**
+ - `Ctrl+Shift+P` / configured snapshot hotkey is now registered globally: idle state starts the normal Screenshot flow using the current capture mode/cursor display, recording state still closes a snapshot chapter through the HUD snapshot path.
+ - Trade workbook/Markdown/adherence outputs now omit Gemini-extracted spoken-only musings when MockApe/Padre data is present; only rows matched to an actual trade are user-facing. Raw `Inputs/extraction_response.json` still preserves the full model response for debugging.
+ - Added `docs/exit-screenshot-feature-plan.md` with a feasible design for extracting automatic exit-time screenshots from `recording.mp4` using `mockape_timestamp_ms - recordingStartedAtMs`.
 
 ## Packaged app logs
 

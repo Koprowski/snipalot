@@ -347,6 +347,15 @@ export async function runTradePipeline(
     log('trade-pipeline', 'no mockape.json - actual P&L columns will be blank');
   }
 
+  const outputTrades = mockape ? trades.filter((t) => Boolean(t.mockape_trade_id)) : trades;
+  const omittedSpokenOnly = trades.length - outputTrades.length;
+  if (omittedSpokenOnly > 0) {
+    log('trade-pipeline', 'omitted spoken-only non-trade rows from outputs', {
+      omitted: omittedSpokenOnly,
+      kept: outputTrades.length,
+    });
+  }
+
   // â”€â”€ Generate trade_log.xlsx + companion Markdown reports â”€â”€
   if (onStep) onStep('Generating trade workbook + adherence report...');
   let csvPath: string | null = null;
@@ -354,9 +363,9 @@ export async function runTradePipeline(
   let mdPath: string | null = null;
   let reportPath: string | null = null;
   try {
-    xlsxPath = await writeTradeLogXlsx(sessionDir, trades, input.startedAtMs, input.durationMs);
-    mdPath = writeTradeLogMd(sessionDir, trades, input.startedAtMs, input.durationMs);
-    reportPath = writeAdherenceReport(getTradeInputsDir(sessionDir), trades);
+    xlsxPath = await writeTradeLogXlsx(sessionDir, outputTrades, input.startedAtMs, input.durationMs);
+    mdPath = writeTradeLogMd(sessionDir, outputTrades, input.startedAtMs, input.durationMs);
+    reportPath = writeAdherenceReport(getTradeInputsDir(sessionDir), outputTrades);
     organizeTradeSessionRoot(sessionDir);
   } catch (err) {
     warnings.push(`trade output generators failed: ${(err as Error).message}`);
@@ -364,7 +373,8 @@ export async function runTradePipeline(
   }
 
   log('trade-pipeline', 'session complete', {
-    trades: trades.length,
+    trades: outputTrades.length,
+    omittedSpokenOnly,
     csvPath,
     xlsxPath,
     mdPath,
@@ -373,7 +383,7 @@ export async function runTradePipeline(
   if (Notification.isSupported()) {
     new Notification({
       title: 'Snipalot Trade - log ready',
-      body: `${trades.length} trade${trades.length === 1 ? '' : 's'} logged. trade_log.xlsx + companions in:\n${sessionDir}`,
+      body: `${outputTrades.length} trade${outputTrades.length === 1 ? '' : 's'} logged. trade_log.xlsx + companions in:\n${sessionDir}`,
       silent: false,
     }).show();
   }
@@ -1089,11 +1099,23 @@ async function finalizeTradeOutputsFromResponsePath(
     }
   }
   throwIfAborted(abortSignal);
-  await writeTradeLogXlsx(sessionDir, trades, startedAtMs, durationMs);
-  writeTradeLogMd(sessionDir, trades, startedAtMs, durationMs);
-  writeAdherenceReport(getTradeInputsDir(sessionDir), trades);
+  const outputTrades = mockape ? trades.filter((t) => Boolean(t.mockape_trade_id)) : trades;
+  const omittedSpokenOnly = trades.length - outputTrades.length;
+  if (omittedSpokenOnly > 0) {
+    log('trade-pipeline', 'omitted spoken-only non-trade rows from background outputs', {
+      omitted: omittedSpokenOnly,
+      kept: outputTrades.length,
+    });
+  }
+  await writeTradeLogXlsx(sessionDir, outputTrades, startedAtMs, durationMs);
+  writeTradeLogMd(sessionDir, outputTrades, startedAtMs, durationMs);
+  writeAdherenceReport(getTradeInputsDir(sessionDir), outputTrades);
   organizeTradeSessionRoot(sessionDir);
-  log('trade-pipeline', 'background finalize complete', { sessionDir, trades: trades.length });
+  log('trade-pipeline', 'background finalize complete', {
+    sessionDir,
+    trades: outputTrades.length,
+    omittedSpokenOnly,
+  });
 }
 
 /**

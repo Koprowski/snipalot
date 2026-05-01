@@ -273,18 +273,17 @@ function setAppState(next: AppState, why: string): void {
     }
   }
 
-  // Annotate + snapshot + trade-marker hotkeys are registered ONLY while
+  // Annotate + trade-marker hotkeys are registered ONLY while
   // recording so they never steal keypresses from other apps when Snipalot
   // is idle. Trade-marker is also gated on mode === 'trade' (no point
   // grabbing the chord during a normal recording — markers are a
-  // trade-mode concept).
+  // trade-mode concept). Snapshot is global: idle = Screenshot,
+  // recording = HUD snapshot/close chapter.
   if (next === 'recording' && prev !== 'recording') {
     registerAnnotationHotkey();
-    registerSnapshotHotkey();
     if (currentSessionMode === 'trade') registerTradeMarkerHotkey();
   } else if (prev === 'recording' && next !== 'recording') {
     unregisterAnnotationHotkey();
-    unregisterSnapshotHotkey();
     unregisterTradeMarkerHotkey();
   }
 
@@ -402,28 +401,6 @@ function unregisterAnnotationHotkey(): void {
 }
 
 /**
- * Snapshot hotkey: only registered while recording, same gating logic as
- * the annotate hotkey. Fires the same code path the HUD 📸 button does.
- */
-function registerSnapshotHotkey(): void {
-  const accel = toAccelerator(getConfig().hotkeys.snapshot);
-  if (globalShortcut.isRegistered(accel)) return;
-  const ok = globalShortcut.register(accel, () => {
-    log('hotkey', `${accel} fired (snapshot)`, { appState });
-    if (appState !== 'recording') return;
-    void doSnapshot();
-  });
-  log('hotkey', `${accel} registered (recording started, snapshot)`, { ok });
-}
-
-function unregisterSnapshotHotkey(): void {
-  const accel = toAccelerator(getConfig().hotkeys.snapshot);
-  if (!globalShortcut.isRegistered(accel)) return;
-  globalShortcut.unregister(accel);
-  log('hotkey', `${accel} unregistered (recording ended, snapshot)`);
-}
-
-/**
  * Trade-marker hotkey: only registered while recording AND mode === 'trade'.
  * Each press appends a recording-relative ms offset to currentTradeMarkers,
  * which the trade-pipeline uses as anchor tags for the LLM extraction prompt.
@@ -481,6 +458,16 @@ function reloadGlobalHotkeys(): void {
     log('hotkey', 'startStop fired', { appState, activeDisplayId });
     handleToggleHotkey();
   });
+  reg(hk.snapshot, () => {
+    log('hotkey', 'snapshot fired', { appState, activeDisplayId });
+    if (appState === 'idle') {
+      enterSelectingScreenshot();
+    } else if (appState === 'recording') {
+      void doSnapshot();
+    } else if (appState === 'selecting-screenshot') {
+      exitSelecting('snapshot hotkey toggle');
+    }
+  });
   reg(hk.toggleOutline, () => {
     log('hotkey', 'toggleOutline fired', { appState, activeDisplayId });
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:toggle-outline');
@@ -510,12 +497,11 @@ function reloadGlobalHotkeys(): void {
     }
   });
 
-  // Re-arm the recording-only annotate + snapshot hotkeys at their new
+  // Re-arm the recording-only annotate/trade-marker hotkeys at their new
   // combos if we're mid-session. unregisterAll() above already cleared
   // the OLD combos, so this is just registering the new ones.
   if (appState === 'recording') {
     registerAnnotationHotkey();
-    registerSnapshotHotkey();
     if (currentSessionMode === 'trade') registerTradeMarkerHotkey();
   }
 }

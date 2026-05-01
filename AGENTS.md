@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.27)
+## Recent improvements (v1.0.1 onward; current release v1.0.28)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -207,6 +207,10 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Startup now creates/shows the visible launcher before building hidden full-screen overlay windows and the hidden recorder, then initializes capture surfaces on a short deferred tick.
  - Capture actions still initialize overlays/recorder on demand if the user clicks Record/Screenshot/Trade before deferred startup finishes.
  - This targets the Windows "Not Responding" dialog seen after pressing NSIS Finish with `runAfterFinish` enabled, where auto-launched Snipalot could look hung while hidden capture windows were being created before any visible app window painted.
+- **Windows app icon + Smart App Control note (v1.0.28 local branch):**
+ - `scripts/make-icon.mjs` now emits a multi-size `resources/icons/app.ico` from the existing red record-dot artwork; light/full electron-builder configs use the `.ico` for the Windows executable/taskbar/Start Menu icon instead of relying on PNG fallback behavior.
+ - Main-process windows resolve icons through a packaged-aware helper (`process.resourcesPath/resources` when installed, repo `resources/` in dev), preventing installed windows from falling back to generic Electron icon assets.
+ - README/install guide now call out that Windows Smart App Control has no per-app bypass for unsigned/untrusted builds; users must turn it off on that PC or use a future signed installer.
 
 ## Packaged app logs
 

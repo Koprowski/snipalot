@@ -11,6 +11,12 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { log } from './logger';
 
+function resourcesRoot(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'resources')
+    : path.join(process.cwd(), 'resources');
+}
+
 type AppState =
   | 'idle'
   | 'selecting'
@@ -38,9 +44,7 @@ export function createTray(callbacks: TrayCallbacks): Tray {
 
   // Packaged installs: icons live under process.resourcesPath/resources (extraResources).
   // Dev: project root resources/.
-  const resRoot = app.isPackaged
-    ? path.join(process.resourcesPath, 'resources')
-    : path.join(process.cwd(), 'resources');
+  const resRoot = resourcesRoot();
   const iconPath16 = path.join(resRoot, 'icons', 'app-16.png');
   const iconPath32 = path.join(resRoot, 'icons', 'app-32.png');
   let icon: Electron.NativeImage;

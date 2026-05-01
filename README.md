@@ -2,9 +2,9 @@
 
 ## Download for Windows
 
-**Latest installer:** [Download Snipalot-1.0.27-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.27/Snipalot-1.0.27-setup.exe)
+**Latest installer:** [Download Snipalot-1.0.28-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.28/Snipalot-1.0.28-setup.exe)
 
-Run the installer; Snipalot launches automatically after setup finishes and is also available from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. This is the light installer: Settings includes a setup checklist that can download Whisper for local transcription and install/sign in to Gemini CLI for trade extraction.
+Run the installer; Snipalot launches automatically after setup finishes and is also available from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. If Windows **Smart App Control** blocks the installer with no bypass option, the current unsigned build cannot run on that PC until Smart App Control is turned off or Snipalot is distributed with trusted code signing. This is the light installer: Settings includes a setup checklist that can download Whisper for local transcription and install/sign in to Gemini CLI for trade extraction.
 
 A Windows desktop tool for giving AI feedback on your screen — by talking, annotating, and capturing. Three capture modes cover everything from a quick screenshot to a long trading session.
 
@@ -138,10 +138,10 @@ All output lands in the folder configured in Settings (default: `C:\Users\<you>\
 
 **End users** (no Node.js or Git required):
 
-1. **Download the installer** (current release **v1.0.27**):
-- **Direct:** [Snipalot-1.0.27-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.27/Snipalot-1.0.27-setup.exe)
+1. **Download the installer** (current release **v1.0.28**):
+- **Direct:** [Snipalot-1.0.28-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.28/Snipalot-1.0.28-setup.exe)
    - Or open **[Releases](https://github.com/Koprowski/snipalot/releases)** and grab the latest **`Snipalot-*-setup.exe`** (NSIS installer, Windows x64).
-2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet). Snipalot launches automatically when setup finishes.
+2. Run the installer. If SmartScreen warns that the app is unrecognized, use **More info** → **Run anyway** (the binary is not code-signed yet). If Smart App Control blocks the app with no bypass button, turn off Smart App Control for that PC or use a future signed build. Snipalot launches automatically when setup finishes.
 
 **Upgrading or reinstalling:** close Snipalot before running a new installer. The launcher **X** exits the app; the tray menu also has **Quit Snipalot**. If the setup still says the app cannot be closed, click **Retry** after quitting (the installer retries several times).
 

@@ -86,6 +86,19 @@ function clearPendingRecorderStartTimeout(): void {
   }
 }
 
+function resourcesRoot(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'resources')
+    : path.join(process.cwd(), 'resources');
+}
+
+function appIconPath(): string {
+  const root = resourcesRoot();
+  const ico = path.join(root, 'icons', 'app.ico');
+  if (fs.existsSync(ico)) return ico;
+  return path.join(root, 'icons', 'app.png');
+}
+
 function initializeCaptureSurfaces(reason: string): void {
   if (captureSurfacesInitialized) return;
   captureSurfacesInitialized = true;
@@ -739,7 +752,7 @@ function createLauncherWindow(): BrowserWindow {
   const y = primary.workArea.y + margin;
   log('main', 'createLauncher', { x, y, w, h });
 
-  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  const iconPath = appIconPath();
   const win = new BrowserWindow({
     width: w,
     height: h,
@@ -935,7 +948,7 @@ function openAnnotator(): void {
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
   const wa = display.workArea;
-  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  const iconPath = appIconPath();
   annotatorWindow = new BrowserWindow({
     width: wa.width,
     height: wa.height,
@@ -1066,7 +1079,7 @@ function openTradeContextWindow(
   const primary = screen.getPrimaryDisplay();
   const w = 640;
   const h = 560;
-  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  const iconPath = appIconPath();
   tradeContextWindow = new BrowserWindow({
     width: w,
     height: h,
@@ -1231,7 +1244,7 @@ function openResponsePasteWindow(
   const primary = screen.getPrimaryDisplay();
   const w = 600;
   const h = 540;
-  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  const iconPath = appIconPath();
   responsePasteWindow = new BrowserWindow({
     width: w,
     height: h,
@@ -1321,7 +1334,7 @@ function openSettings(isFirstRun = false): void {
   const primary = screen.getPrimaryDisplay();
   const w = 760;
   const h = 700;
-  const iconPath = path.join(process.cwd(), 'resources', 'icons', 'app.png');
+  const iconPath = appIconPath();
   const win = new BrowserWindow({
     width: w,
     height: h,

@@ -67,6 +67,30 @@ function makePng(size, pixel) {
   ]);
 }
 
+function makeIco(entries) {
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // image type: icon
+  header.writeUInt16LE(entries.length, 4);
+
+  const directory = Buffer.alloc(entries.length * 16);
+  let offset = header.length + directory.length;
+  entries.forEach(({ size, png }, idx) => {
+    const i = idx * 16;
+    directory[i] = size >= 256 ? 0 : size;
+    directory[i + 1] = size >= 256 ? 0 : size;
+    directory[i + 2] = 0; // colors
+    directory[i + 3] = 0; // reserved
+    directory.writeUInt16LE(1, i + 4); // planes
+    directory.writeUInt16LE(32, i + 6); // bit count
+    directory.writeUInt32LE(png.length, i + 8);
+    directory.writeUInt32LE(offset, i + 12);
+    offset += png.length;
+  });
+
+  return Buffer.concat([header, directory, ...entries.map((entry) => entry.png)]);
+}
+
 // ─── icon design ─────────────────────────────────────────────────────
 // Red circle (#ef4444) with a white filled dot in the centre.
 function iconPixel(x, y, size) {
@@ -93,12 +117,19 @@ function iconPixel(x, y, size) {
 
 // ─── output sizes ────────────────────────────────────────────────────
 const sizes = [16, 32, 48, 64, 128, 256];
+const icoEntries = [];
 for (const sz of sizes) {
   const file = join(iconsDir, `app-${sz}.png`);
-  writeFileSync(file, makePng(sz, iconPixel));
+  const png = makePng(sz, iconPixel);
+  writeFileSync(file, png);
+  icoEntries.push({ size: sz, png });
   console.log(`[make-icon] ${file}`);
 }
 // Canonical reference used by the app
 const main = join(iconsDir, 'app.png');
 writeFileSync(main, makePng(256, iconPixel));
 console.log(`[make-icon] ${main} (256 px, canonical)`);
+
+const ico = join(iconsDir, 'app.ico');
+writeFileSync(ico, makeIco(icoEntries));
+console.log(`[make-icon] ${ico} (multi-size Windows icon)`);

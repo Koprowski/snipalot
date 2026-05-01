@@ -3,7 +3,7 @@
 **Mirror of [GitHub Issue #2](https://github.com/Koprowski/snipalot/issues/2).**  
 When the download URL changes, update this file and paste its body into the issue (or edit the issue on GitHub).
 
-**Current installer (latest):** [Snipalot-1.0.27-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.27/Snipalot-1.0.27-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
+**Current installer (latest):** [Snipalot-1.0.28-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.28/Snipalot-1.0.28-setup.exe) — see [Releases](https://github.com/Koprowski/snipalot/releases).
 
 **Before reinstalling:** quit Snipalot first. The launcher **X** exits the app; the tray menu also has **Quit Snipalot**.
 
@@ -17,10 +17,10 @@ Snipalot is a Windows screen-recording tool with a **Trade mode** built for meme
 
 ## Step 1 — Download and install Snipalot
 
-**[⬇ Download Snipalot-1.0.27-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.27/Snipalot-1.0.27-setup.exe)**
+**[⬇ Download Snipalot-1.0.28-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.28/Snipalot-1.0.28-setup.exe)**
 
 1. Click the link above to download the installer
-2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.27-setup.exe**
+2. Once downloaded, open your **Downloads** folder and double-click **Snipalot-1.0.28-setup.exe**
 3. If Windows shows a blue "Windows protected your PC" warning, click **More info** → **Run anyway**
 4. Click through the installer (Next → Install → Finish)
 5. Snipalot launches automatically after setup finishes and also appears in your **Start menu** — press the Windows key and type **Snipalot** to launch it any time
@@ -130,6 +130,7 @@ Export your actual trades from MockApe or Padre as JSON and paste it into the tr
 | Problem | Fix |
 | --- | --- |
 | Windows shows "Windows protected your PC" | Click **More info** → **Run anyway** — appears because the installer isn't code-signed |
+| Smart App Control blocks Snipalot with no install-anyway option | Smart App Control does not offer a per-app bypass for unsigned or untrusted apps. Turn off Smart App Control on that PC, or use a future signed Snipalot installer. |
 | No `trade_log.xlsx` after recording | Open the session folder. If `Inputs/extraction_response.json` is missing, the LLM extraction failed. In Settings → Trade Mode, click **Test LLM Connection** and follow any Gemini CLI install/sign-in guidance, or switch to API mode and verify the OpenRouter/OpenAI key |
 | Recording has no audio | Check the microphone icon in the HUD. In Windows **Settings → System → Sound → Input**, set the correct default microphone. Open **`Inputs/mic_diagnostics.json`** in the session folder to see which device Snipalot captured and any errors |
 | Snipalot doesn't appear in Start menu after install | Re-run the installer, or search for Snipalot in `C:\Users\YourName\AppData\Local\Programs\` |

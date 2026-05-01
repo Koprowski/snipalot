@@ -192,6 +192,7 @@ export function loadConfig(): SnipalotConfig {
       const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
       const parsed = JSON.parse(raw) as Partial<SnipalotConfig>;
       _config = deepMerge(DEFAULT_CONFIG, parsed) as SnipalotConfig;
+      migrateLoadedConfig(_config, parsed);
       log('config', 'loaded', { path: CONFIG_PATH, outputDir: _config.outputDir, firstRun: _config.firstRun });
     } else {
       _config = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
@@ -237,4 +238,17 @@ function deepMerge(base: unknown, override: unknown): unknown {
     result[key] = deepMerge(b[key], o[key]);
   }
   return result;
+}
+
+function migrateLoadedConfig(
+  config: SnipalotConfig,
+  parsed: Partial<SnipalotConfig>
+): void {
+  if (parsed.hotkeys?.tradeMarker === 'Ctrl+Shift+M') {
+    config.hotkeys.tradeMarker = DEFAULT_CONFIG.hotkeys.tradeMarker;
+    log('config', 'migrated old default tradeMarker hotkey', {
+      from: 'Ctrl+Shift+M',
+      to: config.hotkeys.tradeMarker,
+    });
+  }
 }

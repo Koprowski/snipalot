@@ -12,7 +12,7 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.12)
+## Recent improvements (v1.0.1 onward; current release v1.0.13)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -142,6 +142,8 @@ Use this file to onboard LLMs or humans picking up work without full chat contex
  - Main writes a sanitized temp copy of `snipalot.log` to `%TEMP%\snipalot-support\snipalot-support.log`, redacting common API-key/Bearer-token shapes, then uses PowerShell `Set-Clipboard -LiteralPath` so users can paste/upload the log file. If file-copy fails, it falls back to sanitized text on the clipboard.
 - **Installer launch/upgrade responsiveness (local branch):**
  - `resources/installer.nsh` no longer performs long silent sleeps while closing an already-running Snipalot during upgrades. Worst-case wait before prompting is now ~5 seconds instead of ~50+ seconds, and the prompt text matches current launcher X behavior. Unsigned EXE Defender/SmartScreen scanning can still cause pre-NSIS launch delay.
+- **Trade marker hotkey migration (local branch):**
+ - `src/main/config.ts` migrates existing configs that still have the old default `hotkeys.tradeMarker = Ctrl+Shift+M` to the current default `Ctrl+Shift+X` on load. Other custom marker bindings are preserved. Covered by `tests/config-persistence.test.mjs`.
 
 ## Packaged app logs
 

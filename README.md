@@ -2,7 +2,7 @@
 
 ## Download for Windows
 
-**Latest installer:** [Download Snipalot-1.0.12-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.12/Snipalot-1.0.12-setup.exe)
+**Latest installer:** [Download Snipalot-1.0.13-setup.exe](https://github.com/Koprowski/snipalot/releases/download/v1.0.13/Snipalot-1.0.13-setup.exe)
 
 Run the installer, then open Snipalot from the Start menu. If Windows SmartScreen says the app is unrecognized, choose **More info** then **Run anyway**. This is the light installer: Settings includes a setup checklist that can download Whisper for local transcription and install/sign in to Gemini CLI for trade extraction.
 

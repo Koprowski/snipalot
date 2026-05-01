@@ -38,6 +38,42 @@ test('saveConfig throws and leaves memory unchanged when disk write fails', () =
   runConfigChild(home, code);
 });
 
+test('loadConfig migrates old default trade marker hotkey', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-migrate-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ hotkeys: { tradeMarker: 'Ctrl+Shift+M' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.hotkeys.tradeMarker, 'Ctrl+Shift+X');
+  `;
+  runConfigChild(home, code);
+});
+
+test('loadConfig preserves custom trade marker hotkey', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-custom-hotkey-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ hotkeys: { tradeMarker: 'Ctrl+Alt+X' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.hotkeys.tradeMarker, 'Ctrl+Alt+X');
+  `;
+  runConfigChild(home, code);
+});
+
 function runConfigChild(home, code) {
   const result = spawnSync(process.execPath, ['-e', code], {
     cwd: process.cwd(),

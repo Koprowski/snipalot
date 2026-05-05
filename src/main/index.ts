@@ -12,6 +12,7 @@ import {
   Menu,
   clipboard,
   shell,
+  nativeImage,
 } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
@@ -92,11 +93,22 @@ function resourcesRoot(): string {
     : path.join(process.cwd(), 'resources');
 }
 
-function appIconPath(): string {
+function appIconPath(ext: 'ico' | 'png' = process.platform === 'win32' ? 'ico' : 'png'): string {
   const root = resourcesRoot();
   const ico = path.join(root, 'icons', 'app.ico');
+  const png = path.join(root, 'icons', 'app.png');
+  if (ext === 'png') {
+    if (fs.existsSync(png)) return png;
+    return ico;
+  }
   if (fs.existsSync(ico)) return ico;
-  return path.join(root, 'icons', 'app.png');
+  return png;
+}
+
+function appWindowIcon() {
+  const iconPath = appIconPath('png');
+  const image = nativeImage.createFromPath(iconPath);
+  return image.isEmpty() ? iconPath : image;
 }
 
 function initializeCaptureSurfaces(reason: string): void {
@@ -770,7 +782,7 @@ function createLauncherWindow(): BrowserWindow {
   const y = primary.workArea.y + margin;
   log('main', 'createLauncher', { x, y, w, h });
 
-  const iconPath = appIconPath();
+  const icon = appWindowIcon();
   const win = new BrowserWindow({
     width: w,
     height: h,
@@ -792,7 +804,7 @@ function createLauncherWindow(): BrowserWindow {
     minimizable: true,
     maximizable: false,
     show: false,
-    icon: iconPath,
+    icon,
     title: 'Snipalot',
     webPreferences: {
       preload: path.join(__dirname, '..', 'launcher', 'preload.js'),
@@ -966,7 +978,7 @@ function openAnnotator(): void {
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
   const wa = display.workArea;
-  const iconPath = appIconPath();
+  const icon = appWindowIcon();
   annotatorWindow = new BrowserWindow({
     width: wa.width,
     height: wa.height,
@@ -975,7 +987,7 @@ function openAnnotator(): void {
     minWidth: 720,
     minHeight: 480,
     title: 'Snipalot · Annotator',
-    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    icon,
     backgroundColor: '#0f1117',
     show: false,
     webPreferences: {
@@ -1097,14 +1109,14 @@ function openTradeContextWindow(
   const primary = screen.getPrimaryDisplay();
   const w = 640;
   const h = 560;
-  const iconPath = appIconPath();
+  const icon = appWindowIcon();
   tradeContextWindow = new BrowserWindow({
     width: w,
     height: h,
     x: primary.workArea.x + Math.floor((primary.workArea.width - w) / 2),
     y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
     title: 'Snipalot Trade · Add trade data',
-    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    icon,
     backgroundColor: '#0f1117',
     show: false,
     webPreferences: {
@@ -1262,7 +1274,7 @@ function openResponsePasteWindow(
   const primary = screen.getPrimaryDisplay();
   const w = 600;
   const h = 540;
-  const iconPath = appIconPath();
+  const icon = appWindowIcon();
   responsePasteWindow = new BrowserWindow({
     width: w,
     height: h,
@@ -1271,7 +1283,7 @@ function openResponsePasteWindow(
     minWidth: 480,
     minHeight: 400,
     title: 'Snipalot · Paste LLM Response',
-    icon: iconPath,
+    icon,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, '..', 'response-paste', 'preload.js'),
@@ -1352,7 +1364,7 @@ function openSettings(isFirstRun = false): void {
   const primary = screen.getPrimaryDisplay();
   const w = 760;
   const h = 700;
-  const iconPath = appIconPath();
+  const icon = appWindowIcon();
   const win = new BrowserWindow({
     width: w,
     height: h,
@@ -1371,7 +1383,7 @@ function openSettings(isFirstRun = false): void {
     // windows, which also run at that level and cover the full screen.
     alwaysOnTop: true,
     show: false,
-    icon: iconPath,
+    icon,
     webPreferences: {
       preload: path.join(__dirname, '..', 'settings', 'preload.js'),
       contextIsolation: true,
@@ -2673,6 +2685,8 @@ ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
     log('hotkey', 'shortcut surface changed; reloading global shortcuts');
     reloadGlobalHotkeys();
   }
+  broadcastStateToLauncher();
+  updateLauncherVisibility();
   log('settings', 'config saved via IPC', sanitizeSettingsPartialForLog(partial));
 });
 

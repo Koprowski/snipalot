@@ -115,7 +115,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.30)
+## Recent improvements (v1.0.1 onward; current release v1.0.31)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -323,6 +323,11 @@ Agent behavior:
 - **Launcher hidden-button CSS fix (v1.0.30 local branch):**
  - Fixed launcher CSS so elements with the `hidden` attribute use `display:none !important`; button classes such as `.btn-trade { display:flex }` were overriding native hidden rendering, causing Trade to remain visible even when `launcher.visibleActions.trade=false`.
  - Local NSIS build succeeded at **`release-v1.0.30-hidden-buttons/Snipalot-1.0.30-setup.exe`**. SHA256: `6137B8F3C43CA52DC5380A0056E2149AE5E1212FA7BAE37DE48E80EAC98F8399`.
+- **Settings visibility refresh + Windows icon fix (v1.0.31 local branch):**
+ - `settings:save` now rebroadcasts launcher state and reapplies launcher visibility immediately after saving, so toggling Record/Screenshot/Trade visibility in Settings updates the already-open launcher without requiring restart/state transition.
+ - Browser windows now pass an explicit generated PNG `nativeImage`, and the installer-created Start Menu shortcut points directly at bundled `resources/resources/icons/app.ico`; this avoids relying on EXE resource editing, which requires `winCodeSign` extraction/symlink privileges on local Windows builds.
+ - Installer Finish `Run Snipalot` lockups are likely caused by NSIS launching the unsigned Electron app through `StdUtils.ExecShellAsUser` while Windows/Defender scans/initializes it. Solution options: uncheck Run Snipalot, disable `runAfterFinish`, or replace the finish-page launch with a custom detached helper path.
+ - Local NSIS build succeeded at **`release-v1.0.31-settings-icon-2/Snipalot-1.0.31-setup.exe`** after the first v1.0.31 output directory was locked by Windows. SHA256: `BBA6BDAC5121E2083A126B91EF9C03CA047570C634E75F47AF6D6CFBF62195C9`.
 - **Log security hardening (local branch):**
  - `src/main/logger.ts` now centrally redacts common API keys, Bearer tokens, password/secret/token fields, Google API keys, OpenRouter/OpenAI-style keys, and PEM private keys before writing any log line.
  - Logger now rotates `snipalot.log` at 5 MB, keeping `snipalot.log.1` through `.3`, so dev and packaged logs do not grow forever.

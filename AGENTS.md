@@ -115,7 +115,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.29)
+## Recent improvements (v1.0.1 onward; current release v1.0.30)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -320,6 +320,9 @@ Agent behavior:
  - Launcher state includes `visibleActions`, and the renderer collapses the button/shortcut layout to one, two, or three visible actions. Hidden buttons can still reappear while their mode is active so cancel/processing controls remain reachable.
  - Global shortcut registration now follows `launcher.visibleActions` for idle start actions: hidden Record disables `startStop`, hidden Screenshot disables idle screenshot, and hidden Trade disables idle `startTrade`. Recording/HUD controls remain available while their HUD action is visible.
  - Local NSIS build succeeded at **`release-v1.0.29-launcher-actions/Snipalot-1.0.29-setup.exe`** after the default `release/win-unpacked` output was locked by Windows. SHA256: `C358C230DDF727A1E65B64360E39BCBC6D35670306916B61A508DADAA75D706A`.
+- **Launcher hidden-button CSS fix (v1.0.30 local branch):**
+ - Fixed launcher CSS so elements with the `hidden` attribute use `display:none !important`; button classes such as `.btn-trade { display:flex }` were overriding native hidden rendering, causing Trade to remain visible even when `launcher.visibleActions.trade=false`.
+ - Local NSIS build succeeded at **`release-v1.0.30-hidden-buttons/Snipalot-1.0.30-setup.exe`**. SHA256: `6137B8F3C43CA52DC5380A0056E2149AE5E1212FA7BAE37DE48E80EAC98F8399`.
 - **Log security hardening (local branch):**
  - `src/main/logger.ts` now centrally redacts common API keys, Bearer tokens, password/secret/token fields, Google API keys, OpenRouter/OpenAI-style keys, and PEM private keys before writing any log line.
  - Logger now rotates `snipalot.log` at 5 MB, keeping `snipalot.log.1` through `.3`, so dev and packaged logs do not grow forever.

@@ -21,6 +21,10 @@ body {
   flex-direction: column;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 /* ─── custom title bar ──────────────────────────────────────── */
 
 .titlebar {

@@ -115,7 +115,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.33)
+## Recent improvements (v1.0.1 onward; current release v1.0.34)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -335,6 +335,8 @@ Agent behavior:
  - Local `electron-builder` packaging is currently blocked on this PC when EXE resource editing is enabled: `winCodeSign-2.6.0.7z` extraction fails because 7-Zip cannot create symlinks without the required Windows privilege. Use GitHub Actions/CI for the v1.0.32 installer, or enable Developer Mode/run elevated if local packaging must embed EXE icon resources.
 - **Processing launcher action collapse (v1.0.33 local branch):**
  - During `processing`, the launcher now hides normal Record/Screenshot/Trade action buttons and shortcut chips, showing only the processing/Abandon control plus progress/status. Abandon remains available even if Record is hidden, because it is a processing escape hatch rather than a launcher Record action.
+- **Semi-automatic updater (v1.0.34 local branch):**
+ - Settings **Check / Install Update** now uses the latest GitHub release API to find the `Snipalot-*-setup.exe` asset. When an update is available, the user can confirm once, Snipalot downloads the installer to `%TEMP%\snipalot-updates`, launches it through a detached Windows handoff command, and exits itself so the installer can replace the running app. If no installer asset is found, Settings falls back to opening the release page.
 - **Log security hardening (local branch):**
  - `src/main/logger.ts` now centrally redacts common API keys, Bearer tokens, password/secret/token fields, Google API keys, OpenRouter/OpenAI-style keys, and PEM private keys before writing any log line.
  - Logger now rotates `snipalot.log` at 5 MB, keeping `snipalot.log.1` through `.3`, so dev and packaged logs do not grow forever.

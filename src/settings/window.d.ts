@@ -13,7 +13,15 @@ interface Window {
       latestVersion: string | null;
       updateAvailable: boolean;
       releaseUrl: string | null;
+      installerAssetUrl?: string | null;
+      installerAssetName?: string | null;
       message: string;
+    }>;
+    downloadAndInstallUpdate: () => Promise<{
+      ok: boolean;
+      message: string;
+      installerPath?: string;
+      releaseUrl?: string | null;
     }>;
     openLatestRelease: () => Promise<void>;
     openUrl: (url: string) => Promise<void>;

@@ -71,8 +71,16 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     latestVersion: string | null;
     updateAvailable: boolean;
     releaseUrl: string | null;
+    installerAssetUrl?: string | null;
+    installerAssetName?: string | null;
     message: string;
   }> => ipcRenderer.invoke('settings:check-for-updates'),
+  downloadAndInstallUpdate: (): Promise<{
+    ok: boolean;
+    message: string;
+    installerPath?: string;
+    releaseUrl?: string | null;
+  }> => ipcRenderer.invoke('settings:download-and-install-update'),
   openLatestRelease: (): Promise<void> => ipcRenderer.invoke('settings:open-release-page'),
   openUrl: (url: string): Promise<void> => ipcRenderer.invoke('settings:open-release-page', url),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('settings:pick-folder'),

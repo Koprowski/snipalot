@@ -842,8 +842,26 @@ btnCheckUpdates.addEventListener('click', async () => {
       return;
     }
     if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Update available (${result.latestVersion})`;
-    setStatus(`Update available: ${result.latestVersion} — opening download page…`);
-    await api.openLatestRelease();
+    if (!result.installerAssetUrl) {
+      setStatus(`Update available: ${result.latestVersion}, but no installer asset was found. Opening release page…`);
+      await api.openLatestRelease();
+      return;
+    }
+    const okToInstall = window.confirm(
+      `Snipalot ${result.latestVersion} is available.\n\nDownload the installer now, close Snipalot, and start the upgrade?`
+    );
+    if (!okToInstall) {
+      setStatus(`Update available: ${result.latestVersion}. Install canceled.`);
+      return;
+    }
+    setStatus(`Downloading Snipalot ${result.latestVersion} installer…`);
+    const install = await api.downloadAndInstallUpdate();
+    if (!install.ok) {
+      setStatus(install.message, true);
+      if (install.releaseUrl) await api.openUrl(install.releaseUrl);
+      return;
+    }
+    setStatus(install.message);
   } catch (err) {
     setStatus(`Update check failed: ${(err as Error).message}`, true);
   } finally {

@@ -1423,8 +1423,25 @@ interface SettingsUpdateCheckResult {
   currentVersion: string;
   latestVersion: string | null;
   updateAvailable: boolean;
-  releaseUrl: string;
+  releaseUrl: string | null;
+  installerAssetUrl?: string | null;
+  installerAssetName?: string | null;
   message: string;
+}
+
+interface SettingsUpdateInstallResult {
+  ok: boolean;
+  message: string;
+  installerPath?: string;
+  releaseUrl?: string | null;
+}
+
+interface GitHubReleaseInfo {
+  tagName: string;
+  version: string;
+  htmlUrl: string;
+  installerAssetUrl: string | null;
+  installerAssetName: string | null;
 }
 
 type SettingsTestLlmGuidance = {
@@ -1453,49 +1470,65 @@ function isRemoteVersionNewer(current: string, latest: string): boolean {
   return false;
 }
 
+function findInstallerAsset(
+  assets: Array<{ name?: string; browser_download_url?: string }> | undefined
+): { name: string; url: string } | null {
+  const candidates = (assets ?? [])
+    .map((asset) => ({
+      name: asset.name ?? '',
+      url: asset.browser_download_url ?? '',
+    }))
+    .filter((asset) => (
+      /^Snipalot-.*-setup\.exe$/i.test(asset.name) &&
+      /^https?:\/\//i.test(asset.url)
+    ));
+  return candidates[0] ?? null;
+}
+
+async function fetchLatestSnipalotReleaseInfo(signal?: AbortSignal): Promise<GitHubReleaseInfo> {
+  const currentVersion = app.getVersion();
+  const fallbackUrl = 'https://github.com/Koprowski/snipalot/releases/latest';
+  const res = await fetch('https://api.github.com/repos/Koprowski/snipalot/releases/latest', {
+    method: 'GET',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': `snipalot/${currentVersion}`,
+    },
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`GitHub release check failed (HTTP ${res.status}).`);
+  }
+  const json = await res.json() as {
+    tag_name?: string;
+    html_url?: string;
+    name?: string;
+    assets?: Array<{ name?: string; browser_download_url?: string }>;
+  };
+  const tagName = (json.tag_name ?? json.name ?? '').trim();
+  const version = tagName.replace(/^v/i, '');
+  if (!version) {
+    throw new Error('GitHub release metadata did not include a valid version.');
+  }
+  const installer = findInstallerAsset(json.assets);
+  return {
+    tagName,
+    version,
+    htmlUrl: json.html_url || fallbackUrl,
+    installerAssetUrl: installer?.url ?? null,
+    installerAssetName: installer?.name ?? null,
+  };
+}
+
 ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
   const currentVersion = app.getVersion();
   const fallbackUrl = 'https://github.com/Koprowski/snipalot/releases/latest';
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const res = await fetch('https://api.github.com/repos/Koprowski/snipalot/releases/latest', {
-      method: 'GET',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        'User-Agent': `snipalot/${currentVersion}`,
-      },
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      log('settings', 'check-for-updates http fail', { status: res.status });
-      return {
-        ok: false,
-        currentVersion,
-        latestVersion: null,
-        updateAvailable: false,
-        releaseUrl: fallbackUrl,
-        message: `Update check failed (HTTP ${res.status}).`,
-      };
-    }
-    const json = await res.json() as {
-      tag_name?: string;
-      html_url?: string;
-      name?: string;
-    };
-    const latestTag = (json.tag_name ?? json.name ?? '').trim();
-    const latestVersion = latestTag.replace(/^v/i, '');
-    const releaseUrl = json.html_url || fallbackUrl;
-    if (!latestVersion) {
-      return {
-        ok: false,
-        currentVersion,
-        latestVersion: null,
-        updateAvailable: false,
-        releaseUrl,
-        message: 'Update check failed (invalid release metadata).',
-      };
-    }
+    const latest = await fetchLatestSnipalotReleaseInfo(controller.signal);
+    const latestVersion = latest.version;
+    const releaseUrl = latest.htmlUrl;
     const updateAvailable = isRemoteVersionNewer(currentVersion, latestVersion);
     return {
       ok: true,
@@ -1503,6 +1536,8 @@ ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateChe
       latestVersion,
       updateAvailable,
       releaseUrl,
+      installerAssetUrl: latest.installerAssetUrl,
+      installerAssetName: latest.installerAssetName,
       message: updateAvailable
         ? `Update available: v${latestVersion} (installed v${currentVersion}).`
         : `You are up to date (v${currentVersion}).`,
@@ -1515,6 +1550,8 @@ ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateChe
       latestVersion: null,
       updateAvailable: false,
       releaseUrl: fallbackUrl,
+      installerAssetUrl: null,
+      installerAssetName: null,
       message: `Update check failed: ${(err as Error).message}`,
     };
   } finally {
@@ -1527,6 +1564,77 @@ ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
     ? url
     : 'https://github.com/Koprowski/snipalot/releases/latest';
   await shell.openExternal(target);
+});
+
+function safeUpdateInstallerName(name: string): string {
+  const base = path.basename(name || 'Snipalot-update-setup.exe');
+  return base.replace(/[^a-z0-9._-]/gi, '_') || 'Snipalot-update-setup.exe';
+}
+
+function launchInstallerAfterExit(installerPath: string): void {
+  if (process.platform !== 'win32') {
+    shell.openPath(installerPath).catch((err) => {
+      log('settings', 'update installer open failed', { err: err?.message ?? String(err) });
+    });
+    return;
+  }
+  const command = `timeout /t 2 /nobreak >nul & start "" "${installerPath}"`;
+  const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+}
+
+ipcMain.handle('settings:download-and-install-update', async (): Promise<SettingsUpdateInstallResult> => {
+  const currentVersion = app.getVersion();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  try {
+    const latest = await fetchLatestSnipalotReleaseInfo(controller.signal);
+    if (!isRemoteVersionNewer(currentVersion, latest.version)) {
+      return {
+        ok: false,
+        message: `Snipalot is already up to date (v${currentVersion}).`,
+        releaseUrl: latest.htmlUrl,
+      };
+    }
+    if (!latest.installerAssetUrl || !latest.installerAssetName) {
+      return {
+        ok: false,
+        message: `Update v${latest.version} is available, but no setup.exe asset was found. Opening the release page instead.`,
+        releaseUrl: latest.htmlUrl,
+      };
+    }
+    const updateDir = path.join(os.tmpdir(), 'snipalot-updates');
+    const installerPath = path.join(updateDir, safeUpdateInstallerName(latest.installerAssetName));
+    log('settings', 'update download start', {
+      currentVersion,
+      latestVersion: latest.version,
+      installerName: latest.installerAssetName,
+    });
+    const bytes = await downloadFile(latest.installerAssetUrl, installerPath);
+    log('settings', 'update download complete', { installerPath, bytes });
+    launchInstallerAfterExit(installerPath);
+    setTimeout(() => requestAppExit(`install update v${latest.version}`), 100);
+    return {
+      ok: true,
+      message: `Downloaded v${latest.version}. Snipalot will close and launch the installer.`,
+      installerPath,
+      releaseUrl: latest.htmlUrl,
+    };
+  } catch (err) {
+    const message = (err as Error).message;
+    log('settings', 'download-and-install-update failed', { err: message });
+    return {
+      ok: false,
+      message: `Update install failed: ${message}`,
+      releaseUrl: 'https://github.com/Koprowski/snipalot/releases/latest',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 });
 
 function sanitizeSettingsPartialForLog(

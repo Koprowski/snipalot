@@ -79,12 +79,15 @@ function renderLauncherImpl(): void {
   const isSelectingTrade = currentState === 'selecting-trade';
   const isRecording = currentState === 'recording';
   const isTrading = isRecording && currentSessionMode === 'trade';
+  const isProcessing = currentState === 'processing';
   const shouldShowRecord =
+    isProcessing ||
     currentVisibleActions.record ||
-    isSelectingRecord ||
-    (currentState === 'processing' && currentCanAbandonProcessing);
-  const shouldShowScreenshot = currentVisibleActions.screenshot || isSelectingScreenshot;
-  const shouldShowTrade = currentVisibleActions.trade || isSelectingTrade || isTrading;
+    isSelectingRecord;
+  const shouldShowScreenshot =
+    !isProcessing && (currentVisibleActions.screenshot || isSelectingScreenshot);
+  const shouldShowTrade =
+    !isProcessing && (currentVisibleActions.trade || isSelectingTrade || isTrading);
   labelEl.classList.toggle('selecting', isSelectingRecord || isSelectingScreenshot || isSelectingTrade);
   labelEl.classList.toggle('processing', currentState === 'processing');
   btnPrimaryEl.classList.toggle('selecting', isSelectingRecord);
@@ -98,9 +101,9 @@ function renderLauncherImpl(): void {
   btnPrimaryEl.hidden = !shouldShowRecord;
   btnScreenshotEl.hidden = !shouldShowScreenshot;
   btnTradeEl.hidden = !shouldShowTrade;
-  hkRecordEl.hidden = !shouldShowRecord;
-  hkScreenshotEl.hidden = !shouldShowScreenshot;
-  hkTradeEl.hidden = !shouldShowTrade;
+  hkRecordEl.hidden = isProcessing || !shouldShowRecord;
+  hkScreenshotEl.hidden = isProcessing || !shouldShowScreenshot;
+  hkTradeEl.hidden = isProcessing || !shouldShowTrade;
   const visibleCount = [shouldShowRecord, shouldShowScreenshot, shouldShowTrade].filter(Boolean).length;
   document.body.dataset.visibleActionCount = String(Math.max(1, visibleCount));
   renderCaptureModeButtons();

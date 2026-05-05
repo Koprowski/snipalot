@@ -604,6 +604,43 @@ select:focus {
   color: #facc15;
 }
 
+.version-update-btn {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.version-update-btn:disabled {
+  color: var(--text);
+  cursor: default;
+  opacity: 1;
+}
+
+.version-update-btn.can-install {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.version-update-btn.can-install:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.version-update-btn.can-retry {
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.version-update-btn.can-retry:hover {
+  color: var(--accent);
+}
+
 .about-meta-row {
   display: flex;
   align-items: center;

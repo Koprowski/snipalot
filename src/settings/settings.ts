@@ -31,7 +31,7 @@ const openrouterFreeOnlyCheckbox = document.getElementById('checkbox-openrouter-
 const openrouterMaxCostInput = document.getElementById('input-openrouter-max-cost') as HTMLInputElement;
 const geminiCliModelFilterInput = document.getElementById('input-gemini-cli-model-filter') as HTMLInputElement;
 const geminiCliModelsSelect = document.getElementById('select-gemini-cli-models') as HTMLSelectElement;
-const versionLabelEl = document.getElementById('settings-version') as HTMLElement | null;
+const versionLabelEl = btnCheckUpdates;
 const settingsStatusEl = document.getElementById('status') as HTMLElement;
 const hotkeysBody = document.getElementById('hotkeys-body') as HTMLTableSectionElement;
 const firstRunBanner = document.getElementById('first-run-banner') as HTMLElement;
@@ -573,20 +573,53 @@ function initGeminiSignin(): void {
 async function refreshVersionAndUpdateStatus(): Promise<void> {
   try {
     const info = await api.getAppInfo();
-    if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version}`;
+    setUpdateFooterChecking(info.version);
     const update = await api.checkForUpdates();
-    if (!update.ok) {
-      if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Update check unavailable`;
-      return;
-    }
-    if (update.updateAvailable && update.latestVersion) {
-      if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Update available (${update.latestVersion})`;
-      return;
-    }
-    if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Up to date`;
+    setUpdateFooterFromResult(info.version, update);
   } catch {
-    // Keep UI usable even if update check fails.
+    setUpdateFooterUnavailable();
   }
+}
+
+function setUpdateFooterChecking(version?: string): void {
+  versionLabelEl.textContent = version ? `Version: ${version} · Checking...` : 'Checking for updates...';
+  versionLabelEl.classList.remove('can-install', 'can-retry');
+  versionLabelEl.disabled = true;
+  versionLabelEl.title = '';
+}
+
+function setUpdateFooterUnavailable(version?: string): void {
+  versionLabelEl.textContent = version
+    ? `Version: ${version} · Update check unavailable`
+    : 'Update check unavailable';
+  versionLabelEl.classList.remove('can-install');
+  versionLabelEl.classList.add('can-retry');
+  versionLabelEl.disabled = false;
+  versionLabelEl.title = 'Click to check again';
+}
+
+function setUpdateFooterFromResult(
+  installedVersion: string,
+  update: Awaited<ReturnType<typeof api.checkForUpdates>>
+): void {
+  if (!update.ok) {
+    setUpdateFooterUnavailable(installedVersion);
+    return;
+  }
+  if (update.updateAvailable && update.latestVersion) {
+    versionLabelEl.textContent = `Version: ${installedVersion} · ${update.latestVersion} available - install`;
+    versionLabelEl.classList.add('can-install');
+    versionLabelEl.classList.remove('can-retry');
+    versionLabelEl.disabled = false;
+    versionLabelEl.title = update.installerAssetUrl
+      ? `Download and install Snipalot ${update.latestVersion}`
+      : 'Open the latest Snipalot release page';
+    return;
+  }
+  versionLabelEl.textContent = `Version: ${installedVersion} · Up to date`;
+  versionLabelEl.classList.remove('can-install', 'can-retry');
+  versionLabelEl.disabled = true;
+  versionLabelEl.title = '';
 }
 
 // ─── hotkey rendering + capture ────────────────────────────────────────
@@ -830,18 +863,18 @@ btnCheckUpdates.addEventListener('click', async () => {
   btnSave.disabled = true;
   setStatus('Checking for updates…');
   try {
+    const info = await api.getAppInfo();
+    setUpdateFooterChecking(info.version);
     const result = await api.checkForUpdates();
+    setUpdateFooterFromResult(info.version, result);
     if (!result.ok) {
       setStatus(`Update check failed: ${result.message}`, true);
       return;
     }
-    const info = await api.getAppInfo();
     if (!result.updateAvailable || !result.latestVersion || !result.releaseUrl) {
-      if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Up to date`;
       setStatus(`Up to date (${info.version})`);
       return;
     }
-    if (versionLabelEl) versionLabelEl.textContent = `Version: ${info.version} · Update available (${result.latestVersion})`;
     if (!result.installerAssetUrl) {
       setStatus(`Update available: ${result.latestVersion}, but no installer asset was found. Opening release page…`);
       await api.openLatestRelease();
@@ -852,20 +885,23 @@ btnCheckUpdates.addEventListener('click', async () => {
     );
     if (!okToInstall) {
       setStatus(`Update available: ${result.latestVersion}. Install canceled.`);
+      setUpdateFooterFromResult(info.version, result);
       return;
     }
     setStatus(`Downloading Snipalot ${result.latestVersion} installer…`);
+    setUpdateFooterChecking(info.version);
     const install = await api.downloadAndInstallUpdate();
     if (!install.ok) {
       setStatus(install.message, true);
+      setUpdateFooterFromResult(info.version, result);
       if (install.releaseUrl) await api.openUrl(install.releaseUrl);
       return;
     }
     setStatus(install.message);
   } catch (err) {
     setStatus(`Update check failed: ${(err as Error).message}`, true);
+    setUpdateFooterUnavailable();
   } finally {
-    btnCheckUpdates.disabled = false;
     btnSave.disabled = prevSaveDisabled;
   }
 });

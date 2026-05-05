@@ -92,6 +92,14 @@ export interface SnipalotConfig {
      * sessions. Default false (normal window stacking).
      */
     pinnedOnTop: boolean;
+    /** Which primary launcher action buttons are visible while idle.
+     * Record + Screenshot are the default general-user workflow; Trade is
+     * opt-in so trading users can make the launcher unmistakable. */
+    visibleActions: {
+      record: boolean;
+      screenshot: boolean;
+      trade: boolean;
+    };
   };
   capture: {
     /**
@@ -170,6 +178,11 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   launcher: {
     pinnedOnTop: false,
+    visibleActions: {
+      record: true,
+      screenshot: true,
+      trade: false,
+    },
   },
   capture: {
     mode: 'region',
@@ -193,7 +206,12 @@ export function loadConfig(): SnipalotConfig {
       const parsed = JSON.parse(raw) as Partial<SnipalotConfig>;
       _config = deepMerge(DEFAULT_CONFIG, parsed) as SnipalotConfig;
       migrateLoadedConfig(_config, parsed);
-      log('config', 'loaded', { path: CONFIG_PATH, outputDir: _config.outputDir, firstRun: _config.firstRun });
+      log('config', 'loaded', {
+        path: CONFIG_PATH,
+        outputDir: _config.outputDir,
+        firstRun: _config.firstRun,
+        launcherVisibleActions: _config.launcher.visibleActions,
+      });
     } else {
       _config = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
       log('config', 'no config file found; using defaults');
@@ -259,6 +277,7 @@ function migrateLoadedConfig(
     });
   }
   sanitizeHotkeys(config);
+  sanitizeLauncherActions(config);
 }
 
 function sanitizeHotkeys(config: SnipalotConfig): void {
@@ -283,4 +302,11 @@ function isUsableHotkey(value: unknown): value is string {
   const last = parts[parts.length - 1];
   if (['Ctrl', 'Control', 'Shift', 'Alt', 'Meta', 'Command', 'Cmd'].includes(last)) return false;
   return parts.slice(0, -1).some((p) => ['Ctrl', 'Control', 'Shift', 'Alt', 'Meta', 'Command', 'Cmd'].includes(p));
+}
+
+function sanitizeLauncherActions(config: SnipalotConfig): void {
+  const actions = config.launcher.visibleActions;
+  if (actions.record || actions.screenshot || actions.trade) return;
+  config.launcher.visibleActions = { ...DEFAULT_CONFIG.launcher.visibleActions };
+  log('config', 'reset launcher visible actions to default; at least one action must be visible');
 }

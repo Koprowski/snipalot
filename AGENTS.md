@@ -100,8 +100,8 @@ Agent behavior:
 - When updating Mission Control from another repo, preserve unrelated local work
   in both repos.
 - If filesystem permissions block direct edits to `E:\Apps\mission-control`,
-  ask for permission rather than writing Mission Control content into the
-  current repo.
+  request escalation/user approval for the canonical checkout rather than
+  writing Mission Control content into the current repo or a fallback clone.
 - After meaningful Mission Control changes, commit and push the Mission Control
   repo unless the user asks not to.
 
@@ -115,7 +115,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.28)
+## Recent improvements (v1.0.1 onward; current release v1.0.29)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -314,11 +314,19 @@ Agent behavior:
  - `scripts/make-icon.mjs` now emits a multi-size `resources/icons/app.ico` from the existing red record-dot artwork; light/full electron-builder configs use the `.ico` for the Windows executable/taskbar/Start Menu icon instead of relying on PNG fallback behavior.
  - Main-process windows resolve icons through a packaged-aware helper (`process.resourcesPath/resources` when installed, repo `resources/` in dev), preventing installed windows from falling back to generic Electron icon assets.
  - README/install guide now call out that Windows Smart App Control has no per-app bypass for unsigned/untrusted builds; users must turn it off on that PC or use a future signed installer.
+- **Launcher button visibility controls (local branch):**
+ - Added `launcher.visibleActions` config for the main launcher buttons. Defaults are Record + Screenshot visible and Trade hidden for the general-user workflow.
+ - Settings now has a **Launcher Buttons** section where users can show/hide Record, Screenshot, and Trade; at least one button must remain visible.
+ - Launcher state includes `visibleActions`, and the renderer collapses the button/shortcut layout to one, two, or three visible actions. Hidden buttons can still reappear while their mode is active so cancel/processing controls remain reachable.
+ - Global shortcut registration now follows `launcher.visibleActions` for idle start actions: hidden Record disables `startStop`, hidden Screenshot disables idle screenshot, and hidden Trade disables idle `startTrade`. Recording/HUD controls remain available while their HUD action is visible.
+ - Local NSIS build succeeded at **`release-v1.0.29-launcher-actions/Snipalot-1.0.29-setup.exe`** after the default `release/win-unpacked` output was locked by Windows. SHA256: `C358C230DDF727A1E65B64360E39BCBC6D35670306916B61A508DADAA75D706A`.
 - **Log security hardening (local branch):**
  - `src/main/logger.ts` now centrally redacts common API keys, Bearer tokens, password/secret/token fields, Google API keys, OpenRouter/OpenAI-style keys, and PEM private keys before writing any log line.
  - Logger now rotates `snipalot.log` at 5 MB, keeping `snipalot.log.1` through `.3`, so dev and packaged logs do not grow forever.
  - Support-log export redaction now covers legacy `geminiApiKey` in addition to OpenAI/OpenRouter keys.
  - Added `tests/logger-redaction.test.mjs` covering log redaction and rotation. Local dev/package logs were redacted in place on 2026-05-01; active `%USERPROFILE%\.snipalot\config.json` was intentionally not modified because it stores configured keys needed for API mode.
+- **SignPath application prep (local branch):**
+ - README now includes a `Code Signing Policy` section required by SignPath Foundation, including SignPath attribution, release artifact scope, maintainer/reviewer/approver role, and privacy statement for local processing plus user-configured LLM backends.
 
 ## Packaged app logs
 

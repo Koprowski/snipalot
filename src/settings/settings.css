@@ -479,7 +479,8 @@ select:focus {
   gap: 8px;
 }
 
-.radio-row {
+.radio-row,
+.check-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -490,16 +491,25 @@ select:focus {
   transition: border-color 0.1s, background 0.1s;
 }
 
-.radio-row:hover {
+.check-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radio-row:hover,
+.check-row:hover {
   background: var(--surface);
 }
 
-.radio-row input[type='radio'] {
+.radio-row input[type='radio'],
+.check-row input[type='checkbox'] {
   margin-top: 3px;
   accent-color: var(--accent);
 }
 
-.radio-row:has(input:checked) {
+.radio-row:has(input:checked),
+.check-row:has(input:checked) {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }

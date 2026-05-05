@@ -40,6 +40,7 @@ interface Window {
         startTradeHotkey?: string;
         tradeMarkerHotkey?: string;
         captureMode?: 'region' | 'fullscreen' | 'window';
+        visibleActions?: { record: boolean; screenshot: boolean; trade: boolean };
         sessionMode?: 'record' | 'trade';
         canAbandonProcessing?: boolean;
         processingProgress?: { pct: number; etaSec: number; elapsedSec: number } | null;

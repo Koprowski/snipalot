@@ -424,6 +424,18 @@ body {
   gap: 6px;
 }
 
+body[data-visible-action-count="1"] .shortcut-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body[data-visible-action-count="2"] .shortcut-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body[data-visible-action-count="3"] .shortcut-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .shortcut-chip {
   text-align: center;
   color: #8b92a0;

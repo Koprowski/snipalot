@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
       startTradeHotkey?: string;
       tradeMarkerHotkey?: string;
       captureMode?: 'region' | 'fullscreen' | 'window';
+      visibleActions?: { record: boolean; screenshot: boolean; trade: boolean };
       canAbandonProcessing?: boolean;
     }) => void
   ) => ipcRenderer.on('launcher:state', (_evt, state) => cb(state)),

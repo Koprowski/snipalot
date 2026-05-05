@@ -297,20 +297,10 @@ function setAppState(next: AppState, why: string): void {
     }
   }
 
-  // Annotate + trade-marker hotkeys are registered ONLY while
-  // recording so they never steal keypresses from other apps when Snipalot
-  // is idle. Trade-marker is also gated on mode === 'trade' (no point
-  // grabbing the chord during a normal recording — markers are a
-  // trade-mode concept). Snapshot is global: idle = Screenshot,
-  // recording = HUD snapshot/close chapter.
-  if (next === 'recording' && prev !== 'recording') {
-    registerAnnotationHotkey();
-    if (currentSessionMode === 'trade') registerTradeMarkerHotkey();
-  } else if (prev === 'recording' && next !== 'recording') {
-    unregisterAnnotationHotkey();
-    unregisterTradeMarkerHotkey();
-  }
-
+  // Re-sync global shortcuts whenever state changes. Idle start shortcuts
+  // follow launcher button visibility; recording-only shortcuts follow the
+  // active HUD controls.
+  reloadGlobalHotkeys();
   broadcastStateToLauncher();
   updateLauncherVisibility();
   updateTrayMenu(next);
@@ -467,13 +457,15 @@ function formatMs(ms: number): string {
  */
 function reloadGlobalHotkeys(): void {
   globalShortcut.unregisterAll();
-  const hk = getConfig().hotkeys;
+  const cfg = getConfig();
+  const hk = cfg.hotkeys;
+  const visibleActions = cfg.launcher.visibleActions;
 
-  const reg = (combo: string, handler: () => void): void => {
+  const reg = (name: string, combo: string, handler: () => void): void => {
     const accel = toAccelerator(combo);
     try {
       const ok = globalShortcut.register(accel, handler);
-      log('hotkey', 'register', { combo: accel, ok });
+      log('hotkey', 'register', { name, combo: accel, ok, visibleActions, appState, currentSessionMode });
       if (!ok) {
         showNotification('Snipalot', `Could not register hotkey: ${accel} (another app owns it)`);
       }
@@ -483,48 +475,73 @@ function reloadGlobalHotkeys(): void {
     }
   };
 
-  reg(hk.startStop, () => {
-    log('hotkey', 'startStop fired', { appState, activeDisplayId });
-    handleToggleHotkey();
-  });
-  reg(hk.snapshot, () => {
-    log('hotkey', 'snapshot fired', { appState, activeDisplayId });
-    if (appState === 'idle') {
-      enterSelectingScreenshot();
-    } else if (appState === 'recording') {
-      void doSnapshot();
-    } else if (appState === 'selecting-screenshot') {
-      exitSelecting('snapshot hotkey toggle');
-    }
-  });
-  reg(hk.toggleOutline, () => {
+  const skip = (name: string, combo: string, reason: string): void => {
+    log('hotkey', 'skip register', {
+      name,
+      combo: toAccelerator(combo),
+      reason,
+      visibleActions,
+      appState,
+      currentSessionMode,
+    });
+  };
+
+  if (visibleActions.record) {
+    reg('startStop', hk.startStop, () => {
+      log('hotkey', 'startStop fired', { appState, activeDisplayId });
+      handleToggleHotkey();
+    });
+  } else {
+    skip('startStop', hk.startStop, 'record action hidden');
+  }
+
+  if (visibleActions.screenshot || appState === 'recording') {
+    reg('snapshot', hk.snapshot, () => {
+      log('hotkey', 'snapshot fired', { appState, activeDisplayId });
+      if (appState === 'idle') {
+        enterSelectingScreenshot();
+      } else if (appState === 'recording') {
+        void doSnapshot();
+      } else if (appState === 'selecting-screenshot') {
+        exitSelecting('snapshot hotkey toggle');
+      }
+    });
+  } else {
+    skip('snapshot', hk.snapshot, 'screenshot action hidden');
+  }
+
+  reg('toggleOutline', hk.toggleOutline, () => {
     log('hotkey', 'toggleOutline fired', { appState, activeDisplayId });
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:toggle-outline');
   });
-  reg(hk.pauseResume, () => {
+  reg('pauseResume', hk.pauseResume, () => {
     log('hotkey', 'pauseResume fired', { appState });
     togglePause();
   });
-  reg(hk.undo, () => {
+  reg('undo', hk.undo, () => {
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-undo');
   });
-  reg(hk.clear, () => {
+  reg('clear', hk.clear, () => {
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-clear');
   });
   // Always-on Trade-session toggle hotkey. Mirrors the launcher's violet
   // Trade button: idle → enterSelectingTrade, active trade-recording →
   // stopRecording. Available globally so the user can start a session
   // without finding the launcher first.
-  reg(hk.startTrade, () => {
-    log('hotkey', 'startTrade fired', { appState, currentSessionMode });
-    if (appState === 'idle') {
-      enterSelectingTrade();
-    } else if (appState === 'recording' && currentSessionMode === 'trade') {
-      stopRecording('trade hotkey');
-    } else if (appState === 'selecting-trade') {
-      exitSelecting('trade hotkey toggle');
-    }
-  });
+  if (visibleActions.trade || appState === 'selecting-trade' || (appState === 'recording' && currentSessionMode === 'trade')) {
+    reg('startTrade', hk.startTrade, () => {
+      log('hotkey', 'startTrade fired', { appState, currentSessionMode });
+      if (appState === 'idle') {
+        enterSelectingTrade();
+      } else if (appState === 'recording' && currentSessionMode === 'trade') {
+        stopRecording('trade hotkey');
+      } else if (appState === 'selecting-trade') {
+        exitSelecting('trade hotkey toggle');
+      }
+    });
+  } else {
+    skip('startTrade', hk.startTrade, 'trade action hidden');
+  }
 
   // Re-arm the recording-only annotate/trade-marker hotkeys at their new
   // combos if we're mid-session. unregisterAll() above already cleared
@@ -571,6 +588,7 @@ function broadcastStateToLauncher(): void {
     startTradeHotkey: getConfig().hotkeys.startTrade,
     tradeMarkerHotkey: getConfig().hotkeys.tradeMarker,
     captureMode: getConfig().capture.mode,
+    visibleActions: getConfig().launcher.visibleActions,
     sessionMode: currentSessionMode,
     canAbandonProcessing: appState === 'processing' && activeProcessingRun !== null,
     processingProgress: computeProcessingProgress(),
@@ -2639,14 +2657,20 @@ ipcMain.handle(
 );
 
 ipcMain.handle('settings:save', (_evt, partial: Partial<SnipalotConfig>) => {
-  // Detect a hotkey change so we know whether to re-register globalShortcuts.
-  // We compare the partial.hotkeys keys against current to avoid the cost
-  // of unregistering/re-registering on a save that only touched outputDir.
-  const before = JSON.stringify(getConfig().hotkeys);
+  // Detect shortcut-surface changes so we know whether to re-register
+  // globalShortcuts. Visible launcher actions gate idle start shortcuts,
+  // so they matter here just as much as the actual accelerator strings.
+  const before = JSON.stringify({
+    hotkeys: getConfig().hotkeys,
+    visibleActions: getConfig().launcher.visibleActions,
+  });
   saveConfig(partial);
-  const after = JSON.stringify(getConfig().hotkeys);
+  const after = JSON.stringify({
+    hotkeys: getConfig().hotkeys,
+    visibleActions: getConfig().launcher.visibleActions,
+  });
   if (before !== after) {
-    log('hotkey', 'config changed; reloading global shortcuts');
+    log('hotkey', 'shortcut surface changed; reloading global shortcuts');
     reloadGlobalHotkeys();
   }
   log('settings', 'config saved via IPC', sanitizeSettingsPartialForLog(partial));
@@ -4138,7 +4162,10 @@ ipcMain.handle(
 // ─── IPC: launcher ↔ main ─────────────────────────────────────────────
 
 ipcMain.handle('launcher:record', () => {
-  log('launcher', 'record click', { appState });
+  log('launcher', 'record click', {
+    appState,
+    visibleActions: getConfig().launcher.visibleActions,
+  });
   if (appState === 'idle') enterSelecting();
   else if (appState === 'recording') stopRecording('launcher button');
 });
@@ -4156,13 +4183,19 @@ ipcMain.handle('launcher:abandon-processing', () => {
 });
 
 ipcMain.handle('launcher:screenshot', () => {
-  log('launcher', 'screenshot click', { appState });
+  log('launcher', 'screenshot click', {
+    appState,
+    visibleActions: getConfig().launcher.visibleActions,
+  });
   if (appState === 'idle') enterSelectingScreenshot();
   else if (appState === 'selecting-screenshot') exitSelecting('screenshot toggle');
 });
 
 ipcMain.handle('launcher:trade', () => {
-  log('launcher', 'trade click', { appState });
+  log('launcher', 'trade click', {
+    appState,
+    visibleActions: getConfig().launcher.visibleActions,
+  });
   if (appState === 'idle') enterSelectingTrade();
   else if (appState === 'selecting-trade') exitSelecting('trade toggle');
 });

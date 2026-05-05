@@ -50,6 +50,11 @@ let currentStartTradeHotkey = 'Ctrl+Shift+T';
 // Mirrors config.hotkeys.tradeMarker. Used in the trade-recording hint only.
 let currentTradeMarkerHotkey = 'Ctrl+Shift+X';
 let currentCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';
+let currentVisibleActions = {
+  record: true,
+  screenshot: true,
+  trade: false,
+};
 // Tracks whether the active recording is record-mode or trade-mode (both
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';
@@ -74,6 +79,12 @@ function renderLauncherImpl(): void {
   const isSelectingTrade = currentState === 'selecting-trade';
   const isRecording = currentState === 'recording';
   const isTrading = isRecording && currentSessionMode === 'trade';
+  const shouldShowRecord =
+    currentVisibleActions.record ||
+    isSelectingRecord ||
+    (currentState === 'processing' && currentCanAbandonProcessing);
+  const shouldShowScreenshot = currentVisibleActions.screenshot || isSelectingScreenshot;
+  const shouldShowTrade = currentVisibleActions.trade || isSelectingTrade || isTrading;
   labelEl.classList.toggle('selecting', isSelectingRecord || isSelectingScreenshot || isSelectingTrade);
   labelEl.classList.toggle('processing', currentState === 'processing');
   btnPrimaryEl.classList.toggle('selecting', isSelectingRecord);
@@ -84,6 +95,14 @@ function renderLauncherImpl(): void {
   );
   btnScreenshotEl.classList.toggle('selecting', isSelectingScreenshot);
   btnTradeEl.classList.toggle('selecting', isSelectingTrade);
+  btnPrimaryEl.hidden = !shouldShowRecord;
+  btnScreenshotEl.hidden = !shouldShowScreenshot;
+  btnTradeEl.hidden = !shouldShowTrade;
+  hkRecordEl.hidden = !shouldShowRecord;
+  hkScreenshotEl.hidden = !shouldShowScreenshot;
+  hkTradeEl.hidden = !shouldShowTrade;
+  const visibleCount = [shouldShowRecord, shouldShowScreenshot, shouldShowTrade].filter(Boolean).length;
+  document.body.dataset.visibleActionCount = String(Math.max(1, visibleCount));
   renderCaptureModeButtons();
 
   // Disable the off-action buttons while another mode is mid-flight so the
@@ -200,7 +219,10 @@ for (const button of captureModeButtons) {
 }
 
 btnPrimaryEl.addEventListener('click', () => {
-  window.snipalotLauncher.log('click', 'primary', { currentState });
+  window.snipalotLauncher.log('click', 'primary', {
+    currentState,
+    visibleActions: currentVisibleActions,
+  });
   if (currentState === 'idle') {
     window.snipalotLauncher.record();
   } else if (currentState === 'selecting') {
@@ -212,7 +234,10 @@ btnPrimaryEl.addEventListener('click', () => {
 });
 
 btnScreenshotEl.addEventListener('click', () => {
-  window.snipalotLauncher.log('click', 'screenshot', { currentState });
+  window.snipalotLauncher.log('click', 'screenshot', {
+    currentState,
+    visibleActions: currentVisibleActions,
+  });
   if (currentState === 'idle') {
     window.snipalotLauncher.screenshot();
   } else if (currentState === 'selecting-screenshot') {
@@ -221,7 +246,10 @@ btnScreenshotEl.addEventListener('click', () => {
 });
 
 btnTradeEl.addEventListener('click', () => {
-  window.snipalotLauncher.log('click', 'trade', { currentState });
+  window.snipalotLauncher.log('click', 'trade', {
+    currentState,
+    visibleActions: currentVisibleActions,
+  });
   if (currentState === 'idle') {
     window.snipalotLauncher.trade();
   } else if (currentState === 'selecting-trade') {
@@ -336,6 +364,7 @@ window.snipalotLauncher.onState((state) => {
   if (state.startTradeHotkey) currentStartTradeHotkey = state.startTradeHotkey;
   if (state.tradeMarkerHotkey) currentTradeMarkerHotkey = state.tradeMarkerHotkey;
   if (state.captureMode) currentCaptureMode = state.captureMode;
+  if (state.visibleActions) currentVisibleActions = state.visibleActions;
   if (state.sessionMode) currentSessionMode = state.sessionMode;
   currentCanAbandonProcessing = state.canAbandonProcessing ?? false;
   currentProcessingProgress = state.processingProgress ?? null;

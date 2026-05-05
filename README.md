@@ -61,10 +61,11 @@ The launcher is a small always-available control panel that lives in your taskba
 - **Capture mode** — choose Select or Full screen for Record, Screenshot, and Trade; Window is shown disabled until implemented
 - **Record** (red) — start a recording session using the selected capture mode
 - **Screenshot** (blue) — capture using the selected capture mode and open the annotation workspace
-- **Trade** (purple) — start a trade recording session using the selected capture mode
+- **Trade** (purple) — start a trade recording session using the selected capture mode; hidden by default and can be enabled in Settings
 - **Copy Last Prompt** — copies the most recent generated prompt to clipboard without reopening anything
 - **Pin** — keeps the launcher on top of other windows
-- **Settings** — output folder, hotkeys, recording countdown duration
+- **Settings** — output folder, launcher buttons, hotkeys, recording countdown duration
+- **Launcher button visibility** — hidden Record/Screenshot/Trade actions also disable their idle start hotkeys
 - **Settings → Trade Mode → Setup checklist** — install/check Whisper, Node/npm, Gemini CLI, and Google sign-in
 - **X** — exits Snipalot. Minimize keeps the launcher available from the taskbar.
 
@@ -150,6 +151,20 @@ This is the light installer. Settings includes a setup checklist that can downlo
 **Trade mode + Gemini / API keys:** step-by-step guide in **[`docs/installation-guide-issue-2.md`](./docs/installation-guide-issue-2.md)** (same content as **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)**; the doc in `docs/` carries the current download URL). Current Gemini CLI default is `gemini-3.1-pro-preview`; Settings can fetch available Gemini CLI models on the target machine.
 
 **No audio after recording?** Each session folder can include **`mic_diagnostics.json`** (which microphone was used and any capture errors). See the troubleshooting table in the install guide above.
+
+---
+
+## Code Signing Policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Signed Windows releases are built from this public GitHub repository using GitHub Actions from version tags matching `v*`. Signing is limited to Snipalot release artifacts produced from the repository's release workflow.
+
+Roles:
+- Committer / reviewer / approver: Jason Koprowski
+
+Privacy:
+Snipalot records and processes user-selected content locally. It does not transfer recordings, screenshots, transcripts, or API keys to external services unless the user explicitly configures and invokes an external LLM backend.
 
 ---
 

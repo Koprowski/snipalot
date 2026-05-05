@@ -42,6 +42,9 @@ const btnSetupSkip = document.getElementById('btn-setup-skip') as HTMLButtonElem
 const setupCheckWhisper = document.getElementById('setup-check-whisper') as HTMLInputElement;
 const setupCheckNode = document.getElementById('setup-check-node') as HTMLInputElement;
 const setupCheckGemini = document.getElementById('setup-check-gemini') as HTMLInputElement;
+const launcherShowRecordInput = document.getElementById('launcher-show-record') as HTMLInputElement;
+const launcherShowScreenshotInput = document.getElementById('launcher-show-screenshot') as HTMLInputElement;
+const launcherShowTradeInput = document.getElementById('launcher-show-trade') as HTMLInputElement;
 
 // ─── hotkey label map ──────────────────────────────────────────────────
 
@@ -93,6 +96,11 @@ let fetchedGeminiCliModels: Array<{ id: string; createdAtMs: number }> = [];
 let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostPer1M: number }> = [];
 // Working copy of the countdown duration.
 let editedCountdownSec = 3;
+let editedVisibleActions = {
+  record: true,
+  screenshot: true,
+  trade: false,
+};
 let lastGeminiCliDocsUrl = 'https://github.com/google-gemini/gemini-cli#installation';
 type DependencyStatus = Awaited<ReturnType<typeof api.checkDependencies>>;
 let lastDependencyStatus: DependencyStatus | null = null;
@@ -125,6 +133,34 @@ async function init(): Promise<void> {
     editedHotkeys[key] = hk[key] ?? DEFAULT_HOTKEYS[key] ?? '';
   }
   renderHotkeyRows();
+
+  const cfgLauncher = (config as unknown as {
+    launcher?: {
+      visibleActions?: {
+        record?: boolean;
+        screenshot?: boolean;
+        trade?: boolean;
+      };
+    };
+  }).launcher;
+  editedVisibleActions = {
+    record: cfgLauncher?.visibleActions?.record ?? true,
+    screenshot: cfgLauncher?.visibleActions?.screenshot ?? true,
+    trade: cfgLauncher?.visibleActions?.trade ?? false,
+  };
+  launcherShowRecordInput.checked = editedVisibleActions.record;
+  launcherShowScreenshotInput.checked = editedVisibleActions.screenshot;
+  launcherShowTradeInput.checked = editedVisibleActions.trade;
+  const syncVisibleActions = (): void => {
+    editedVisibleActions = {
+      record: launcherShowRecordInput.checked,
+      screenshot: launcherShowScreenshotInput.checked,
+      trade: launcherShowTradeInput.checked,
+    };
+  };
+  launcherShowRecordInput.addEventListener('change', syncVisibleActions);
+  launcherShowScreenshotInput.addEventListener('change', syncVisibleActions);
+  launcherShowTradeInput.addEventListener('change', syncVisibleActions);
 
   // Snapshot behavior radios. Default to clear-after if config is missing
   // the field (older configs predate this setting).
@@ -833,6 +869,10 @@ btnSave.addEventListener('click', async () => {
       return;
     }
   }
+  if (!editedVisibleActions.record && !editedVisibleActions.screenshot && !editedVisibleActions.trade) {
+    setStatus('Show at least one launcher button.', true);
+    return;
+  }
   btnSave.disabled = true;
   setStatus('Saving…');
   try {
@@ -840,6 +880,7 @@ btnSave.addEventListener('click', async () => {
       outputDir: dir,
       firstRun: false,
       hotkeys: editedHotkeys as never,
+      launcher: { visibleActions: editedVisibleActions } as never,
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
       capture: { countdownSec: editedCountdownSec } as never,
       trade: {

@@ -115,7 +115,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.31)
+## Recent improvements (v1.0.1 onward; current release v1.0.32)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -328,6 +328,11 @@ Agent behavior:
  - Browser windows now pass an explicit generated PNG `nativeImage`, and the installer-created Start Menu shortcut points directly at bundled `resources/resources/icons/app.ico`; this avoids relying on EXE resource editing, which requires `winCodeSign` extraction/symlink privileges on local Windows builds.
  - Installer Finish `Run Snipalot` lockups are likely caused by NSIS launching the unsigned Electron app through `StdUtils.ExecShellAsUser` while Windows/Defender scans/initializes it. Solution options: uncheck Run Snipalot, disable `runAfterFinish`, or replace the finish-page launch with a custom detached helper path.
  - Local NSIS build succeeded at **`release-v1.0.31-settings-icon-2/Snipalot-1.0.31-setup.exe`** after the first v1.0.31 output directory was locked by Windows. SHA256: `BBA6BDAC5121E2083A126B91EF9C03CA047570C634E75F47AF6D6CFBF62195C9`.
+- **Record-first launcher default + per-machine installer (v1.0.32 local branch):**
+ - Added a targeted config migration for the accidental transitional state `{ record:false, screenshot:true, trade:true }`, resetting it to the general default `{ record:true, screenshot:true, trade:false }`; intentional trade-only configs remain possible.
+ - Windows BrowserWindow icon loading now prefers the generated `.ico`, and electron-builder executable resource editing is re-enabled so CI can embed the icon in `Snipalot.exe` for taskbar identity.
+ - NSIS installer now defaults to `perMachine: true` so installs are for all users by default and prompt for admin elevation.
+ - Local `electron-builder` packaging is currently blocked on this PC when EXE resource editing is enabled: `winCodeSign-2.6.0.7z` extraction fails because 7-Zip cannot create symlinks without the required Windows privilege. Use GitHub Actions/CI for the v1.0.32 installer, or enable Developer Mode/run elevated if local packaging must embed EXE icon resources.
 - **Log security hardening (local branch):**
  - `src/main/logger.ts` now centrally redacts common API keys, Bearer tokens, password/secret/token fields, Google API keys, OpenRouter/OpenAI-style keys, and PEM private keys before writing any log line.
  - Logger now rotates `snipalot.log` at 5 MB, keeping `snipalot.log.1` through `.3`, so dev and packaged logs do not grow forever.

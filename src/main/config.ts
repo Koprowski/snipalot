@@ -276,6 +276,17 @@ function migrateLoadedConfig(
       to: config.trade.geminiCliModel,
     });
   }
+  if (
+    parsed.launcher?.visibleActions?.record === false &&
+    parsed.launcher.visibleActions.screenshot === true &&
+    parsed.launcher.visibleActions.trade === true
+  ) {
+    config.launcher.visibleActions = { ...DEFAULT_CONFIG.launcher.visibleActions };
+    log('config', 'migrated legacy launcher visible actions to general default', {
+      from: parsed.launcher.visibleActions,
+      to: config.launcher.visibleActions,
+    });
+  }
   sanitizeHotkeys(config);
   sanitizeLauncherActions(config);
 }

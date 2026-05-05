@@ -106,7 +106,7 @@ function appIconPath(ext: 'ico' | 'png' = process.platform === 'win32' ? 'ico' :
 }
 
 function appWindowIcon() {
-  const iconPath = appIconPath('png');
+  const iconPath = process.platform === 'win32' ? appIconPath('ico') : appIconPath('png');
   const image = nativeImage.createFromPath(iconPath);
   return image.isEmpty() ? iconPath : image;
 }

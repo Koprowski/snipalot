@@ -26,13 +26,12 @@ win:
         - x64
   icon: resources/icons/app.ico
   artifactName: Snipalot-${version}-setup.${ext}
-  signAndEditExecutable: false
 portable:
   artifactName: Snipalot-${version}-portable.exe
 
 nsis:
   oneClick: false
-  perMachine: false
+  perMachine: true
   allowToChangeInstallationDirectory: true
   createStartMenuShortcut: true
   shortcutName: Snipalot

@@ -1571,20 +1571,49 @@ function safeUpdateInstallerName(name: string): string {
   return base.replace(/[^a-z0-9._-]/gi, '_') || 'Snipalot-update-setup.exe';
 }
 
-function launchInstallerAfterExit(installerPath: string): void {
+function launchUpdateInstaller(installerPath: string): Promise<void> {
   if (process.platform !== 'win32') {
-    shell.openPath(installerPath).catch((err) => {
-      log('settings', 'update installer open failed', { err: err?.message ?? String(err) });
+    return shell.openPath(installerPath).then((err) => {
+      if (err) throw new Error(err);
     });
-    return;
   }
-  const command = `timeout /t 2 /nobreak >nul & start "" "${installerPath}"`;
-  const child = spawn('cmd.exe', ['/d', '/s', '/c', command], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(installerPath, [], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+      });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('Timed out while launching the update installer.'));
+    }, 5_000);
+
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      log('settings', 'update installer launched', { installerPath, pid: child.pid });
+      child.unref();
+      resolve();
+    });
+
+    child.once('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
   });
-  child.unref();
 }
 
 ipcMain.handle('settings:download-and-install-update', async (): Promise<SettingsUpdateInstallResult> => {
@@ -1616,8 +1645,8 @@ ipcMain.handle('settings:download-and-install-update', async (): Promise<Setting
     });
     const bytes = await downloadFile(latest.installerAssetUrl, installerPath);
     log('settings', 'update download complete', { installerPath, bytes });
-    launchInstallerAfterExit(installerPath);
-    setTimeout(() => requestAppExit(`install update v${latest.version}`), 100);
+    await launchUpdateInstaller(installerPath);
+    setTimeout(() => requestAppExit(`install update v${latest.version}`), 750);
     return {
       ok: true,
       message: `Downloaded v${latest.version}. Snipalot will close and launch the installer.`,

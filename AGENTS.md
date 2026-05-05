@@ -115,7 +115,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.35)
+## Recent improvements (v1.0.1 onward; current release v1.0.36)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -339,6 +339,8 @@ Agent behavior:
  - Settings **Check / Install Update** now uses the latest GitHub release API to find the `Snipalot-*-setup.exe` asset. When an update is available, the user can confirm once, Snipalot downloads the installer to `%TEMP%\snipalot-updates`, launches it through a detached Windows handoff command, and exits itself so the installer can replace the running app. If no installer asset is found, Settings falls back to opening the release page.
 - **Footer update action (v1.0.35 local branch):**
  - Removed the bulky About-section update button. The Settings footer version label now owns update UX: it is quiet/disabled when up to date, retryable if update checks fail, and becomes a clickable install action when a newer `Snipalot-*-setup.exe` is available.
+- **Updater installer launch fix (v1.0.36 local branch):**
+ - The v1.0.34 updater successfully downloaded `Snipalot-1.0.35-setup.exe` to `%TEMP%\snipalot-updates`, but its `cmd.exe /c timeout ... & start ...` handoff could get stuck and never surface the installer. The updater now spawns the downloaded installer EXE directly, waits for the process `spawn` event, logs the installer PID, and only then exits Snipalot.
 - **Log security hardening (local branch):**
  - `src/main/logger.ts` now centrally redacts common API keys, Bearer tokens, password/secret/token fields, Google API keys, OpenRouter/OpenAI-style keys, and PEM private keys before writing any log line.
  - Logger now rotates `snipalot.log` at 5 MB, keeping `snipalot.log.1` through `.3`, so dev and packaged logs do not grow forever.

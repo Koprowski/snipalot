@@ -1605,7 +1605,14 @@ function launchUpdateInstaller(installerPath: string): Promise<void> {
     let settled = false;
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(installerPath, [], {
+      child = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        'Start-Process -LiteralPath $args[0]',
+        installerPath,
+      ], {
         detached: true,
         stdio: 'ignore',
         windowsHide: false,
@@ -1625,7 +1632,7 @@ function launchUpdateInstaller(installerPath: string): Promise<void> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      log('settings', 'update installer launched', { installerPath, pid: child.pid });
+      log('settings', 'update installer launch handoff started', { installerPath, pid: child.pid });
       child.unref();
       resolve();
     });

@@ -3,15 +3,10 @@
  *
  * Runs after the existing `runPipeline()` whisper step completes for a
  * trade-mode session. Consumes the parsed transcript + any user-pressed
- * trade markers, writes an LLM extraction prompt the user pastes into
- * Claude Code / Gemini / Cursor / etc., and once the LLM response lands
- * in the session folder as `extraction_response.json`, parses it into a
- * trade log (CSV + Markdown) for the trader to review.
- *
- * Milestone 1 scaffolding: file exists, exports the function signature
- * the orchestrator will call, but the body is intentionally a no-op.
- * Real extraction prompt + response watcher land in M4. CSV/MD generators
- * land in M5.
+ * trade markers, writes an LLM extraction prompt, waits for
+ * `Inputs/extraction_response.json` (from Gemini/API auto-extraction or the
+ * paste window), then generates the root-level trade workbook and Markdown
+ * report for the trader to review.
  */
 
 import * as fs from 'node:fs';
@@ -23,6 +18,7 @@ import { log } from './logger';
 import { getConfig } from './config';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
 import { TranscriptSegment, TradeMarkerRecord } from './pipeline';
+import { writeSessionLog } from './session-log';
 
 /**
  * Schema for a single extracted trade event. Matches the JSON shape the
@@ -167,6 +163,11 @@ export async function runTradePipeline(
     transcriptSegments: transcriptSegments.length,
     tradeMarkers: tradeMarkers.length,
   });
+  writeSessionLog(sessionDir, 'trade-pipeline', 'started', {
+    transcriptSegments: transcriptSegments.length,
+    tradeMarkers: tradeMarkers.length,
+    durationMs: input.durationMs,
+  }, 'start');
 
   // Write markers.json (also useful for the M4 extraction prompt, which
   // formats markers as [MARKER N at M:SS] anchor tags). Always written
@@ -185,9 +186,14 @@ export async function runTradePipeline(
     };
     fs.writeFileSync(markersPath, JSON.stringify(payload, null, 2), 'utf-8');
     log('trade-pipeline', 'markers.json written', { count: tradeMarkers.length, markersPath });
+    writeSessionLog(sessionDir, 'trade-pipeline', 'markers written', {
+      count: tradeMarkers.length,
+      markersPath,
+    }, 'success');
   } catch (err) {
     warnings.push(`markers.json write failed: ${(err as Error).message}`);
     log('trade-pipeline', 'markers.json fail', { err: String(err) });
+    writeSessionLog(sessionDir, 'trade-pipeline', 'markers write failed', { error: (err as Error).message }, 'error');
   }
 
   // â”€â”€ Wait for the trade-context window to close (user submits MockApe
@@ -197,12 +203,16 @@ export async function runTradePipeline(
   //    sentinel directly â€” wait returns immediately. â”€â”€
   if (onStep) onStep('Waiting for trade data...');
   await waitForTradeContextDecision(sessionDir, undefined, abortSignal);
+  writeSessionLog(sessionDir, 'trade-pipeline', 'trade data window decision received', undefined, 'success');
 
   // Load the MockApe data NOW (before rendering the prompt) so the
   // prompt template can embed it as canonical trade context.
   const mockape = loadMockApeTrades(sessionDir);
   if (mockape) {
     log('trade-pipeline', 'mockape data loaded for prompt embed', { trades: mockape.length });
+    writeSessionLog(sessionDir, 'trade-pipeline', 'mockape loaded', { trades: mockape.length }, 'success');
+  } else {
+    writeSessionLog(sessionDir, 'trade-pipeline', 'mockape missing or skipped', undefined, 'skipped');
   }
 
   // â”€â”€ M4: write the extraction prompt + wait for the user's LLM response â”€â”€
@@ -215,6 +225,11 @@ export async function runTradePipeline(
     input.startedAtMs
   );
   const { promptPath, responsePath } = writeExtractionPrompt(sessionDir, promptText);
+  writeSessionLog(sessionDir, 'trade-pipeline', 'extraction prompt written', {
+    promptPath,
+    responsePath,
+    promptChars: promptText.length,
+  }, 'success');
 
   // â”€â”€ Auto-extraction backend selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Preferred mode is Gemini CLI (local command invocation, no API key).
@@ -228,10 +243,19 @@ export async function runTradePipeline(
     const cliCommand = (cfg.geminiCliCommand || 'gemini').trim();
     const cliModel = (cfg.geminiCliModel || 'gemini-3.1-pro-preview').trim();
     try {
+      writeSessionLog(sessionDir, 'trade-pipeline', 'gemini cli extraction attempt started', {
+        command: cliCommand,
+        model: cliModel,
+      }, 'start');
       autoSucceeded = await tryGeminiCli(promptText, responsePath, cliCommand, cliModel, onStep, undefined, abortSignal);
       autoLabel = 'Gemini CLI';
+      writeSessionLog(sessionDir, 'trade-pipeline', 'gemini cli extraction attempt finished', {
+        succeeded: autoSucceeded,
+        responsePath: autoSucceeded ? responsePath : null,
+      }, autoSucceeded ? 'success' : 'warning');
     } catch (err) {
       log('trade-pipeline', 'gemini-cli: unexpected throw', { err: String(err) });
+      writeSessionLog(sessionDir, 'trade-pipeline', 'gemini cli extraction threw', { error: (err as Error).message }, 'error');
     }
     if (!autoSucceeded && cfg.openaiApiKey) {
       const baseUrl = cfg.openaiBaseUrl || 'https://openrouter.ai/api/v1';
@@ -243,11 +267,21 @@ export async function runTradePipeline(
         model,
       });
       try {
+        writeSessionLog(sessionDir, 'trade-pipeline', 'api fallback extraction attempt started', {
+          baseUrl,
+          model,
+        }, 'start');
         autoSucceeded = await tryOpenAiApi(
           promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep, undefined, abortSignal
         );
+        writeSessionLog(sessionDir, 'trade-pipeline', 'api fallback extraction attempt finished', {
+          label: autoLabel,
+          succeeded: autoSucceeded,
+          responsePath: autoSucceeded ? responsePath : null,
+        }, autoSucceeded ? 'success' : 'warning');
       } catch (err) {
         log('trade-pipeline', 'openai-api fallback: unexpected throw', { err: String(err) });
+        writeSessionLog(sessionDir, 'trade-pipeline', 'api fallback extraction threw', { error: (err as Error).message }, 'error');
       }
     }
   } else {
@@ -257,11 +291,21 @@ export async function runTradePipeline(
       const model = cfg.openaiModel || 'google/gemini-2.5-flash';
       autoLabel = baseUrl.includes('openrouter') ? 'OpenRouter' : 'OpenAI';
       try {
+        writeSessionLog(sessionDir, 'trade-pipeline', 'api extraction attempt started', {
+          baseUrl,
+          model,
+        }, 'start');
         autoSucceeded = await tryOpenAiApi(
           promptText, responsePath, cfg.openaiApiKey, baseUrl, model, onStep, undefined, abortSignal
         );
+        writeSessionLog(sessionDir, 'trade-pipeline', 'api extraction attempt finished', {
+          label: autoLabel,
+          succeeded: autoSucceeded,
+          responsePath: autoSucceeded ? responsePath : null,
+        }, autoSucceeded ? 'success' : 'warning');
       } catch (err) {
         log('trade-pipeline', 'openai-api: unexpected throw', { err: String(err) });
+        writeSessionLog(sessionDir, 'trade-pipeline', 'api extraction threw', { error: (err as Error).message }, 'error');
       }
     }
   }
@@ -283,6 +327,10 @@ export async function runTradePipeline(
       input.onPromptReady(sessionDir, responsePath, promptPath);
     }
     if (onStep) onStep('Waiting for LLM response (paste into the response window)...');
+    writeSessionLog(sessionDir, 'trade-pipeline', 'manual extraction response required', {
+      responsePath,
+      promptPath,
+    }, 'warning');
   }
 
   if (!autoSucceeded) {
@@ -295,6 +343,10 @@ export async function runTradePipeline(
       abortSignal
     ).catch((err) => {
       log('trade-pipeline', 'background finalize failed', { err: String(err), responsePath });
+      writeSessionLog(sessionDir, 'trade-pipeline', 'background finalize failed', {
+        responsePath,
+        error: (err as Error).message,
+      }, 'error');
     });
     return {
       extractionPromptPath: promptPath,
@@ -308,6 +360,10 @@ export async function runTradePipeline(
   }
 
   const trades = await waitForExtractionResponse(responsePath, undefined, abortSignal);
+  writeSessionLog(sessionDir, 'trade-pipeline', 'extraction response wait completed', {
+    responsePath,
+    trades: trades?.length ?? 0,
+  }, trades ? 'success' : 'timeout');
 
   if (!trades) {
     warnings.push(
@@ -343,8 +399,10 @@ export async function runTradePipeline(
       log('trade-pipeline', 'mockape fuzzy fallback applied', fuzzy);
     }
     log('trade-pipeline', 'mockape join total', mockApeJoinStats);
+    writeSessionLog(sessionDir, 'trade-pipeline', 'mockape join completed', mockApeJoinStats, 'success');
   } else {
     log('trade-pipeline', 'no mockape.json - actual P&L columns will be blank');
+    writeSessionLog(sessionDir, 'trade-pipeline', 'mockape join skipped', undefined, 'skipped');
   }
 
   const outputTrades = mockape ? trades.filter((t) => Boolean(t.mockape_trade_id)) : trades;
@@ -354,6 +412,10 @@ export async function runTradePipeline(
       omitted: omittedSpokenOnly,
       kept: outputTrades.length,
     });
+    writeSessionLog(sessionDir, 'trade-pipeline', 'omitted spoken-only rows from outputs', {
+      omitted: omittedSpokenOnly,
+      kept: outputTrades.length,
+    }, 'info');
   }
 
   // â”€â”€ Generate trade_log.xlsx + companion Markdown reports â”€â”€
@@ -367,9 +429,18 @@ export async function runTradePipeline(
     mdPath = writeTradeLogMd(sessionDir, outputTrades, input.startedAtMs, input.durationMs);
     reportPath = writeAdherenceReport(getTradeInputsDir(sessionDir), outputTrades);
     organizeTradeSessionRoot(sessionDir);
+    writeSessionLog(sessionDir, 'trade-pipeline', 'trade outputs written', {
+      trades: outputTrades.length,
+      xlsxPath,
+      mdPath,
+      reportPath,
+    }, 'success');
   } catch (err) {
     warnings.push(`trade output generators failed: ${(err as Error).message}`);
     log('trade-pipeline', 'output gen fail', { err: String(err) });
+    writeSessionLog(sessionDir, 'trade-pipeline', 'trade output generation failed', {
+      error: (err as Error).message,
+    }, 'error');
   }
 
   log('trade-pipeline', 'session complete', {
@@ -380,6 +451,14 @@ export async function runTradePipeline(
     mdPath,
     reportPath,
   });
+  writeSessionLog(sessionDir, 'trade-pipeline', 'finished', {
+    trades: outputTrades.length,
+    omittedSpokenOnly,
+    xlsxPath,
+    mdPath,
+    reportPath,
+    warnings,
+  }, warnings.length > 0 ? 'warning' : 'success');
   if (Notification.isSupported()) {
     new Notification({
       title: 'Snipalot Trade - log ready',
@@ -433,7 +512,8 @@ async function tryGeminiCli(
 
   const runGemini = (
     args: string[],
-    attempt: 'prompt-flag' | 'prompt-positional'
+    attempt: 'prompt-flag' | 'prompt-positional',
+    stdinText?: string
   ): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> =>
     new Promise((resolve) => {
       throwIfAborted(abortSignal);
@@ -449,7 +529,7 @@ async function tryGeminiCli(
           windowsHide: true,
           shell: false,
           env,
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: stdinText ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
         });
       } catch (err) {
         log('trade-pipeline', 'gemini-cli: spawn failed', { attempt, err: (err as Error).message });
@@ -469,6 +549,12 @@ async function tryGeminiCli(
         }
       };
       abortSignal?.addEventListener('abort', onAbort, { once: true });
+      if (stdinText && child.stdin) {
+        child.stdin.on('error', (err) => {
+          log('trade-pipeline', 'gemini-cli: stdin write error', { attempt, err: err.message });
+        });
+        child.stdin.end(stdinText, 'utf-8');
+      }
       child.stdout?.on('data', (d) => { stdout += d.toString(); });
       child.stderr?.on('data', (d) => { stderr += d.toString(); });
       child.on('close', (code) => {
@@ -485,8 +571,16 @@ async function tryGeminiCli(
     });
 
   let result = await runGemini(
-    ['--model', model, '--output-format', 'json', '--prompt', promptText],
-    'prompt-flag'
+    [
+      '--model',
+      model,
+      '--output-format',
+      'json',
+      '--prompt',
+      'Process the complete Snipalot trade extraction prompt supplied on stdin. Return only the requested JSON.',
+    ],
+    'prompt-flag',
+    promptText
   );
   let fallback = 'none';
 
@@ -496,8 +590,15 @@ async function tryGeminiCli(
       stderr: result.stderr.slice(0, 500),
     });
     result = await runGemini(
-      ['--model', model, '--output-format', 'json', promptText],
-      'prompt-positional'
+      [
+        '--model',
+        model,
+        '--output-format',
+        'json',
+        'Process the complete Snipalot trade extraction prompt supplied on stdin. Return only the requested JSON.',
+      ],
+      'prompt-positional',
+      promptText
     );
     fallback = 'positional-prompt';
   }
@@ -957,7 +1058,7 @@ function writeExtractionPrompt(
 
 Snipalot has finished recording, transcribing, and packaging your session.
 Now it needs YOU to do two things, then it'll automatically generate the
-final \`trade_log.xlsx\` plus companion review docs in \`Inputs\`.
+final \`trade_log.xlsx\` plus companion review docs.
 
 ## 1. Generate the structured trade JSON via your LLM
 
@@ -995,8 +1096,9 @@ P&L columns.
 Snipalot is polling this folder every 2 seconds. As soon as
 \`Inputs/extraction_response.json\` shows up and validates, it generates:
 - \`trade_log.xlsx\` â€” formatted workbook, one row per trade
-- \`Inputs/trade_log.md\` â€” human-readable per-trade view
+- \`trade_log.md\` â€” human-readable per-trade view
 - \`Inputs/adherence_report.md\` â€” aggregate stats
+- \`Inputs/processing_log.jsonl\` â€” compact diagnostic trail for this session
 
 The polling timeout is 60 minutes from the moment the recording stopped.
 
@@ -1009,7 +1111,7 @@ The polling timeout is 60 minutes from the moment the recording stopped.
 - _(after you save extraction_response.json:)_
   - \`Inputs/extraction_response.json\` â€” your LLM's JSON answer
   - \`Inputs/mockape.json\` â€” your Padre export (optional)
-  - \`trade_log.xlsx\` plus \`Inputs/trade_log.md\`, \`Inputs/adherence_report.md\` â€” the deliverables
+  - \`trade_log.xlsx\`, \`trade_log.md\`, plus \`Inputs/adherence_report.md\` â€” the deliverables
 `;
   fs.writeFileSync(nextStepsPath, nextSteps, 'utf-8');
 
@@ -1043,8 +1145,14 @@ async function waitForExtractionResponse(
   timeoutMs: number = 60 * 60 * 1000,
   abortSignal?: AbortSignal
 ): Promise<TradeEvent[] | null> {
+  const sessionDir = path.dirname(path.dirname(responsePath));
   const deadline = Date.now() + timeoutMs;
   const pollInterval = 2000;
+  writeSessionLog(sessionDir, 'trade-pipeline', 'waiting for extraction_response.json', {
+    responsePath,
+    timeoutMs,
+    pollInterval,
+  }, 'start');
   while (Date.now() < deadline) {
     throwIfAborted(abortSignal);
     if (fs.existsSync(responsePath)) {
@@ -1052,11 +1160,19 @@ async function waitForExtractionResponse(
         const raw = fs.readFileSync(responsePath, 'utf-8');
         const parsed = parseAndValidateResponse(raw);
         log('trade-pipeline', 'extraction_response.json parsed', { trades: parsed.length });
+        writeSessionLog(sessionDir, 'trade-pipeline', 'extraction_response.json parsed', {
+          responsePath,
+          trades: parsed.length,
+        }, 'success');
         return parsed;
       } catch (err) {
         log('trade-pipeline', 'extraction_response.json parse error', {
           err: (err as Error).message,
         });
+        writeSessionLog(sessionDir, 'trade-pipeline', 'extraction_response.json parse error', {
+          responsePath,
+          error: (err as Error).message,
+        }, 'error');
         if (Notification.isSupported()) {
           new Notification({
             title: 'Snipalot Trade - response invalid',
@@ -1076,6 +1192,10 @@ async function waitForExtractionResponse(
   }
   throwIfAborted(abortSignal);
   log('trade-pipeline', 'extraction_response.json timeout', { responsePath });
+  writeSessionLog(sessionDir, 'trade-pipeline', 'extraction_response.json timeout', {
+    responsePath,
+    timeoutMs,
+  }, 'timeout');
   return null;
 }
 
@@ -1087,8 +1207,16 @@ async function finalizeTradeOutputsFromResponsePath(
   durationMs: number,
   abortSignal?: AbortSignal
 ): Promise<void> {
+  writeSessionLog(sessionDir, 'trade-pipeline', 'background finalize waiting for manual response', {
+    responsePath,
+  }, 'start');
   const trades = await waitForExtractionResponse(responsePath, undefined, abortSignal);
-  if (!trades) return;
+  if (!trades) {
+    writeSessionLog(sessionDir, 'trade-pipeline', 'background finalize stopped without response', {
+      responsePath,
+    }, 'timeout');
+    return;
+  }
   throwIfAborted(abortSignal);
   if (mockape) {
     joinMockApeById(trades, mockape);
@@ -1116,6 +1244,10 @@ async function finalizeTradeOutputsFromResponsePath(
     trades: outputTrades.length,
     omittedSpokenOnly,
   });
+  writeSessionLog(sessionDir, 'trade-pipeline', 'background finalize complete', {
+    trades: outputTrades.length,
+    omittedSpokenOnly,
+  }, 'success');
 }
 
 /**

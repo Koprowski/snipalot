@@ -24,6 +24,7 @@ import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
+import { writeSessionLog } from './session-log';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
@@ -1103,9 +1104,14 @@ function openTradeContextWindow(
     if (tradeContextWindow.isMinimized()) tradeContextWindow.restore();
     if (!tradeContextWindow.isVisible()) tradeContextWindow.show();
     tradeContextWindow.focus();
+    writeSessionLog(sessionDir, 'trade-context', 'existing trade data window focused', undefined, 'info');
     return;
   }
   pendingTradeContext = { sessionDir, recordingStartedAtMs, durationMs };
+  writeSessionLog(sessionDir, 'trade-context', 'trade data window opening', {
+    recordingStartedAtMs,
+    durationMs,
+  }, 'start');
   const primary = screen.getPrimaryDisplay();
   const w = 640;
   const h = 560;
@@ -1196,8 +1202,13 @@ ipcMain.handle(
         mockApePath,
         trades: payload.trades.length,
       });
+      writeSessionLog(sessionDir, 'trade-context', 'mockape submitted', {
+        mockApePath,
+        trades: payload.trades.length,
+      }, 'success');
     } catch (err) {
       log('trade-context', 'mockape.json write fail', { err: (err as Error).message });
+      writeSessionLog(sessionDir, 'trade-context', 'mockape write failed', { error: (err as Error).message }, 'error');
     }
     if (payload.dontAskAgain) {
       saveConfig({ trade: { autoPromptForTradeData: false } } as never);
@@ -1218,8 +1229,10 @@ ipcMain.handle('trade-context:skip', (_evt, payload: { dontAskAgain: boolean }) 
     if (!fs.existsSync(inputDir)) fs.mkdirSync(inputDir, { recursive: true });
     fs.writeFileSync(skipPath, '', 'utf-8');
     log('trade-context', 'skip sentinel written', { skipPath });
+    writeSessionLog(sessionDir, 'trade-context', 'mockape skipped', { skipPath }, 'skipped');
   } catch (err) {
     log('trade-context', 'skip sentinel fail', { err: (err as Error).message });
+    writeSessionLog(sessionDir, 'trade-context', 'skip sentinel write failed', { error: (err as Error).message }, 'error');
   }
   if (payload.dontAskAgain) {
     saveConfig({ trade: { autoPromptForTradeData: false } } as never);
@@ -1268,9 +1281,14 @@ function openResponsePasteWindow(
     if (responsePasteWindow.isMinimized()) responsePasteWindow.restore();
     if (!responsePasteWindow.isVisible()) responsePasteWindow.show();
     responsePasteWindow.focus();
+    writeSessionLog(sessionDir, 'response-paste', 'existing response window focused', { responsePath }, 'info');
     return;
   }
   pendingResponsePaste = { sessionDir, responsePath, promptPath };
+  writeSessionLog(sessionDir, 'response-paste', 'response paste window opening', {
+    responsePath,
+    promptPath,
+  }, 'start');
   const primary = screen.getPrimaryDisplay();
   const w = 600;
   const h = 540;
@@ -1328,6 +1346,10 @@ ipcMain.handle('response-paste:submit', (_evt, jsonStr: string) => {
       trades: parsed.length,
       responsePath,
     });
+    writeSessionLog(sessionDir, 'response-paste', 'extraction_response.json written from paste window', {
+      trades: parsed.length,
+      responsePath,
+    }, 'success');
     // Close the window after a short delay so the "Done" state is visible.
     setTimeout(() => {
       if (responsePasteWindow && !responsePasteWindow.isDestroyed()) {
@@ -1337,6 +1359,7 @@ ipcMain.handle('response-paste:submit', (_evt, jsonStr: string) => {
     return { ok: true };
   } catch (err) {
     log('response-paste', 'submit error', { err: (err as Error).message });
+    writeSessionLog(sessionDir, 'response-paste', 'submit error', { error: (err as Error).message }, 'error');
     return { ok: false, error: (err as Error).message };
   }
 });
@@ -3871,6 +3894,7 @@ ipcMain.handle(
     if (pendingDiscard) {
       pendingDiscard = false;
       log('recorder', 'save-webm discarded (user requested)', { bytes: buf.length });
+      writeSessionLog(liveSessionDir, 'recorder', 'save-webm discarded by user', { bytes: buf.length }, 'skipped');
       return { ok: true, discarded: true, bytes: buf.length };
     }
 
@@ -3879,9 +3903,20 @@ ipcMain.handle(
       // Recording stopped unexpectedly (track ended, app restart, etc.) and
       // we never took a snapshot. Fall back to rough current-ish values.
       log('recorder', 'save-webm: no pending snapshot, using fallback');
+      writeSessionLog(liveSessionDir, 'recorder', 'save-webm received without pending processing snapshot', {
+        bytes: buf.length,
+      }, 'warning');
       pendingProcessing = null;
     } else {
       pendingProcessing = null;
+      writeSessionLog(snap.preCreatedSessionDir, 'recorder', 'save-webm received', {
+        bytes: buf.length,
+        mode: snap.mode,
+        durationMs: snap.durationMs,
+        annotations: snap.annotations.length,
+        chapters: snap.chapters.length,
+        tradeMarkers: snap.tradeMarkers.length,
+      }, 'success');
     }
 
     const fallbackStart = Date.now() - 1000; // arbitrary; used only if snap missing
@@ -3908,6 +3943,7 @@ ipcMain.handle(
     })
       .then(async (result) => {
         if (run?.abandoned) {
+          writeSessionLog(result.sessionDir, 'pipeline', 'completed after abandon; cleaning session folder', undefined, 'skipped');
           cleanupSessionDir(result.sessionDir);
           return;
         }
@@ -3932,16 +3968,23 @@ ipcMain.handle(
           );
         }
         activeProcessingRun = null;
+        writeSessionLog(result.sessionDir, 'pipeline', 'complete', {
+          warnings: result.warnings.length,
+          frameCount: result.framePaths.length,
+          transcriptWritten: Boolean(result.transcriptPath),
+        }, result.warnings.length > 0 ? 'warning' : 'success');
         setAppState('idle', 'pipeline complete');
         void shell.openPath(result.sessionDir);
       })
       .catch(async (err) => {
         const msg = (err as Error).message;
         if (run?.abandoned) {
+          writeSessionLog(run.sessionDir, 'pipeline', 'abandoned; cleaning session folder', { error: msg }, 'skipped');
           cleanupSessionDir(run.sessionDir);
           return;
         }
         log('recorder', 'pipeline fail', { err: msg });
+        writeSessionLog(snap?.preCreatedSessionDir ?? run?.sessionDir, 'pipeline', 'failed', { error: msg }, 'error');
         showNotification('Snipalot', `Pipeline failed: ${msg}`);
         await showProcessingIssueDialog(
           'Snipalot processing failed',
@@ -3991,8 +4034,15 @@ function writeMicDiagnosticsFile(sessionDir: string, payload: MicDiagnosticsPayl
   try {
     fs.writeFileSync(outPath, JSON.stringify(payload, null, 2), 'utf-8');
     log('recorder', 'mic_diagnostics.json written', { outPath });
+    writeSessionLog(sessionDir, 'recorder', 'mic diagnostics written', {
+      microphoneGranted: payload.microphoneGranted,
+      getUserMediaError: payload.getUserMediaError,
+      activeLabel: payload.activeAudioTrack?.label ?? null,
+      audioInputCount: payload.audioInputDevices.length,
+    }, payload.microphoneGranted ? 'success' : 'warning');
   } catch (err) {
     log('recorder', 'mic_diagnostics.json write failed', { err: (err as Error).message });
+    writeSessionLog(sessionDir, 'recorder', 'mic diagnostics write failed', { error: (err as Error).message }, 'error');
   }
 }
 
@@ -4029,6 +4079,12 @@ ipcMain.handle(
       liveSessionDir = path.join(outputRoot, `${stamp} ${suffix}`);
       if (!fs.existsSync(liveSessionDir)) fs.mkdirSync(liveSessionDir, { recursive: true });
       log('main', 'liveSessionDir created', { liveSessionDir, mode: currentSessionMode });
+      writeSessionLog(liveSessionDir, 'recorder', 'session folder created', {
+        mode: currentSessionMode,
+        outputRoot,
+        displayId: activeDisplayId,
+        sourceId: activeSourceId,
+      }, 'start');
 
       if (isMicDiagnosticsPayload(micDiagnostics)) {
         const d = micDiagnostics;
@@ -4071,6 +4127,7 @@ ipcMain.handle(
       if (appState === 'recording') {
         recorderMediaReady = false;
         log('state', 'recorder stopped unexpectedly; cleaning up');
+        writeSessionLog(liveSessionDir, 'recorder', 'recorder stopped unexpectedly', { detail }, 'warning');
         // Take a snapshot for the pipeline (save-webm will arrive next).
         if (recordingStartedAt !== null && !pendingProcessing) {
           pendingProcessing = {
@@ -4105,6 +4162,7 @@ ipcMain.handle(
       }
     } else if (state === 'error') {
       recorderMediaReady = false;
+      writeSessionLog(liveSessionDir, 'recorder', 'recorder error', { detail }, 'error');
       setAppState('idle', `recorder error: ${detail ?? '?'}`);
       pendingRegion = null;
       activeDisplayId = null;

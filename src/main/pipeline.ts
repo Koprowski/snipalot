@@ -9,7 +9,7 @@
  *   3. extracts a 16 kHz mono WAV (for Whisper)
  *   4. runs whisper.cpp on the WAV, parses the SRT into
  *      "[M:SS - M:SS] text" lines, writes transcript.txt
- *   5. renders a 1-fps animated GIF with a burned-in timecode overlay
+ *   5. renders a readable time-lapse GIF with a burned-in timecode overlay
  *   6. writes annotations.json using the snapshot main has been collecting
  *      from the overlay
  *   7. builds prompt.txt referencing absolute paths to every artifact and
@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { app, clipboard } from 'electron';
 import { log } from './logger';
+import { writeSessionLog } from './session-log';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ffmpegPathRaw: string | null = require('ffmpeg-static');
@@ -52,6 +53,7 @@ function resolveFfmpegPath(rawPath: string | null): string | null {
 }
 
 const ffmpegPath = resolveFfmpegPath(ffmpegPathRaw);
+const GIF_PREVIEW_MAX_WIDTH = 1600;
 
 /**
  * Annotation schema v2 (discriminated union). Mirrors the shape types the
@@ -310,7 +312,7 @@ async function mp4ToGif(
   //   setpts=PTS/12  (compress timeline 12x)
   //   fps=12         (resample at 12fps; yields one frame per source-second)
   //   drawtext       (timecode label using `n` which now == source-seconds)
-  //   scale=800:-1   (downscale)
+  //   scale=min(1600,iw):-2 with lanczos (readable downscale)
   //   split + palettegen + paletteuse (better color than ffmpeg's default)
   //
   // Several other orders we tried produced dup/drop artifacts:
@@ -330,7 +332,7 @@ async function mp4ToGif(
   const textRel = escapeFfmpegFilterPath(textfilePath);
 
   const filter =
-    `[0:v]setpts=PTS/12,fps=12,drawtext=textfile=${textRel}:expansion=normal:x=10:y=10:fontsize=24:fontcolor=white:borderw=2:bordercolor=black,scale=800:-1,split[a][b];` +
+    `[0:v]setpts=PTS/12,fps=12,drawtext=textfile=${textRel}:expansion=normal:x=10:y=10:fontsize=24:fontcolor=white:borderw=2:bordercolor=black,scale=w='min(${GIF_PREVIEW_MAX_WIDTH}\\,iw)':h=-2:flags=lanczos,split[a][b];` +
     '[a]palettegen=stats_mode=diff[palette];' +
     '[b][palette]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle';
 
@@ -1093,6 +1095,15 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const transcriptPath = path.join(sessionDir, 'transcript.txt');
   const annotationsPath = path.join(sessionInputsDir, 'annotations.json');
   const promptPath = path.join(sessionDir, 'prompt.txt');
+  writeSessionLog(sessionDir, 'pipeline', 'session processing started', {
+    mode,
+    webmBytes: input.webmBuffer.length,
+    durationMs: input.durationMs,
+    annotations: input.annotations.length,
+    chapters: input.chapters?.length ?? 0,
+    tradeMarkers: input.tradeMarkers?.length ?? 0,
+    hasPreCreatedSessionDir: Boolean(input.preCreatedSessionDir),
+  }, 'start');
 
   // Helper: best-effort step notification. UI bookkeeping must never break
   // the pipeline, so any throw inside the callback is silently swallowed.
@@ -1107,6 +1118,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   throwIfAborted(abortSignal);
   fs.writeFileSync(webmPath, input.webmBuffer);
   log('pipeline', 'wrote webm', { bytes: input.webmBuffer.length });
+  writeSessionLog(sessionDir, 'pipeline', 'recording.webm written', { bytes: input.webmBuffer.length }, 'success');
 
   // 2-5. Parallel branches: audio (whisper) and video (mp4 + gif). Both
   //      read directly from the webm. Whisper is the long pole (~60s on
@@ -1123,13 +1135,19 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       warnings.push(
         'Whisper is not installed — open Settings > Trade Mode > Install Whisper; skipped transcription'
       );
+      writeSessionLog(sessionDir, 'whisper', 'not installed; transcription skipped', undefined, 'skipped');
       return;
     }
     try {
       step('Extracting audio…');
       await webmToWav(webmPath, wavPath, abortSignal);
+      writeSessionLog(sessionDir, 'whisper', 'audio extracted for transcription', undefined, 'success');
       const whisperOutPrefix = path.join(sessionDir, 'whisper-out');
       step('Transcribing speech (whisper)…');
+      writeSessionLog(sessionDir, 'whisper', 'transcription started', {
+        exe: whisper.exe,
+        model: whisper.model,
+      }, 'start');
       await runWhisper(whisper.exe, whisper.model, wavPath, whisperOutPrefix, abortSignal);
       const srtPath = `${whisperOutPrefix}.srt`;
       if (fs.existsSync(srtPath)) {
@@ -1181,14 +1199,23 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           lastSegEndSec,
           silentTailSec: tailGapSec > 0 ? tailGapSec : 0,
         });
+        writeSessionLog(sessionDir, 'whisper', 'transcript written', {
+          transcriptPath,
+          segments: transcriptSegments.length,
+          recordingDurationSec,
+          lastSegEndSec,
+          silentTailSec: tailGapSec > 0 ? tailGapSec : 0,
+        }, 'success');
         finalTranscriptPath = transcriptPath;
         try { fs.unlinkSync(srtPath); } catch { /* ignore */ }
       } else {
         warnings.push('whisper ran but produced no SRT');
+        writeSessionLog(sessionDir, 'whisper', 'whisper finished without SRT output', undefined, 'warning');
       }
     } catch (err) {
       warnings.push(`whisper failed: ${(err as Error).message}`);
       log('pipeline', 'whisper fail', { err: String(err) });
+      writeSessionLog(sessionDir, 'whisper', 'transcription failed', { error: (err as Error).message }, 'error');
     } finally {
       try { fs.unlinkSync(wavPath); } catch { /* ignore */ }
     }
@@ -1203,9 +1230,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     try {
       await webmToMp4(webmPath, mp4Path, abortSignal);
       log('pipeline', 'mp4 written (latest, parent level)', { mp4Path });
+      writeSessionLog(sessionDir, 'video', 'mp4 written', { mp4Path }, 'success');
     } catch (err) {
       warnings.push(`mp4 conversion failed: ${(err as Error).message}`);
       log('pipeline', 'mp4 fail', { err: String(err) });
+      writeSessionLog(sessionDir, 'video', 'mp4 conversion failed', { error: (err as Error).message }, 'error');
     }
   })();
   const gifPromise = mp4Promise.then(async () => {
@@ -1213,9 +1242,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     try {
       step('Generating GIF preview…');
       await mp4ToGif(mp4Path, gifPath, input.outputRoot, abortSignal);
+      writeSessionLog(sessionDir, 'video', 'gif written', { gifPath }, 'success');
     } catch (err) {
       warnings.push(`gif generation failed: ${(err as Error).message}`);
       log('pipeline', 'gif fail', { err: String(err) });
+      writeSessionLog(sessionDir, 'video', 'gif generation failed', { error: (err as Error).message }, 'error');
     }
   });
 
@@ -1304,6 +1335,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       : undefined,
   };
   fs.writeFileSync(annotationsPath, JSON.stringify(annotationsDoc, null, 2), 'utf-8');
+  writeSessionLog(sessionDir, 'pipeline', 'annotations written', {
+    annotationsPath,
+    annotationCount: allAnnotations.length,
+    chapterCount: chapterArtifacts.length,
+  }, 'success');
   throwIfAborted(abortSignal);
 
   // 8. prompt.txt + clipboard
@@ -1347,6 +1383,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     ].join('\n');
     fs.writeFileSync(promptPath, stub, 'utf-8');
     log('pipeline', 'trade-mode stub prompt.txt written (trade-pipeline owns clipboard)');
+    writeSessionLog(sessionDir, 'pipeline', 'trade prompt placeholder written', { promptPath }, 'success');
   } else {
     step('Writing prompt + copying to clipboard…');
     fs.writeFileSync(promptPath, promptText, 'utf-8');
@@ -1358,6 +1395,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       annotationFrames: annotationFrames.length,
       snapFrames: snapFrames.length,
     });
+    writeSessionLog(sessionDir, 'pipeline', 'prompt written and copied to clipboard', {
+      promptPath,
+      chars: promptText.length,
+      mode: useChapterFlow ? 'chapters' : 'legacy',
+      chapters: chapterArtifacts.length,
+      annotationFrames: annotationFrames.length,
+      snapFrames: snapFrames.length,
+    }, 'success');
   }
 
   // The user's clipboard is now populated — they can act on it. The gif
@@ -1399,10 +1444,21 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     } catch (err) {
       warnings.push(`trade-pipeline import/launch failed: ${(err as Error).message}`);
       log('pipeline', 'trade-pipeline launch fail', { err: String(err) });
+      writeSessionLog(sessionDir, 'trade-pipeline', 'launch failed', { error: (err as Error).message }, 'error');
     }
   }
 
   log('pipeline', 'session complete', { sessionDir, warnings, mode });
+  writeSessionLog(sessionDir, 'pipeline', 'session processing finished', {
+    mode,
+    warnings,
+    transcriptWritten: Boolean(finalTranscriptPath),
+    frameCount: [
+      ...annotationFrames.map((f) => f.path),
+      ...snapFrames.map((f) => f.path),
+      ...chapterArtifacts.map((c) => c.pngPath),
+    ].length,
+  }, warnings.length > 0 ? 'warning' : 'success');
 
   return {
     sessionDir,

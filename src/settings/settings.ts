@@ -881,14 +881,14 @@ btnCheckUpdates.addEventListener('click', async () => {
       return;
     }
     const okToInstall = window.confirm(
-      `Snipalot ${result.latestVersion} is available.\n\nDownload the installer now, close Snipalot, and start the upgrade?`
+      `Snipalot ${result.latestVersion} is available.\n\nDownload the installer now, close Snipalot, and start the upgrade?\n\nIf Windows SmartScreen appears, choose More info, then Run anyway. Snipalot cannot click those buttons for you.`
     );
     if (!okToInstall) {
       setStatus(`Update available: ${result.latestVersion}. Install canceled.`);
       setUpdateFooterFromResult(info.version, result);
       return;
     }
-    setStatus(`Downloading Snipalot ${result.latestVersion} installer…`);
+    setStatus(`Downloading Snipalot ${result.latestVersion} installer. If SmartScreen appears, choose More info, then Run anyway.`);
     setUpdateFooterChecking(info.version);
     const install = await api.downloadAndInstallUpdate();
     if (!install.ok) {

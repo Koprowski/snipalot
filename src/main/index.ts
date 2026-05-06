@@ -1594,11 +1594,16 @@ function safeUpdateInstallerName(name: string): string {
   return base.replace(/[^a-z0-9._-]/gi, '_') || 'Snipalot-update-setup.exe';
 }
 
-function launchUpdateInstaller(installerPath: string): Promise<void> {
+async function launchUpdateInstaller(installerPath: string): Promise<void> {
+  const shellOpenError = await shell.openPath(installerPath);
+  if (!shellOpenError) {
+    log('settings', 'update installer shell.openPath handoff started', { installerPath });
+    return;
+  }
+  log('settings', 'update installer shell.openPath failed', { installerPath, err: shellOpenError });
+
   if (process.platform !== 'win32') {
-    return shell.openPath(installerPath).then((err) => {
-      if (err) throw new Error(err);
-    });
+    throw new Error(shellOpenError);
   }
 
   return new Promise((resolve, reject) => {
@@ -1610,7 +1615,7 @@ function launchUpdateInstaller(installerPath: string): Promise<void> {
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        'Start-Process -LiteralPath $args[0]',
+        'Start-Process -LiteralPath $args[0] -WorkingDirectory (Split-Path -Parent $args[0])',
         installerPath,
       ], {
         detached: true,
@@ -1650,42 +1655,54 @@ ipcMain.handle('settings:download-and-install-update', async (): Promise<Setting
   const currentVersion = app.getVersion();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  let latest: GitHubReleaseInfo | null = null;
+  let installerPath: string | null = null;
   try {
-    const latest = await fetchLatestSnipalotReleaseInfo(controller.signal);
-    if (!isRemoteVersionNewer(currentVersion, latest.version)) {
+    latest = await fetchLatestSnipalotReleaseInfo(controller.signal);
+    const release = latest;
+    if (!isRemoteVersionNewer(currentVersion, release.version)) {
       return {
         ok: false,
         message: `Snipalot is already up to date (v${currentVersion}).`,
-        releaseUrl: latest.htmlUrl,
+        releaseUrl: release.htmlUrl,
       };
     }
-    if (!latest.installerAssetUrl || !latest.installerAssetName) {
+    if (!release.installerAssetUrl || !release.installerAssetName) {
       return {
         ok: false,
-        message: `Update v${latest.version} is available, but no setup.exe asset was found. Opening the release page instead.`,
-        releaseUrl: latest.htmlUrl,
+        message: `Update v${release.version} is available, but no setup.exe asset was found. Opening the release page instead.`,
+        releaseUrl: release.htmlUrl,
       };
     }
     const updateDir = path.join(os.tmpdir(), 'snipalot-updates');
-    const installerPath = path.join(updateDir, safeUpdateInstallerName(latest.installerAssetName));
+    installerPath = path.join(updateDir, safeUpdateInstallerName(release.installerAssetName));
     log('settings', 'update download start', {
       currentVersion,
-      latestVersion: latest.version,
-      installerName: latest.installerAssetName,
+      latestVersion: release.version,
+      installerName: release.installerAssetName,
     });
-    const bytes = await downloadFile(latest.installerAssetUrl, installerPath);
+    const bytes = await downloadFile(release.installerAssetUrl, installerPath);
     log('settings', 'update download complete', { installerPath, bytes });
     await launchUpdateInstaller(installerPath);
-    setTimeout(() => requestAppExit(`install update v${latest.version}`), 750);
+    setTimeout(() => requestAppExit(`install update v${release.version}`), 750);
     return {
       ok: true,
-      message: `Downloaded v${latest.version}. Snipalot will close and launch the installer.`,
+      message: `Downloaded v${release.version}. Snipalot will close and launch the installer.`,
       installerPath,
-      releaseUrl: latest.htmlUrl,
+      releaseUrl: release.htmlUrl,
     };
   } catch (err) {
     const message = (err as Error).message;
     log('settings', 'download-and-install-update failed', { err: message });
+    if (installerPath && fs.existsSync(installerPath)) {
+      shell.showItemInFolder(installerPath);
+      return {
+        ok: false,
+        message: `Update installer was downloaded, but Windows did not launch it automatically: ${message}. The installer has been shown in File Explorer; run it there and use More info -> Run anyway if SmartScreen appears.`,
+        installerPath,
+        releaseUrl: latest?.htmlUrl ?? 'https://github.com/Koprowski/snipalot/releases/latest',
+      };
+    }
     return {
       ok: false,
       message: `Update install failed: ${message}`,

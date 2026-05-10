@@ -1781,9 +1781,23 @@
 
   // ── PROMPT GENERATION ──────────────────────────────────────────────────────
   let _promptManuallyEdited = false;
+  const PROMPT_PLACEHOLDER = 'Add context or annotations to generate a feedback prompt.';
+
+  function hasPromptSourceContent() {
+    const context = document.getElementById('context-input').value.trim();
+    return context.length > 0 || annotations.length > 0;
+  }
 
   function buildPromptText() {
     const context = document.getElementById('context-input').value.trim();
+    if (annotations.length === 0) {
+      return [
+        context ? 'Context: ' + context + '\n' : '',
+        "I've attached a screenshot and provided context. Please use the screenshot and context to address the request.",
+        '',
+        'Please make all changes in the file, keeping the same overall structure.',
+      ].filter(Boolean).join('\n');
+    }
     const typeEmoji = { bug: '🐛', improvement: '💡', question: '❓', praise: '✅' };
     const groups = { bug: [], improvement: [], question: [], praise: [] };
     annotations.forEach((ann, i) => {
@@ -1809,8 +1823,8 @@
   function updatePrompt() {
     if (_promptManuallyEdited) return;
     const box = document.getElementById('prompt-box');
-    if (annotations.length === 0) {
-      box.value = 'Add annotations to generate a feedback prompt.';
+    if (!hasPromptSourceContent()) {
+      box.value = PROMPT_PLACEHOLDER;
       return;
     }
     box.value = buildPromptText();
@@ -1819,7 +1833,7 @@
   function resetPrompt() {
     _promptManuallyEdited = false;
     const box = document.getElementById('prompt-box');
-    box.value = annotations.length === 0 ? 'Add annotations to generate a feedback prompt.' : buildPromptText();
+    box.value = hasPromptSourceContent() ? buildPromptText() : PROMPT_PLACEHOLDER;
     const btn = document.getElementById('prompt-reset-btn');
     if (btn) btn.classList.remove('modified');
   }
@@ -1871,7 +1885,7 @@
 
   function copyPrompt() {
     const text = document.getElementById('prompt-box').value;
-    if (!text || text === 'Add annotations to generate a feedback prompt.') return;
+    if (!text || text === PROMPT_PLACEHOLDER) return;
     navigator.clipboard.writeText(text).then(() => {
       const btn = document.getElementById('copy-btn');
       btn.textContent = '✓ Copied!';
@@ -1943,8 +1957,10 @@
     // see in the preview). Fall back to a fresh build if the box is empty
     // or hasn't been touched.
     const promptText =
-      (document.getElementById('prompt-box')?.value || '').trim() ||
-      buildPromptText();
+      (() => {
+        const value = (document.getElementById('prompt-box')?.value || '').trim();
+        return value && value !== PROMPT_PLACEHOLDER ? value : buildPromptText();
+      })();
 
     // ── 3. Convert composite to data URL and hand off to main ──────────────
     setSaveBtnText('⏳ Saving…');
@@ -2063,7 +2079,7 @@
       renderSidePanel();
     }
     // Show toolbar save icon whenever there's anything to save
-    const hasChanges = !!(image && (annotations.length > 0 || overlays.length > 0));
+    const hasChanges = !!(image && (annotations.length > 0 || overlays.length > 0 || hasPromptSourceContent()));
     if (hasChanges !== _lastHasChanges) {
       _lastHasChanges = hasChanges;
       const icon = document.getElementById('toolbar-save-icon');

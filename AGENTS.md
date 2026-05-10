@@ -353,6 +353,8 @@ Agent behavior:
 - **Updater SmartScreen handoff polish (local branch):**
  - The updater now tries Electron `shell.openPath(installerPath)` first so Windows owns the launch path and can surface SmartScreen / "More info" / "Run anyway" prompts to the user. If that fails, it falls back to PowerShell `Start-Process`; if a downloaded installer still cannot launch, Snipalot shows the installer in File Explorer and tells the user to run it manually.
  - Settings update confirmation/status copy now explicitly warns that Snipalot cannot click SmartScreen buttons and the user may need to choose **More info -> Run anyway**.
+- **Screenshot annotator context-only prompt fix (local branch):**
+ - The annotator now treats **Context for Claude** text as prompt source content even when the user does not draw annotations. Context-only screenshot sessions generate/copy/save a real `prompt.md`, and the toolbar save affordance appears when a screenshot plus context exists.
 - **Session diagnostics + Gemini stdin fix (v1.0.37 local branch):**
  - Each record/trade session now writes a compact sanitized `Inputs/processing_log.jsonl` with session, recorder, pipeline, Whisper, Gemini/API, MockApe, output, abandon, and failure milestones. The file intentionally redacts secret-looking values and omits large prompt/transcript/raw-response bodies so users can share session-local diagnostics without hunting for the global app log.
  - Trade Gemini CLI extraction no longer places the full prompt in command-line argv. It sends the full prompt on stdin with a short `--prompt` instruction, avoiding Windows `spawn ENAMETOOLONG` failures on long sessions such as `20260505.1735 trade` (~33k chars).

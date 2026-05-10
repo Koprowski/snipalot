@@ -218,6 +218,9 @@ let pendingRegion: RegionSelection | null = null;
 let activeDisplayId: string | null = null;
 let activeSourceId: string | null = null;
 let activeScreenshotCaptureId = 0;
+const SCREENSHOT_HOTKEY_CANCEL_DEBOUNCE_MS = 600;
+let selectingScreenshotEnteredAtMs = 0;
+let suppressLauncherDuringScreenshotCapture = false;
 
 // Latest annotation snapshot from the owning overlay. Updated on every
 // add / undo / clear. Captured at stop time into pendingProcessing so the
@@ -516,6 +519,11 @@ function reloadGlobalHotkeys(): void {
       } else if (appState === 'recording') {
         void doSnapshot();
       } else if (appState === 'selecting-screenshot') {
+        const ageMs = Date.now() - selectingScreenshotEnteredAtMs;
+        if (ageMs < SCREENSHOT_HOTKEY_CANCEL_DEBOUNCE_MS) {
+          log('hotkey', 'snapshot repeat ignored during screenshot debounce', { ageMs });
+          return;
+        }
         exitSelecting('snapshot hotkey toggle');
       }
     });
@@ -627,6 +635,9 @@ function updateLauncherVisibility(): void {
     launcherWindow.setAlwaysOnTop(false);
   } else if (appState === 'processing') {
     ensureProcessingLauncherVisible(true);
+  } else if (appState === 'selecting-screenshot' && suppressLauncherDuringScreenshotCapture) {
+    launcherWindow.setAlwaysOnTop(false);
+    if (launcherWindow.isVisible()) launcherWindow.hide();
   } else {
     launcherWindow.setAlwaysOnTop(false);
     if (!launcherWindow.isVisible()) launcherWindow.show();
@@ -3107,8 +3118,8 @@ function rebuildOverlays(): void {
 // ─── broadcast helpers ────────────────────────────────────────────────
 
 function broadcastOverlay(channel: string, payload?: unknown): void {
-  for (const win of overlayWindows.values()) {
-    if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  for (const displayId of overlayWindows.keys()) {
+    targetOverlay(displayId, channel, payload);
   }
 }
 
@@ -3184,9 +3195,12 @@ async function captureStillFrame(
     types: ['screen'],
     thumbnailSize: { width: devW, height: devH },
   });
-  const source = sources.find((s) => s.display_id === displayId) ?? sources[0];
+  const source = sources.find((s) => s.display_id === displayId);
   if (!source) {
-    log('screenshot', 'captureStillFrame: no source matched', { displayId });
+    log('screenshot', 'captureStillFrame: no source matched', {
+      displayId,
+      sources: sources.map((s) => ({ id: s.id, name: s.name, display_id: s.display_id })),
+    });
     return null;
   }
   const thumb = source.thumbnail;
@@ -3259,6 +3273,8 @@ async function captureScreenshotToAnnotator(
     showNotification('Snipalot', `Screenshot failed: ${(err as Error).message}`);
     setAppState('idle', 'screenshot error');
     broadcastOverlay('overlay:exit-region-select');
+  } finally {
+    suppressLauncherDuringScreenshotCapture = false;
   }
 }
 
@@ -3325,8 +3341,10 @@ function enterSelectingScreenshot(): void {
     log('state', 'enterSelectingScreenshot ignored', { appState });
     return;
   }
-  setAppState('selecting-screenshot', 'screenshot button from idle');
   const cfg = getConfig().capture;
+  selectingScreenshotEnteredAtMs = Date.now();
+  suppressLauncherDuringScreenshotCapture = cfg.mode === 'fullscreen';
+  setAppState('selecting-screenshot', 'screenshot button from idle');
   log('state', 'enterSelectingScreenshot capture config', { ...cfg, effectiveCountdownSec: 0 });
   const requestId = ++activeScreenshotCaptureId;
   if (cfg.mode === 'fullscreen') {
@@ -3369,7 +3387,10 @@ function exitSelecting(reason: string): void {
     appState !== 'selecting-screenshot' &&
     appState !== 'selecting-trade'
   ) return;
-  if (appState === 'selecting-screenshot') activeScreenshotCaptureId++;
+  if (appState === 'selecting-screenshot') {
+    activeScreenshotCaptureId++;
+    suppressLauncherDuringScreenshotCapture = false;
+  }
   setAppState('idle', `exitSelecting: ${reason}`);
   broadcastOverlay('overlay:exit-region-select');
   pendingRegion = null;
@@ -3811,8 +3832,7 @@ ipcMain.handle(
         name: s.name,
         display_id: s.display_id,
       })));
-      const source =
-        sources.find((s) => s.display_id === payload.displayId) ?? sources[0];
+      const source = sources.find((s) => s.display_id === payload.displayId);
       if (!source) {
         failSelectionStart(
           'no desktopCapturer source matched after region confirmed',

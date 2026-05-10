@@ -355,6 +355,11 @@ Agent behavior:
  - Settings update confirmation/status copy now explicitly warns that Snipalot cannot click SmartScreen buttons and the user may need to choose **More info -> Run anyway**.
 - **Screenshot annotator context-only prompt fix (local branch):**
  - The annotator now treats **Context for Claude** text as prompt source content even when the user does not draw annotations. Context-only screenshot sessions generate/copy/save a real `prompt.md`, and the toolbar save affordance appears when a screenshot plus context exists.
+- **Screenshot hotkey / first-capture hardening (local branch):**
+ - Overlay broadcasts now route through `targetOverlay()` so region-select / exit IPC is queued until a newly-created overlay finishes loading. This prevents first-capture shortcut presses from dropping the selection command while overlays are still warming up.
+ - Screenshot hotkey cancel is debounced for 600 ms after entering `selecting-screenshot`, avoiding immediate toggle-off when Windows/Electron emits a repeat for `Ctrl+Shift+P`.
+ - Fullscreen screenshot capture suppresses launcher re-show during the selecting state, reducing visible show/hide blinking before the frame grab.
+ - Screenshot and recording display-source lookup no longer silently falls back to `sources[0]` when the requested display id is missing; Snipalot now fails visibly instead of capturing the wrong monitor.
 - **Session diagnostics + Gemini stdin fix (v1.0.37 local branch):**
  - Each record/trade session now writes a compact sanitized `Inputs/processing_log.jsonl` with session, recorder, pipeline, Whisper, Gemini/API, MockApe, output, abandon, and failure milestones. The file intentionally redacts secret-looking values and omits large prompt/transcript/raw-response bodies so users can share session-local diagnostics without hunting for the global app log.
  - Trade Gemini CLI extraction no longer places the full prompt in command-line argv. It sends the full prompt on stdin with a short `--prompt` instruction, avoiding Windows `spawn ENAMETOOLONG` failures on long sessions such as `20260505.1735 trade` (~33k chars).

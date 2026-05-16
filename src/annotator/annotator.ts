@@ -25,6 +25,46 @@
   let nextId = 1;
   let selectedId = null;
   let pendingAnnotationFocusId = null;
+  let pendingAnnotationFocusAttempts = 0;
+  let activeAnnotationTypingId = null;
+  let _lastAnnLen = -1;
+  let _lastSelectedId = undefined;
+  let _lastHasChanges = false;
+
+  function describeElement(el) {
+    if (!el) return null;
+    return {
+      tag: el.tagName,
+      id: el.id || undefined,
+      className: typeof el.className === 'string' ? el.className : undefined,
+      annId: el.closest?.('[data-ann-id]')?.getAttribute('data-ann-id') || undefined,
+    };
+  }
+
+  function logFocusDiag(event, data = {}) {
+    void window.snipalotAnnotator?.log?.('focus', event, {
+      ...data,
+      active: describeElement(document.activeElement),
+      selectedId,
+      pendingAnnotationFocusId,
+      activeAnnotationTypingId,
+    });
+  }
+
+  window.addEventListener('error', (event) => {
+    logFocusDiag('window error', {
+      message: event.message,
+      source: event.filename,
+      line: event.lineno,
+      column: event.colno,
+    });
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    logFocusDiag('unhandled rejection', {
+      reason: String(event.reason),
+    });
+  });
 
   // Overlay images
   let overlays = []; // { id, el, imgObj, src, x, y, w, h }
@@ -33,6 +73,24 @@
   let _ovDrag = null;   // { id, startX, startY, origX, origY }
   let _ovResize = null; // { id, handle, startX, startY, origX, origY, origW, origH }
   let _cropState = null; // { ovId, uiEl, actionsEl, cropX, cropY, cropW, cropH, dragging, handle, startX, startY, origCropX, origCropY, origCropW, origCropH }
+
+  async function refreshSaveDestination() {
+    const el = document.getElementById('save-destination');
+    if (!el || !window.snipalotAnnotator?.getSaveInfo) return;
+    try {
+      const info = await window.snipalotAnnotator.getSaveInfo();
+      const outputDir = info?.outputDir || 'Snipalot Output Folder';
+      el.textContent = `Saving to: ${outputDir}`;
+      el.title = `Screenshot sessions save under: ${outputDir}`;
+    } catch {
+      el.textContent = 'Saving to Snipalot Output Folder';
+      el.title = 'Open Settings to view or change Output Folder';
+    }
+  }
+
+  function openSnipalotSettings() {
+    void window.snipalotAnnotator?.openSettings?.();
+  }
 
   // Undo / Redo history
   const MAX_HISTORY = 60;
@@ -91,6 +149,8 @@
   // rather than the click-Save moment.
   let hostSessionStamp = null;
   if (window.snipalotAnnotator?.getInitialImage) {
+    void refreshSaveDestination();
+    logFocusDiag('diagnostics boot', { version: '2026-05-16-focus-v2' });
     window.snipalotAnnotator.getInitialImage().then((img) => {
       if (!img) return;
       hostSessionStamp = img.sessionStamp;
@@ -107,31 +167,63 @@
 
   // ── PASTE IMAGE ────────────────────────────────────────────────────────────
   document.addEventListener('paste', handlePaste);
-  function triggerPaste() {
-    navigator.clipboard.read().then(items => {
-      for (const item of items) {
-        for (const type of item.types) {
-          if (type.startsWith('image/')) {
-            item.getType(type).then(blob => loadImageBlob(blob));
-            return;
+  async function readClipboardImageBlob() {
+    try {
+      if (navigator.clipboard?.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          for (const type of item.types) {
+            if (type.startsWith('image/')) {
+              return await item.getType(type);
+            }
           }
         }
       }
-    }).catch(() => {
-      alert('No image in clipboard. Take a screenshot first, then press Ctrl+V or use the Paste button.');
-    });
+    } catch (err) {
+      void window.snipalotAnnotator?.log?.('clipboard', 'navigator read failed', { error: String(err) });
+    }
+
+    try {
+      const nativeImage = await window.snipalotAnnotator?.readClipboardImage?.();
+      if (nativeImage?.dataUrl) {
+        return await fetch(nativeImage.dataUrl).then(r => r.blob());
+      }
+    } catch (err) {
+      void window.snipalotAnnotator?.log?.('clipboard', 'native read failed', { error: String(err) });
+    }
+
+    return null;
+  }
+
+  async function triggerPaste() {
+    const blob = await readClipboardImageBlob();
+    if (blob) {
+      loadImageBlob(blob);
+      return;
+    }
+    alert('No image in clipboard. Take a screenshot first, then press Ctrl+V or use the Paste button.');
   }
 
   function handlePaste(e) {
     const items = e.clipboardData?.items;
-    if (!items) return;
+    const target = e.target;
+    const isTextTarget =
+      target?.tagName === 'TEXTAREA' ||
+      target?.tagName === 'INPUT' ||
+      target?.isContentEditable;
+    if (!items) {
+      if (!isTextTarget) void triggerPaste();
+      return;
+    }
     for (const item of items) {
       if (item.type.startsWith('image/')) {
         const blob = item.getAsFile();
-        loadImageBlob(blob);
-        break;
+        if (blob) loadImageBlob(blob);
+        return;
       }
     }
+    if (isTextTarget) return;
+    void triggerPaste();
   }
 
   let displayScale = 1; // scale applied when image is drawn
@@ -166,6 +258,7 @@
 
       renderBase();
       renderAnnotations();
+      _promptManuallyEdited = false;
       updatePrompt();
     };
     img.src = url;
@@ -533,6 +626,7 @@
   function renderLabels() {
     // Labels for annotations with notes - shown as overlays
     const layer = document.getElementById('labels-layer');
+    if (!layer) return;
     layer.innerHTML = '';
     // No floating labels needed - handled in side panel
   }
@@ -738,10 +832,7 @@
       renderAnnotations();
       renderSidePanel();
       if (selectedId) {
-        setTimeout(() => {
-          const el = document.querySelector(`[data-ann-id="${selectedId}"] textarea`);
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }, 50);
+        queueAnnotationInputFocus(selectedId);
       }
       return;
     }
@@ -753,6 +844,8 @@
       selectedId = ann.id;
       renderAnnotations();
       renderSidePanel();
+      logFocusDiag('annotation committed', { id: ann.id, shape: ann.shape, via: 'text' });
+      queueAnnotationInputFocus(ann.id);
       updatePrompt();
       openInlineTextEditor(ann);
       return;
@@ -870,11 +963,14 @@
       resetGestureState();
       renderAnnotations();
       renderSidePanel();
-      updatePrompt();
       if (ann) {
+        logFocusDiag('annotation committed', { id: ann.id, shape: ann.shape, via: 'doodle' });
         _pushHistory();
         queueAnnotationInputFocus(ann.id);
+      } else {
+        logFocusDiag('annotation ignored', { via: 'doodle', reason: 'too-few-points' });
       }
+      updatePrompt();
       return;
     }
 
@@ -883,6 +979,7 @@
       if (len > 8) {
         ann = { id: nextId++, shape: tool.replace('shape-',''), x: dragStart.x, y: dragStart.y, x2: pos.x, y2: pos.y, color: currentColor, strokeWidth: currentStrokeWidth, opacity: currentOpacity, note: '', type: 'improvement' };
       }
+      if (!ann) logFocusDiag('annotation ignored', { via: tool, reason: 'line-too-short', len: Math.round(len) });
     } else {
       const x = Math.min(dragStart.x, pos.x);
       const y = Math.min(dragStart.y, pos.y);
@@ -891,6 +988,7 @@
       if (w > 8 && h > 8) {
         ann = { id: nextId++, shape: tool === 'rect' ? 'highlight' : tool.replace('shape-',''), x, y, w, h, color: currentColor, strokeWidth: currentStrokeWidth, opacity: currentOpacity, note: '', type: 'improvement' };
       }
+      if (!ann) logFocusDiag('annotation ignored', { via: tool, reason: 'box-too-small', w: Math.round(w), h: Math.round(h) });
     }
 
     if (ann) {
@@ -901,11 +999,12 @@
     resetGestureState();
     renderAnnotations();
     renderSidePanel();
-    updatePrompt();
     if (ann) {
+      logFocusDiag('annotation committed', { id: ann.id, shape: ann.shape, via: tool });
       _pushHistory();
       queueAnnotationInputFocus(ann.id);
     }
+    updatePrompt();
   }
 
   function resetGestureState() {
@@ -916,6 +1015,20 @@
   }
 
   // Keyboard shortcuts
+  document.addEventListener('focusin', (e) => {
+    const target = e.target as Element | null;
+    if (target?.matches?.('textarea.ann-note')) {
+      logFocusDiag('focusin annotation textarea', { target: describeElement(target) });
+    }
+  });
+
+  document.addEventListener('focusout', (e) => {
+    const target = e.target as Element | null;
+    if (target?.matches?.('textarea.ann-note')) {
+      logFocusDiag('focusout annotation textarea', { target: describeElement(target) });
+    }
+  });
+
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && _cropState) { cancelCrop(); return; }
     if (e.key === 'Enter' && _cropState) { applyCrop(); return; }
@@ -928,6 +1041,7 @@
     if (e.key === 'Escape' && document.getElementById('prompt-overlay')?.classList.contains('open')) { toggleOverlay(false); return; }
     const tag = document.activeElement?.tagName;
     if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+    if (routeTypingToActiveAnnotation(e)) return;
     if (e.key === 'Delete' || e.key === 'Backspace') {
       if (selectedOverlayId !== null) { deleteOverlay(selectedOverlayId); return; }
       if (tool === 'select' && selectedId !== null) deleteAnnotation(selectedId);
@@ -1118,21 +1232,14 @@
   }
 
   // ── OVERLAY IMAGES ─────────────────────────────────────────────────────────
-  function pasteOverlayImage() {
+  async function pasteOverlayImage() {
     if (!image) { alert('Paste a base screenshot first before adding overlays.'); return; }
-    navigator.clipboard.read().then(items => {
-      for (const item of items) {
-        for (const type of item.types) {
-          if (type.startsWith('image/')) {
-            item.getType(type).then(blob => loadOverlayBlob(blob));
-            return;
-          }
-        }
-      }
-      alert('No image in clipboard. Copy an image first.');
-    }).catch(() => {
-      alert('No image in clipboard. Copy an image first.');
-    });
+    const blob = await readClipboardImageBlob();
+    if (blob) {
+      loadOverlayBlob(blob);
+      return;
+    }
+    alert('No image in clipboard. Copy an image first.');
   }
 
   function loadOverlayBlob(blob) {
@@ -1639,6 +1746,8 @@
 
     if (annotations.length === 0) {
       list.innerHTML = `<div class="empty-state">Draw a shape on the screenshot, then type your note in the box that appears here.</div>`;
+      _lastAnnLen = annotations.length;
+      _lastSelectedId = selectedId;
       return;
     }
 
@@ -1684,6 +1793,14 @@
           ${body}
         </div>`;
     }).join('');
+    _lastAnnLen = annotations.length;
+    _lastSelectedId = selectedId;
+    if (selectedId !== null) {
+      logFocusDiag('sidebar rendered selected annotation', {
+        id: selectedId,
+        textareaFound: Boolean(getAnnotationNoteTextarea(selectedId)),
+      });
+    }
 
     if (pendingAnnotationFocusId !== null) {
       requestAnimationFrame(focusPendingAnnotationInput);
@@ -1699,33 +1816,97 @@
 
   function queueAnnotationInputFocus(id) {
     pendingAnnotationFocusId = id;
+    pendingAnnotationFocusAttempts = 0;
+    activeAnnotationTypingId = id;
+    logFocusDiag('focus queued', { id });
     requestAnimationFrame(focusPendingAnnotationInput);
+    setTimeout(focusPendingAnnotationInput, 0);
     setTimeout(focusPendingAnnotationInput, 80);
+    setTimeout(focusPendingAnnotationInput, 180);
+    setTimeout(focusPendingAnnotationInput, 350);
+  }
+
+  function getAnnotationNoteTextarea(id) {
+    const ann = annotations.find(a => a.id === id);
+    const item = document.querySelector(`[data-ann-id="${id}"]`);
+    if (!ann || !item) return null;
+
+    const selector = ann.shape === 'text'
+      ? 'textarea.ann-text-input'
+      : 'textarea.ann-note:not(.ann-text-input)';
+    return item.querySelector(selector) || item.querySelector('textarea.ann-note');
   }
 
   function focusPendingAnnotationInput() {
     const id = pendingAnnotationFocusId;
     if (id === null) return;
-    const ann = annotations.find(a => a.id === id);
-    const item = document.querySelector(`[data-ann-id="${id}"]`);
-    if (!ann || !item) return;
+    const ta = getAnnotationNoteTextarea(id);
+    if (!ta) {
+      logFocusDiag('focus attempt missing textarea', { id, attempt: pendingAnnotationFocusAttempts });
+      if (pendingAnnotationFocusAttempts++ < 10) setTimeout(focusPendingAnnotationInput, 60);
+      return;
+    }
 
-    const selector = ann.shape === 'text'
-      ? 'textarea.ann-text-input'
-      : 'textarea.ann-note:not(.ann-text-input)';
-    const ta = item.querySelector(selector) || item.querySelector('textarea.ann-note');
-    if (!ta) return;
-
-    ta.focus({ preventScroll: true });
+    logFocusDiag('focus attempt start', {
+      id,
+      attempt: pendingAnnotationFocusAttempts,
+      target: describeElement(ta),
+    });
+    ta.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+    ta.focus();
     const len = ta.value.length;
     if (typeof ta.setSelectionRange === 'function') ta.setSelectionRange(len, len);
-    ta.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (document.activeElement !== ta && pendingAnnotationFocusAttempts++ < 10) {
+      logFocusDiag('focus attempt did not stick', {
+        id,
+        attempt: pendingAnnotationFocusAttempts,
+        target: describeElement(ta),
+      });
+      setTimeout(focusPendingAnnotationInput, 60);
+      return;
+    }
     pendingAnnotationFocusId = null;
+    pendingAnnotationFocusAttempts = 0;
+    logFocusDiag('focus success', { id, target: describeElement(ta) });
+  }
+
+  function routeTypingToActiveAnnotation(e) {
+    if (activeAnnotationTypingId === null) return false;
+    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (e.key.length !== 1) return false;
+
+    const id = activeAnnotationTypingId;
+    const ann = annotations.find(a => a.id === id);
+    const ta = getAnnotationNoteTextarea(id);
+    if (!ann || !ta) {
+      logFocusDiag('typing route failed', { id, hasAnnotation: Boolean(ann), hasTextarea: Boolean(ta) });
+      return false;
+    }
+
+    e.preventDefault();
+    ta.focus();
+    const start = typeof ta.selectionStart === 'number' ? ta.selectionStart : ta.value.length;
+    const end = typeof ta.selectionEnd === 'number' ? ta.selectionEnd : start;
+    const nextValue = ta.value.slice(0, start) + e.key + ta.value.slice(end);
+    ta.value = nextValue;
+    if (typeof ta.setSelectionRange === 'function') {
+      const pos = start + e.key.length;
+      ta.setSelectionRange(pos, pos);
+    }
+    if (ann.shape === 'text' && ta.classList.contains('ann-text-input')) {
+      updateTextContent(id, nextValue);
+    } else {
+      updateNote(id, nextValue);
+    }
+    activeAnnotationTypingId = id;
+    logFocusDiag('typing routed to annotation note', { id, keyClass: 'printable', nextLength: nextValue.length });
+    return true;
   }
 
   function deleteAnnotation(id) {
     annotations = annotations.filter(a => a.id !== id);
     if (selectedId === id) selectedId = null;
+    if (activeAnnotationTypingId === id) activeAnnotationTypingId = null;
     renderAnnotations();
     renderSidePanel();
     updatePrompt();
@@ -1785,7 +1966,7 @@
 
   function hasPromptSourceContent() {
     const context = document.getElementById('context-input').value.trim();
-    return context.length > 0 || annotations.length > 0;
+    return Boolean(image) || context.length > 0 || annotations.length > 0;
   }
 
   function buildPromptText() {
@@ -1793,7 +1974,8 @@
     if (annotations.length === 0) {
       return [
         context ? 'Context: ' + context + '\n' : '',
-        "I've attached a screenshot and provided context. Please use the screenshot and context to address the request.",
+        "I've attached a screenshot. Please review the screenshot and use it as the visual reference for the requested work.",
+        context ? 'Use the context above to interpret what should change.' : 'If no specific instruction is provided, identify the most relevant issues or improvements visible in the screenshot.',
         '',
         'Please make all changes in the file, keeping the same overall structure.',
       ].filter(Boolean).join('\n');
@@ -2069,9 +2251,6 @@
   // ── SIDEBAR AUTO-SYNC LOOP ──────────────────────────────────────────────────
   // Drives the sidebar from a rAF loop so it always reflects ground truth,
   // regardless of any timing/ordering issue in the event-driven calls.
-  let _lastAnnLen = -1;
-  let _lastSelectedId = undefined;
-  let _lastHasChanges = false;
   function _syncLoop() {
     if (annotations.length !== _lastAnnLen || selectedId !== _lastSelectedId) {
       _lastAnnLen = annotations.length;
@@ -2103,7 +2282,7 @@
     setSelectedFontSize, setSelectedFontFamily, setSelectedTextBg, setSelectedBorderColor,
     // Utilities
     triggerPaste, undo, redo, rotateImage, pasteOverlayImage, startCropMode,
-    clearAll, changeSavePath, saveSession, copyPrompt,
+    clearAll, changeSavePath, saveSession, copyPrompt, openSnipalotSettings,
     copyPromptFromOverlay, toggleOverlay, resetPrompt,
     onPromptEdit, onOverlayPromptEdit, updatePrompt,
   });

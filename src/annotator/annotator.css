@@ -55,6 +55,19 @@
     white-space: nowrap;
   }
 
+  .save-destination {
+    max-width: min(440px, 38vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    background: #111421;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
   .toolbar-sep {
     width: 1px;
     height: 24px;

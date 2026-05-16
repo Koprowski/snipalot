@@ -36,6 +36,12 @@ const isDebug = process.argv.includes('--debug');
 // screenshot it for debugging. Don't use in normal recording runs.
 const disableContentProtection = process.argv.includes('--no-protect');
 
+// Windows uses this id for taskbar grouping. Set it before windows are
+// created so dev launches do not inherit electron.exe/default artwork.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('app.snipalot');
+}
+
 // Prevent multiple instances of Snipalot from running simultaneously.
 // If we can't acquire the lock, a previous instance is still alive — bail
 // out so we don't spawn a second launcher/HUD/overlay set.
@@ -108,6 +114,7 @@ function appIconPath(ext: 'ico' | 'png' = process.platform === 'win32' ? 'ico' :
 
 function appWindowIcon() {
   const iconPath = process.platform === 'win32' ? appIconPath('ico') : appIconPath('png');
+  if (process.platform === 'win32') return iconPath;
   const image = nativeImage.createFromPath(iconPath);
   return image.isEmpty() ? iconPath : image;
 }
@@ -1009,6 +1016,15 @@ function openAnnotator(): void {
     },
   });
   annotatorWindow.removeMenu();
+  annotatorWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    log('annotator', 'console-message', { level, message, line, sourceId });
+  });
+  annotatorWindow.webContents.on('preload-error', (_event, preloadPath, error) => {
+    log('annotator', 'preload error', { preloadPath, err: error.message });
+  });
+  annotatorWindow.webContents.on('render-process-gone', (_event, details) => {
+    log('annotator', 'render-process-gone', details);
+  });
   annotatorWindow.loadFile(path.join(__dirname, '..', 'annotator', 'annotator.html'));
   annotatorWindow.once('ready-to-show', () => annotatorWindow?.show());
   annotatorWindow.on('closed', () => {
@@ -1024,6 +1040,30 @@ ipcMain.handle('annotator:get-initial-image', () => {
   const img = pendingAnnotatorImage;
   pendingAnnotatorImage = null;
   return img;
+});
+
+ipcMain.handle('annotator:read-clipboard-image', () => {
+  const img = clipboard.readImage();
+  if (img.isEmpty()) {
+    log('annotator', 'clipboard image read: empty');
+    return null;
+  }
+  const size = img.getSize();
+  const dataUrl = img.toDataURL();
+  log('annotator', 'clipboard image read: success', {
+    width: size.width,
+    height: size.height,
+    chars: dataUrl.length,
+  });
+  return { dataUrl };
+});
+
+ipcMain.handle('annotator:get-save-info', () => ({
+  outputDir: getConfig().outputDir,
+}));
+
+ipcMain.handle('annotator:open-settings', () => {
+  openSettings(false);
 });
 
 /**
@@ -1062,15 +1102,23 @@ ipcMain.handle(
 
       const pngPath = path.join(sessionDir, 'snapshot.png');
       const promptPath = path.join(sessionDir, 'prompt.md');
+      const savedPromptText = [
+        payload.promptText.trimEnd(),
+        '',
+        '---',
+        'Snipalot saved files:',
+        `- Session folder: ${sessionDir}`,
+        `- Annotated image: ${pngPath}`,
+      ].join('\n');
       fs.writeFileSync(pngPath, pngBuf);
-      fs.writeFileSync(promptPath, payload.promptText, 'utf-8');
+      fs.writeFileSync(promptPath, savedPromptText, 'utf-8');
 
-      clipboard.writeText(payload.promptText);
+      clipboard.writeText(savedPromptText);
 
       log('annotator', 'saved', {
         sessionDir,
         pngBytes: pngBuf.length,
-        promptChars: payload.promptText.length,
+        promptChars: savedPromptText.length,
       });
       showNotification('Snipalot', `Saved · prompt on clipboard. Folder: ${sessionDir}`);
 
@@ -4629,13 +4677,6 @@ function handleToggleHotkey(): void {
 // ─── app lifecycle ────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
-  // Windows: set an explicit AppUserModelID so toast notifications are
-  // attributed to Snipalot rather than the nondescript "electron.app.Electron"
-  // default (which Windows sometimes silently suppresses for dev builds).
-  if (process.platform === 'win32') {
-    app.setAppUserModelId('app.snipalot');
-  }
-
   // Strip Electron's default File/Edit/View/Window/Help menu. We don't use it
   // and it eats ~30px of vertical space off every native-chrome window.
   Menu.setApplicationMenu(null);

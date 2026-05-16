@@ -11,6 +11,8 @@
 <!-- TOOLBAR -->
 <div class="toolbar">
   <span class="toolbar-title">✏️ Annotator</span>
+  <span class="save-destination" id="save-destination" title="Screenshot sessions save here">Saving to Snipalot Output Folder</span>
+  <button class="tool-btn" id="btn-open-settings" onclick="openSnipalotSettings()" title="Change Output Folder in Snipalot Settings">⚙ Settings</button>
   <button id="toolbar-save-icon" onclick="saveSession()" title="Save Session" style="display:none;background:none;border:none;cursor:pointer;padding:2px 4px;font-size:18px;line-height:1;color:var(--accent)" aria-label="Save Session">💾</button>
   <div class="toolbar-sep"></div>
 
@@ -105,7 +107,7 @@
         <h2>Paste your screenshot</h2>
         <p>Press <kbd>Ctrl+V</kbd> anywhere to paste a screenshot from your clipboard.<br><br>Then draw highlights over areas you want to annotate, add notes in the sidebar, and copy the feedback prompt to send back to Claude.</p>
         <p style="margin-top:16px;font-size:11px;color:#6b7280;line-height:1.7">
-          When opened from the Snipalot launcher, this window will be pre-loaded with your captured region — no paste needed. Save writes the annotated screenshot and prompt to your Snipalot output folder (Settings → Output Folder).
+          When opened from the Snipalot launcher, this window will be pre-loaded with your captured region — no paste needed. Save writes the annotated screenshot and prompt to your Snipalot output folder, shown in the toolbar.
         </p>
       </div>
     </div>
@@ -159,7 +161,7 @@
     <!-- Sticky bottom action bar — always visible -->
     <div class="side-actions">
       <button class="tool-btn primary" style="flex:1" id="copy-btn" onclick="copyPrompt()">Copy Prompt</button>
-      <button class="tool-btn success" id="save-btn" onclick="saveSession()" title="Saves to C:\Tools\annotator-screenshots (auto-created). C:\Tools must exist — if not, files download to Downloads folder instead.">&#128190; Save Session</button>
+      <button class="tool-btn success" id="save-btn" onclick="saveSession()" title="Saves to Snipalot Settings → Output Folder.">&#128190; Save Session</button>
     </div>
 
   </div>

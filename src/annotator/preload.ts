@@ -21,6 +21,17 @@ contextBridge.exposeInMainWorld('snipalotAnnotator', {
   getInitialImage: (): Promise<{ dataUrl: string; sessionStamp: string } | null> =>
     ipcRenderer.invoke('annotator:get-initial-image'),
   /**
+   * Native Electron clipboard fallback. Chromium's navigator.clipboard.read()
+   * can miss Windows clipboard images that Electron can still read.
+   */
+  readClipboardImage: (): Promise<{ dataUrl: string } | null> =>
+    ipcRenderer.invoke('annotator:read-clipboard-image'),
+  /** Current screenshot save destination from Snipalot settings. */
+  getSaveInfo: (): Promise<{ outputDir: string }> =>
+    ipcRenderer.invoke('annotator:get-save-info'),
+  /** Open Snipalot Settings so the user can change Output Folder. */
+  openSettings: (): Promise<void> => ipcRenderer.invoke('annotator:open-settings'),
+  /**
    * Persist the annotated PNG + prompt text to disk and put the prompt on
    * the clipboard. Main writes into {outputDir}/{sessionStamp} screenshot/
    * and closes the annotator window on success.

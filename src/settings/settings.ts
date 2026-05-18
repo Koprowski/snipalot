@@ -33,6 +33,9 @@ const geminiCliModelFilterInput = document.getElementById('input-gemini-cli-mode
 const geminiCliModelsSelect = document.getElementById('select-gemini-cli-models') as HTMLSelectElement;
 const versionLabelEl = btnCheckUpdates;
 const settingsStatusEl = document.getElementById('status') as HTMLElement;
+const settingsStatusTextEl = document.getElementById('status-text') as HTMLElement;
+const downloadProgressEl = document.getElementById('download-progress') as HTMLElement;
+const downloadProgressFillEl = document.getElementById('download-progress-fill') as HTMLElement;
 const hotkeysBody = document.getElementById('hotkeys-body') as HTMLTableSectionElement;
 const firstRunBanner = document.getElementById('first-run-banner') as HTMLElement;
 const setupModalEl = document.getElementById('setup-modal') as HTMLElement;
@@ -861,6 +864,8 @@ btnCheckUpdates.addEventListener('click', async () => {
   btnCheckUpdates.disabled = true;
   const prevSaveDisabled = btnSave.disabled;
   btnSave.disabled = true;
+  const stopProgress = api.onUpdateDownloadProgress(showDownloadProgress);
+  hideDownloadProgress();
   setStatus('Checking for updates…');
   try {
     const info = await api.getAppInfo();
@@ -902,6 +907,8 @@ btnCheckUpdates.addEventListener('click', async () => {
     setStatus(`Update check failed: ${(err as Error).message}`, true);
     setUpdateFooterUnavailable();
   } finally {
+    stopProgress();
+    hideDownloadProgress();
     btnSave.disabled = prevSaveDisabled;
   }
 });
@@ -966,8 +973,40 @@ btnClose.addEventListener('click', () => {
 // ─── helpers ───────────────────────────────────────────────────────────
 
 function setStatus(msg: string, isError = false): void {
-  settingsStatusEl.textContent = msg;
+  settingsStatusTextEl.textContent = msg;
   settingsStatusEl.className = 'status' + (isError ? ' err' : msg ? ' ok' : '');
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function hideDownloadProgress(): void {
+  downloadProgressEl.hidden = true;
+  downloadProgressFillEl.style.width = '0%';
+}
+
+function showDownloadProgress(progress: {
+  version: string;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+}): void {
+  downloadProgressEl.hidden = false;
+  const percent = progress.percent ?? (
+    progress.totalBytes ? Math.round((progress.downloadedBytes / progress.totalBytes) * 100) : null
+  );
+  downloadProgressFillEl.style.width = `${Math.max(0, Math.min(100, percent ?? 8))}%`;
+  const sizeText = progress.totalBytes
+    ? `${formatBytes(progress.downloadedBytes)} of ${formatBytes(progress.totalBytes)}`
+    : formatBytes(progress.downloadedBytes);
+  setStatus(
+    percent === null
+      ? `Downloading Snipalot ${progress.version} installer... ${sizeText}`
+      : `Downloading Snipalot ${progress.version} installer... ${percent}% (${sizeText})`
+  );
 }
 
 function hideGeminiCliMissingHelp(): void {

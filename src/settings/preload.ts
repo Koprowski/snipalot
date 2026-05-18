@@ -81,6 +81,23 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     installerPath?: string;
     releaseUrl?: string | null;
   }> => ipcRenderer.invoke('settings:download-and-install-update'),
+  onUpdateDownloadProgress: (callback: (progress: {
+    version: string;
+    installerName: string;
+    downloadedBytes: number;
+    totalBytes: number | null;
+    percent: number | null;
+  }) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: {
+      version: string;
+      installerName: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+      percent: number | null;
+    }) => callback(progress);
+    ipcRenderer.on('settings:update-download-progress', listener);
+    return () => ipcRenderer.removeListener('settings:update-download-progress', listener);
+  },
   openLatestRelease: (): Promise<void> => ipcRenderer.invoke('settings:open-release-page'),
   openUrl: (url: string): Promise<void> => ipcRenderer.invoke('settings:open-release-page', url),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('settings:pick-folder'),

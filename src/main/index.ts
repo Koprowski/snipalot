@@ -1710,7 +1710,7 @@ async function launchUpdateInstaller(installerPath: string): Promise<void> {
   });
 }
 
-ipcMain.handle('settings:download-and-install-update', async (): Promise<SettingsUpdateInstallResult> => {
+ipcMain.handle('settings:download-and-install-update', async (evt): Promise<SettingsUpdateInstallResult> => {
   const currentVersion = app.getVersion();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
@@ -1740,7 +1740,19 @@ ipcMain.handle('settings:download-and-install-update', async (): Promise<Setting
       latestVersion: release.version,
       installerName: release.installerAssetName,
     });
-    const bytes = await downloadFile(release.installerAssetUrl, installerPath);
+    const sendProgress = (progress: DownloadProgress) => {
+      if (evt.sender.isDestroyed()) return;
+      evt.sender.send('settings:update-download-progress', {
+        version: release.version,
+        installerName: release.installerAssetName,
+        ...progress,
+      });
+    };
+    const bytes = await downloadFile(release.installerAssetUrl, installerPath, {
+      signal: controller.signal,
+      onProgress: sendProgress,
+    });
+    sendProgress({ downloadedBytes: bytes, totalBytes: bytes, percent: 100 });
     log('settings', 'update download complete', { installerPath, bytes });
     await launchUpdateInstaller(installerPath);
     setTimeout(() => requestAppExit(`install update v${release.version}`), 750);
@@ -2173,13 +2185,69 @@ const WHISPER_ZIP_URL =
 const WHISPER_MODEL_URL =
   'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin';
 
-async function downloadFile(url: string, dest: string): Promise<number> {
-  const res = await fetch(url, { redirect: 'follow' });
+type DownloadProgress = {
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+};
+
+async function downloadFile(
+  url: string,
+  dest: string,
+  options: {
+    signal?: AbortSignal;
+    onProgress?: (progress: DownloadProgress) => void;
+  } = {}
+): Promise<number> {
+  const res = await fetch(url, { redirect: 'follow', signal: options.signal });
   if (!res.ok) throw new Error(`Download failed (${res.status}) for ${url}`);
-  const buffer = Buffer.from(await res.arrayBuffer());
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.writeFileSync(dest, buffer);
-  return buffer.length;
+  const totalHeader = res.headers.get('content-length');
+  const totalBytes = totalHeader ? Number(totalHeader) : NaN;
+  const total = Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : null;
+  const body = res.body;
+  let downloaded = 0;
+
+  options.onProgress?.({
+    downloadedBytes: 0,
+    totalBytes: total,
+    percent: total ? 0 : null,
+  });
+
+  if (!body) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    fs.writeFileSync(dest, buffer);
+    options.onProgress?.({
+      downloadedBytes: buffer.length,
+      totalBytes: total ?? buffer.length,
+      percent: 100,
+    });
+    return buffer.length;
+  }
+
+  const file = fs.createWriteStream(dest);
+  try {
+    for await (const chunk of body as unknown as AsyncIterable<Uint8Array>) {
+      const buffer = Buffer.from(chunk);
+      downloaded += buffer.length;
+      if (!file.write(buffer)) {
+        await new Promise<void>((resolve) => file.once('drain', resolve));
+      }
+      options.onProgress?.({
+        downloadedBytes: downloaded,
+        totalBytes: total,
+        percent: total ? Math.min(100, Math.round((downloaded / total) * 100)) : null,
+      });
+    }
+    await new Promise<void>((resolve, reject) => {
+      file.end((err?: Error | null) => err ? reject(err) : resolve());
+    });
+    return downloaded;
+  } catch (err) {
+    file.destroy();
+    try { fs.rmSync(dest, { force: true }); } catch {}
+    throw err;
+  }
 }
 
 async function installWhisperDependency(): Promise<{ ok: boolean; message: string; exePath?: string; modelPath?: string }> {

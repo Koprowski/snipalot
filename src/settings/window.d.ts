@@ -23,6 +23,13 @@ interface Window {
       installerPath?: string;
       releaseUrl?: string | null;
     }>;
+    onUpdateDownloadProgress: (callback: (progress: {
+      version: string;
+      installerName: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+      percent: number | null;
+    }) => void) => () => void;
     openLatestRelease: () => Promise<void>;
     openUrl: (url: string) => Promise<void>;
     exitApp: () => Promise<boolean>;

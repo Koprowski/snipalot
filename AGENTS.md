@@ -374,6 +374,11 @@ Agent behavior:
  - Second follow-up log review found the concrete blocker: `renderLabels()` tried to set `innerHTML` on missing `#labels-layer`, throwing on every annotation render before focus could queue. `renderLabels()` now no-ops when the legacy labels layer is absent; `npm test` passed afterward.
 - **Dev/taskbar icon hardening (local branch):**
  - Main now sets the Windows AppUserModelID before single-instance/window setup and passes the generated `.ico` path directly to Windows BrowserWindow options, improving dev-mode taskbar identity instead of inheriting Electron/default artwork.
+- **Settings update download progress (local branch):**
+ - The Settings footer update/install flow now streams installer downloads instead of buffering with `arrayBuffer()`. Main emits sanitized `settings:update-download-progress` IPC events with downloaded bytes, total bytes, and percent; Settings renders a compact progress bar plus MB/percent text while `downloadAndInstallUpdate()` runs.
+- **Chunked Whisper transcription hardening (local branch):**
+ - Long recordings no longer run Whisper as one full-file decode. The pipeline now extracts 180-second WAV chunks with 5-second overlap, runs Whisper with `--max-context 0`, merges timestamped segments back into the full recording timeline, and retries audio-present/no-speech chunks with normalized audio.
+ - Per-chunk audio diagnostics use ffmpeg `volumedetect`; if audio is present but Whisper still returns only noise labels or no speech, the transcript gets an explicit `[AUDIO PRESENT - ... review]` marker instead of a false silent tail. Session `Inputs/processing_log.jsonl` records chunk volume, retry, suspicious, and segment counts.
 - **Session diagnostics + Gemini stdin fix (v1.0.37 local branch):**
  - Each record/trade session now writes a compact sanitized `Inputs/processing_log.jsonl` with session, recorder, pipeline, Whisper, Gemini/API, MockApe, output, abandon, and failure milestones. The file intentionally redacts secret-looking values and omits large prompt/transcript/raw-response bodies so users can share session-local diagnostics without hunting for the global app log.
  - Trade Gemini CLI extraction no longer places the full prompt in command-line argv. It sends the full prompt on stdin with a short `--prompt` instruction, avoiding Windows `spawn ENAMETOOLONG` failures on long sessions such as `20260505.1735 trade` (~33k chars).
@@ -387,6 +392,14 @@ Agent behavior:
  - Added `tests/logger-redaction.test.mjs` covering log redaction and rotation. Local dev/package logs were redacted in place on 2026-05-01; active `%USERPROFILE%\.snipalot\config.json` was intentionally not modified because it stores configured keys needed for API mode.
 - **SignPath application prep (local branch):**
  - README now includes a `Code Signing Policy` section required by SignPath Foundation, including SignPath attribution, release artifact scope, maintainer/reviewer/approver role, and privacy statement for local processing plus user-configured LLM backends.
+- **Trade sync helper-formula repair (2026-05-17):**
+ - `E:\OneDrive\Snipalot Captures\Trade Sync Scripts\sync-master-trading-log.mjs` is the live shared importer; repo mirror is `tools/sync-master-trading-log.mjs`.
+ - Default sync no longer backfills from `Archive`; use `-BackfillArchive` explicitly if intentionally restoring archived rows. This preserves rows the user deleted from `Master Trading Log`.
+ - New rows are sorted by `trade_date` and video/start time before appending, then Excel finalization handles `tblTrades` and `tblAnalysis` range updates.
+ - Do not use XML cloning for `Analysis` formulas. Excel COM owns formula fill-down, helper cells, and dynamic spill behavior so formulas do not gain unwanted `@` implicit-intersection prefixes or duplicate spill anchors.
+ - Follow-up repair: the Node importer no longer edits `Analysis`; it appends/imports master values and writes `trade_date` as Excel date serials using the workbook's detected date style. `run-trade-sync.ps1` now calls `finalize-master-workbook.ps1`, which uses Excel COM to resize `tblTrades`/`tblAnalysis`, restore the single `Analysis!Q2` dynamic spill formula, fill helper formulas through Excel, recalculate, and save. `-RepairOnly` runs the same Excel finalization without processing or archiving pending trade folders.
+ - Daily chart repair: `finalize-master-workbook.ps1` also refreshes the two daily charts from the live helper rows and forces their category axes to text/category axes, not date axes. This prevents Excel from inserting visual gaps for calendar days that do not exist in the helper data.
+ - Trade chart repair: the finalizer refreshes trade-level charts every run: `Cumulative P&L (SOL)` uses `Analysis!A:O`, `P&L % per Trade` uses `Analysis!AK:AQ`, `Entry Market Cap vs P&L %` uses `Analysis!AP:AQ`, and `Hold Time vs P&L %` uses `Analysis!AR:AQ`, all through the current master row.
 
 ## Packaged app logs
 

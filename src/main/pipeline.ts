@@ -238,6 +238,40 @@ function runFfmpeg(args: string[], label: string, abortSignal?: AbortSignal): Pr
   });
 }
 
+function runFfmpegCapture(args: string[], label: string, abortSignal?: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    throwIfAborted(abortSignal);
+    if (!ffmpegPath) {
+      reject(new Error('ffmpeg-static did not resolve a binary path'));
+      return;
+    }
+    log('ffmpeg', label, { args, ffmpegPath });
+    const proc = spawn(ffmpegPath, args, { windowsHide: true });
+    let stderr = '';
+    const onAbort = () => {
+      try {
+        proc.kill();
+      } catch {
+        /* ignore */
+      }
+      reject(new Error('Processing abandoned.'));
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
+    proc.on('error', reject);
+    proc.on('exit', (code) => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      if (code === 0) {
+        resolve(stderr);
+      } else {
+        reject(new Error(`ffmpeg (${label}) exited ${code}. stderr tail: ${stderr.slice(-500)}`));
+      }
+    });
+  });
+}
+
 async function webmToMp4(webmPath: string, mp4Path: string, abortSignal?: AbortSignal): Promise<void> {
   // Force CFR 30fps. MediaRecorder emits variable-timestamp webm (timestamps
   // follow wall-clock when chunks finalize, not a clean 30fps cadence).
@@ -298,6 +332,71 @@ async function webmToWav(webmPath: string, wavPath: string, abortSignal?: AbortS
     'webm→wav (16kHz mono, audio-only)',
     abortSignal
   );
+}
+
+async function extractWavChunk(
+  wavPath: string,
+  chunkPath: string,
+  startSec: number,
+  durationSec: number,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  await runFfmpeg(
+    [
+      '-y',
+      '-ss', startSec.toFixed(3),
+      '-t', durationSec.toFixed(3),
+      '-i', wavPath,
+      '-vn',
+      '-ar', '16000',
+      '-ac', '1',
+      '-c:a', 'pcm_s16le',
+      chunkPath,
+    ],
+    `wav chunk ${formatTranscriptTime(startSec)}-${formatTranscriptTime(startSec + durationSec)}`,
+    abortSignal
+  );
+}
+
+async function normalizeWavForRetry(
+  wavPath: string,
+  normalizedPath: string,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  await runFfmpeg(
+    [
+      '-y',
+      '-i', wavPath,
+      '-vn',
+      '-af', 'highpass=f=80,lowpass=f=8000,dynaudnorm=f=150:g=15,volume=3dB',
+      '-ar', '16000',
+      '-ac', '1',
+      '-c:a', 'pcm_s16le',
+      normalizedPath,
+    ],
+    'wav normalize for whisper retry',
+    abortSignal
+  );
+}
+
+async function measureWavAudio(
+  wavPath: string,
+  abortSignal?: AbortSignal
+): Promise<{ meanVolumeDb: number | null; maxVolumeDb: number | null; audioPresent: boolean }> {
+  const stderr = await runFfmpegCapture(
+    ['-hide_banner', '-i', wavPath, '-vn', '-af', 'volumedetect', '-f', 'null', 'NUL'],
+    'wav volumedetect',
+    abortSignal
+  );
+  const meanMatch = stderr.match(/mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i);
+  const maxMatch = stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/i);
+  const meanVolumeDb = meanMatch ? Number(meanMatch[1]) : null;
+  const maxVolumeDb = maxMatch ? Number(maxMatch[1]) : null;
+  const audioPresent = (
+    (maxVolumeDb !== null && maxVolumeDb > AUDIO_PRESENT_MAX_DB) ||
+    (meanVolumeDb !== null && meanVolumeDb > AUDIO_PRESENT_MEAN_DB)
+  );
+  return { meanVolumeDb, maxVolumeDb, audioPresent };
 }
 
 async function mp4ToGif(
@@ -458,7 +557,33 @@ export interface TranscriptSegment {
   endSec: number;
 }
 
-function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
+interface ChunkAudioDiagnostic {
+  startSec: number;
+  endSec: number;
+  meanVolumeDb: number | null;
+  maxVolumeDb: number | null;
+  audioPresent: boolean;
+  suspicious: boolean;
+  retried: boolean;
+  segmentCount: number;
+  speechLikeCount: number;
+}
+
+const WHISPER_CHUNK_SEC = 180;
+const WHISPER_CHUNK_OVERLAP_SEC = 5;
+const AUDIO_PRESENT_MAX_DB = -45;
+const AUDIO_PRESENT_MEAN_DB = -55;
+
+function formatTranscriptTime(s: number): string {
+  const whole = Math.max(0, Math.round(s));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+function parseSrtToTranscript(
+  srtText: string,
+  offsetSec = 0,
+  shouldFilter = true
+): TranscriptSegment[] {
   // SRT block pattern: index, HH:MM:SS,mmm --> HH:MM:SS,mmm, text, blank.
   // We fold each subtitle into "[M:SS - M:SS] text" and retain the start
   // second so the pipeline can extract a representative frame for each segment.
@@ -475,8 +600,8 @@ function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
     const line = raw.trim();
     const m = line.match(tsPattern);
     if (m) {
-      const startTotalSec = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseInt(m[3], 10);
-      const endTotalSec   = parseInt(m[4], 10) * 3600 + parseInt(m[5], 10) * 60 + parseInt(m[6], 10);
+      const startTotalSec = offsetSec + parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseInt(m[3], 10);
+      const endTotalSec   = offsetSec + parseInt(m[4], 10) * 3600 + parseInt(m[5], 10) * 60 + parseInt(m[6], 10);
       const startMin = Math.floor(startTotalSec / 60);
       const startSecRem = startTotalSec % 60;
       const endMin = Math.floor(endTotalSec / 60);
@@ -501,7 +626,7 @@ function parseSrtToTranscript(srtText: string): TranscriptSegment[] {
       break;
     }
   }
-  return filterRepeatedTranscriptSegments(out);
+  return shouldFilter ? filterRepeatedTranscriptSegments(out) : out;
 }
 
 function normalizeTranscriptTextForRepeat(text: string): string {
@@ -511,6 +636,40 @@ function normalizeTranscriptTextForRepeat(text: string): string {
     .replace(/[^a-z0-9 ]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function stripTranscriptStamp(text: string): string {
+  return text.replace(/^\[[^\]]+\]\s*/, '').trim();
+}
+
+function isNonSpeechWhisperLabel(text: string): boolean {
+  const body = stripTranscriptStamp(text)
+    .toLowerCase()
+    .replace(/[.。]+$/g, '')
+    .trim();
+  if (!body) return true;
+  const label = body.match(/^[[(]\s*([^)\]]+?)\s*[\])]$/)?.[1]?.trim() ?? '';
+  if (!label) return false;
+  return /^(silence|silent|typing|typing sounds|keyboard|keyboard clicking|clicking|music|noise|background noise|applause|laughter|sigh)$/i.test(label);
+}
+
+function isSpeechLikeTranscriptSegment(segment: TranscriptSegment): boolean {
+  return !isNonSpeechWhisperLabel(segment.text);
+}
+
+function mergeTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+  const sorted = [...segments].sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec);
+  const merged: TranscriptSegment[] = [];
+  for (const segment of sorted) {
+    const normalized = normalizeTranscriptTextForRepeat(segment.text);
+    const recentDuplicate = merged.some((prior) =>
+      Math.abs(prior.startSec - segment.startSec) <= WHISPER_CHUNK_OVERLAP_SEC + 2 &&
+      normalizeTranscriptTextForRepeat(prior.text) === normalized
+    );
+    if (recentDuplicate) continue;
+    merged.push(segment);
+  }
+  return filterRepeatedTranscriptSegments(merged);
 }
 
 function compactRepeatedPhrases(text: string): string {
@@ -572,7 +731,8 @@ function runWhisper(
   modelPath: string,
   wavPath: string,
   outPrefix: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  extraArgs: string[] = []
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     throwIfAborted(abortSignal);
@@ -580,6 +740,7 @@ function runWhisper(
       '-m', modelPath,
       '-f', wavPath,
       '-l', 'en',
+      ...extraArgs,
       '-osrt',
       '-of', outPrefix,
     ];
@@ -626,6 +787,113 @@ function runWhisper(
       else reject(new Error(`whisper exited ${code}. stderr tail: ${stderr.slice(-500)}`));
     });
   });
+}
+
+async function runWhisperToSegments(
+  exe: string,
+  modelPath: string,
+  wavPath: string,
+  outPrefix: string,
+  offsetSec: number,
+  abortSignal?: AbortSignal
+): Promise<TranscriptSegment[]> {
+  await runWhisper(exe, modelPath, wavPath, outPrefix, abortSignal, ['--max-context', '0']);
+  const srtPath = `${outPrefix}.srt`;
+  if (!fs.existsSync(srtPath)) return [];
+  const srt = fs.readFileSync(srtPath, 'utf-8');
+  return parseSrtToTranscript(srt, offsetSec, false);
+}
+
+async function transcribeWavInChunks(
+  exe: string,
+  modelPath: string,
+  wavPath: string,
+  sessionDir: string,
+  recordingDurationSec: number,
+  abortSignal?: AbortSignal
+): Promise<{ segments: TranscriptSegment[]; diagnostics: ChunkAudioDiagnostic[] }> {
+  const chunkDir = path.join(sessionDir, 'whisper-chunks');
+  ensureDir(chunkDir);
+  const diagnostics: ChunkAudioDiagnostic[] = [];
+  const allSegments: TranscriptSegment[] = [];
+  const stepSec = Math.max(30, WHISPER_CHUNK_SEC - WHISPER_CHUNK_OVERLAP_SEC);
+
+  try {
+    for (let startSec = 0, index = 1; startSec < recordingDurationSec; startSec += stepSec, index += 1) {
+      throwIfAborted(abortSignal);
+      const durationSec = Math.min(WHISPER_CHUNK_SEC, recordingDurationSec - startSec);
+      const endSec = startSec + durationSec;
+      const chunkPath = path.join(chunkDir, `chunk-${String(index).padStart(3, '0')}.wav`);
+      const normalizedPath = path.join(chunkDir, `chunk-${String(index).padStart(3, '0')}-normalized.wav`);
+      const outPrefix = path.join(chunkDir, `chunk-${String(index).padStart(3, '0')}`);
+      const retryOutPrefix = path.join(chunkDir, `chunk-${String(index).padStart(3, '0')}-retry`);
+      let retried = false;
+
+      await extractWavChunk(wavPath, chunkPath, startSec, durationSec, abortSignal);
+      const audio = await measureWavAudio(chunkPath, abortSignal);
+      let chunkSegments = await runWhisperToSegments(exe, modelPath, chunkPath, outPrefix, startSec, abortSignal);
+      let speechLikeCount = chunkSegments.filter(isSpeechLikeTranscriptSegment).length;
+
+      if (audio.audioPresent && speechLikeCount === 0) {
+        retried = true;
+        await normalizeWavForRetry(chunkPath, normalizedPath, abortSignal);
+        const retrySegments = await runWhisperToSegments(exe, modelPath, normalizedPath, retryOutPrefix, startSec, abortSignal);
+        const retrySpeechLikeCount = retrySegments.filter(isSpeechLikeTranscriptSegment).length;
+        if (retrySpeechLikeCount > speechLikeCount) {
+          chunkSegments = retrySegments;
+          speechLikeCount = retrySpeechLikeCount;
+        }
+      }
+
+      const suspicious = audio.audioPresent && speechLikeCount === 0;
+      if (suspicious) {
+        chunkSegments.push({
+          startSec,
+          endSec,
+          text: `[${formatTranscriptTime(startSec)} - ${formatTranscriptTime(endSec)}] [AUDIO PRESENT - Whisper detected mostly typing/noise in this chunk; speech may need review]`,
+        });
+      }
+
+      diagnostics.push({
+        startSec,
+        endSec,
+        meanVolumeDb: audio.meanVolumeDb,
+        maxVolumeDb: audio.maxVolumeDb,
+        audioPresent: audio.audioPresent,
+        suspicious,
+        retried,
+        segmentCount: chunkSegments.length,
+        speechLikeCount,
+      });
+
+      writeSessionLog(sessionDir, 'whisper', 'chunk transcribed', {
+        index,
+        startSec,
+        endSec,
+        audioPresent: audio.audioPresent,
+        meanVolumeDb: audio.meanVolumeDb,
+        maxVolumeDb: audio.maxVolumeDb,
+        retried,
+        suspicious,
+        segments: chunkSegments.length,
+        speechLikeCount,
+      }, suspicious ? 'warning' : 'success');
+
+      allSegments.push(...chunkSegments);
+      for (const file of [
+        chunkPath,
+        normalizedPath,
+        `${outPrefix}.srt`,
+        `${retryOutPrefix}.srt`,
+      ]) {
+        try { fs.unlinkSync(file); } catch { /* ignore */ }
+      }
+    }
+  } finally {
+    try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+
+  return { segments: mergeTranscriptSegments(allSegments), diagnostics };
 }
 
 // ─── prompt template ─────────────────────────────────────────────────
@@ -1142,17 +1410,25 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       step('Extracting audio…');
       await webmToWav(webmPath, wavPath, abortSignal);
       writeSessionLog(sessionDir, 'whisper', 'audio extracted for transcription', undefined, 'success');
-      const whisperOutPrefix = path.join(sessionDir, 'whisper-out');
       step('Transcribing speech (whisper)…');
       writeSessionLog(sessionDir, 'whisper', 'transcription started', {
         exe: whisper.exe,
         model: whisper.model,
+        chunkSec: WHISPER_CHUNK_SEC,
+        overlapSec: WHISPER_CHUNK_OVERLAP_SEC,
+        maxContext: 0,
       }, 'start');
-      await runWhisper(whisper.exe, whisper.model, wavPath, whisperOutPrefix, abortSignal);
-      const srtPath = `${whisperOutPrefix}.srt`;
-      if (fs.existsSync(srtPath)) {
-        const srt = fs.readFileSync(srtPath, 'utf-8');
-        transcriptSegments = parseSrtToTranscript(srt);
+      const recordingDurationSec = Math.round(input.durationMs / 1000);
+      const chunked = await transcribeWavInChunks(
+        whisper.exe,
+        whisper.model,
+        wavPath,
+        sessionDir,
+        recordingDurationSec,
+        abortSignal
+      );
+      transcriptSegments = chunked.segments;
+      if (transcriptSegments.length > 0 || chunked.diagnostics.some((d) => d.audioPresent)) {
         // Build the transcript text with a duration header + silence-tail
         // marker. Without these, a long silent stretch at the end of the
         // recording (e.g. trader watches charts without commentary) makes
@@ -1162,17 +1438,21 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         // trader silent from 4:38 onwards. Trades firing during that silent
         // stretch then look like they fired "after the recording" when
         // they're actually inside it. Explicit tail marker fixes this.
-        const recordingDurationSec = Math.round(input.durationMs / 1000);
         const lastSegEndSec = transcriptSegments.length > 0
           ? transcriptSegments[transcriptSegments.length - 1].endSec
           : 0;
-        const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+        const fmt = formatTranscriptTime;
         const headerLines: string[] = [];
         headerLines.push(`# Recording duration: ${fmt(recordingDurationSec)}`);
+        headerLines.push(`# Transcription mode: chunked whisper (${WHISPER_CHUNK_SEC}s chunks, ${WHISPER_CHUNK_OVERLAP_SEC}s overlap, max-context 0)`);
         if (transcriptSegments.length > 0) {
           headerLines.push(`# Last narration segment ended at ${fmt(lastSegEndSec)}`);
         } else {
           headerLines.push('# No narration detected (whisper produced no segments)');
+        }
+        const suspiciousChunks = chunked.diagnostics.filter((d) => d.suspicious);
+        if (suspiciousChunks.length > 0) {
+          headerLines.push(`# Audio review warnings: ${suspiciousChunks.length} chunk(s) had audio but no speech-like transcript after retry`);
         }
         headerLines.push('');
         const bodyLines = transcriptSegments.map((s) => s.text);
@@ -1183,8 +1463,13 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         const tailGapSec = recordingDurationSec - lastSegEndSec;
         const tailLines: string[] = [];
         if (tailGapSec > 10) {
+          const tailHasAudio = chunked.diagnostics.some((d) =>
+            d.audioPresent && d.endSec > lastSegEndSec + 1
+          );
           tailLines.push(
-            `[${fmt(lastSegEndSec)} - ${fmt(recordingDurationSec)}] [SILENT — no audible speech detected for ${fmt(tailGapSec)}; recording continued through this stretch]`
+            tailHasAudio
+              ? `[${fmt(lastSegEndSec)} - ${fmt(recordingDurationSec)}] [AUDIO PRESENT - no speech-like transcript was produced in the remaining ${fmt(tailGapSec)}; review source audio if commentary is expected]`
+              : `[${fmt(lastSegEndSec)} - ${fmt(recordingDurationSec)}] [SILENT - no audible speech detected for ${fmt(tailGapSec)}; recording continued through this stretch]`
           );
         }
         const finalText = [
@@ -1198,6 +1483,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           recordingDurationSec,
           lastSegEndSec,
           silentTailSec: tailGapSec > 0 ? tailGapSec : 0,
+          chunks: chunked.diagnostics.length,
+          suspiciousChunks: suspiciousChunks.length,
         });
         writeSessionLog(sessionDir, 'whisper', 'transcript written', {
           transcriptPath,
@@ -1205,9 +1492,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
           recordingDurationSec,
           lastSegEndSec,
           silentTailSec: tailGapSec > 0 ? tailGapSec : 0,
+          chunks: chunked.diagnostics.length,
+          suspiciousChunks: suspiciousChunks.length,
         }, 'success');
         finalTranscriptPath = transcriptPath;
-        try { fs.unlinkSync(srtPath); } catch { /* ignore */ }
       } else {
         warnings.push('whisper ran but produced no SRT');
         writeSessionLog(sessionDir, 'whisper', 'whisper finished without SRT output', undefined, 'warning');

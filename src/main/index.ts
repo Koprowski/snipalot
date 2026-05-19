@@ -1533,6 +1533,9 @@ interface GitHubReleaseInfo {
   installerAssetName: string | null;
 }
 
+let cachedUpdateCheckResult: SettingsUpdateCheckResult | null = null;
+let updateCheckPromise: Promise<SettingsUpdateCheckResult> | null = null;
+
 type SettingsTestLlmGuidance = {
   kind: 'gemini-cli-missing';
   title: string;
@@ -1609,7 +1612,7 @@ async function fetchLatestSnipalotReleaseInfo(signal?: AbortSignal): Promise<Git
   };
 }
 
-ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
+async function performSnipalotUpdateCheck(reason: string): Promise<SettingsUpdateCheckResult> {
   const currentVersion = app.getVersion();
   const fallbackUrl = 'https://github.com/Koprowski/snipalot/releases/latest';
   const controller = new AbortController();
@@ -1619,7 +1622,7 @@ ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateChe
     const latestVersion = latest.version;
     const releaseUrl = latest.htmlUrl;
     const updateAvailable = isRemoteVersionNewer(currentVersion, latestVersion);
-    return {
+    const result: SettingsUpdateCheckResult = {
       ok: true,
       currentVersion,
       latestVersion,
@@ -1631,9 +1634,18 @@ ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateChe
         ? `Update available: v${latestVersion} (installed v${currentVersion}).`
         : `You are up to date (v${currentVersion}).`,
     };
+    log('settings', 'update check complete', {
+      reason,
+      ok: true,
+      currentVersion,
+      latestVersion,
+      updateAvailable,
+      hasInstallerAsset: Boolean(latest.installerAssetUrl),
+    });
+    return result;
   } catch (err) {
-    log('settings', 'check-for-updates threw', { err: (err as Error).message });
-    return {
+    log('settings', 'update check failed', { reason, err: (err as Error).message });
+    const result: SettingsUpdateCheckResult = {
       ok: false,
       currentVersion,
       latestVersion: null,
@@ -1643,9 +1655,44 @@ ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateChe
       installerAssetName: null,
       message: `Update check failed: ${(err as Error).message}`,
     };
+    return result;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function getSnipalotUpdateCheckResult(reason: string): Promise<SettingsUpdateCheckResult> {
+  if (cachedUpdateCheckResult?.ok) {
+    log('settings', 'update check cache hit', {
+      reason,
+      currentVersion: cachedUpdateCheckResult.currentVersion,
+      latestVersion: cachedUpdateCheckResult.latestVersion,
+      updateAvailable: cachedUpdateCheckResult.updateAvailable,
+    });
+    return Promise.resolve(cachedUpdateCheckResult);
+  }
+  if (updateCheckPromise) {
+    log('settings', 'update check joining in-flight request', { reason });
+    return updateCheckPromise;
+  }
+  log('settings', 'update check start', { reason, currentVersion: app.getVersion() });
+  updateCheckPromise = performSnipalotUpdateCheck(reason)
+    .then((result) => {
+      cachedUpdateCheckResult = result;
+      return result;
+    })
+    .finally(() => {
+      updateCheckPromise = null;
+    });
+  return updateCheckPromise;
+}
+
+function startBackgroundUpdateCheck(reason: string): void {
+  void getSnipalotUpdateCheckResult(reason);
+}
+
+ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
+  return getSnipalotUpdateCheckResult('settings');
 });
 
 ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
@@ -4803,6 +4850,7 @@ app.whenReady().then(() => {
   });
 
   launcherWindow = createLauncherWindow();
+  startBackgroundUpdateCheck('startup');
 
   // System tray — persistent access point independent of the launcher.
   createTray({

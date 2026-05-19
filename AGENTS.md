@@ -412,6 +412,10 @@ Agent behavior:
  - Root cause: after monitor/display rebuilds, old overlay BrowserWindows closed asynchronously and deleted the replacement window from `overlayWindows` when the display id was reused. Screenshot selection still entered `selecting-screenshot`, but `broadcastOverlay('overlay:enter-region-select')` had no live overlay map entry, so the user never saw or could draw the selection layer.
  - Fix: overlay `closed` handlers now only remove the map entry if the closing BrowserWindow is still the registered value; stale closes are logged as `stale overlay closed`.
  - Validation/build: `npm test` passed on 2026-05-19. Local installer built at **`release/Snipalot-1.0.45-setup.exe`** with `npm run package:nopublish -- --config.win.signAndEditExecutable=false`. SHA256: `A77DDEA8664AC5C17E24082BC93808DDE6334F39E7AD8B3683A9ADD808E4AD6D`. Build killed a stale installed `Snipalot.exe` first, then completed successfully.
+- **Startup update check (v1.0.46 local branch):**
+ - The GitHub latest-release scan now starts in the main process at app startup, right after the launcher window is created, instead of waiting for the user to open Settings.
+ - Settings `check-for-updates` now reuses a successful cached startup result or joins an in-flight startup request; failed checks are retried on the next request so the footer retry path still works.
+ - Validation/build: `npm test` passed on 2026-05-19. Local installer built at **`release/Snipalot-1.0.46-setup.exe`** with `npm run package:nopublish -- --config.win.signAndEditExecutable=false`. SHA256: `46029761D70346F4F32D9B2B961675781848ADC7492BD722D2A6657A1AF59E59`. Build killed a stale installed `Snipalot.exe` first, then completed successfully.
 
 ## Packaged app logs
 

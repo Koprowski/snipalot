@@ -1,3 +1,3 @@
 @echo off
-powershell.exe -ExecutionPolicy Bypass -File "%~dp0run-trade-sync.ps1"
-pause
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-trade-sync.ps1" %*
+if "%~1"=="" pause

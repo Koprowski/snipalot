@@ -439,6 +439,13 @@ export async function runTradePipeline(
       kept: outputTrades.length,
     }, 'info');
   }
+  await ensureNicsJudgmentsForTrades(
+    sessionDir,
+    outputTrades,
+    transcriptSegments,
+    onStep,
+    abortSignal
+  );
 
   // â”€â”€ Generate trade_log.xlsx + companion Markdown reports â”€â”€
   if (onStep) onStep('Generating trade workbook + adherence report...');
@@ -760,6 +767,179 @@ async function tryOpenAiApi(
   }
 }
 
+const LLM_NICS_COLUMNS = [
+  'meta_name',
+  'N_score',
+  'N_why',
+  'I_score',
+  'I_why',
+  'C_score',
+  'C_why',
+  'S_score',
+  'S_why',
+  'NICS_score',
+  'trade_type',
+  'llm_grade_notes',
+] as const;
+
+async function ensureNicsJudgmentsForTrades(
+  sessionDir: string,
+  trades: TradeEvent[],
+  transcriptSegments: TranscriptSegment[],
+  onStep?: (step: string) => void,
+  abortSignal?: AbortSignal
+): Promise<void> {
+  const missing = trades.filter((trade) => !hasCompleteNicsJudgment(trade));
+  if (missing.length === 0) return;
+
+  const cfg = getConfig().trade;
+  const promptText = renderNicsBackfillPrompt(trades, transcriptSegments);
+  const responsePath = path.join(getTradeInputsDir(sessionDir), 'nics_response.json');
+  if (onStep) onStep('Backfilling NICS classifications...');
+  writeSessionLog(sessionDir, 'trade-pipeline', 'nics backfill started', {
+    responsePath,
+    missing: missing.length,
+    trades: trades.length,
+  }, 'start');
+
+  let succeeded = false;
+  const llmMode = cfg.llmMode ?? 'gemini-cli';
+  if (llmMode === 'gemini-cli') {
+    succeeded = await tryGeminiCli(
+      promptText,
+      responsePath,
+      (cfg.geminiCliCommand || 'gemini').trim(),
+      (cfg.geminiCliModel || 'gemini-3.1-pro-preview').trim(),
+      undefined,
+      5 * 60 * 1000,
+      abortSignal
+    );
+    if (!succeeded && cfg.openaiApiKey) {
+      succeeded = await tryOpenAiApi(
+        promptText,
+        responsePath,
+        cfg.openaiApiKey,
+        cfg.openaiBaseUrl || 'https://openrouter.ai/api/v1',
+        cfg.openaiModel || 'google/gemini-2.5-flash',
+        undefined,
+        5 * 60 * 1000,
+        abortSignal
+      );
+    }
+  } else if (cfg.openaiApiKey) {
+    succeeded = await tryOpenAiApi(
+      promptText,
+      responsePath,
+      cfg.openaiApiKey,
+      cfg.openaiBaseUrl || 'https://openrouter.ai/api/v1',
+      cfg.openaiModel || 'google/gemini-2.5-flash',
+      undefined,
+      5 * 60 * 1000,
+      abortSignal
+    );
+  }
+
+  if (!succeeded || !fs.existsSync(responsePath)) {
+    writeSessionLog(sessionDir, 'trade-pipeline', 'nics backfill unavailable', {
+      missing: missing.length,
+    }, 'warning');
+    return;
+  }
+
+  const graded = parseAndValidateResponse(fs.readFileSync(responsePath, 'utf-8'));
+  const merged = mergeNicsJudgments(trades, graded);
+  const stillMissing = trades.filter((trade) => !hasCompleteNicsJudgment(trade)).length;
+  writeSessionLog(sessionDir, 'trade-pipeline', 'nics backfill completed', {
+    merged,
+    stillMissing,
+  }, stillMissing > 0 ? 'warning' : 'success');
+}
+
+function hasCompleteNicsJudgment(trade: TradeEvent): boolean {
+  return Boolean(
+    trade.meta_name &&
+    trade.N_score !== null && trade.N_score !== undefined &&
+    trade.I_score !== null && trade.I_score !== undefined &&
+    trade.C_score !== null && trade.C_score !== undefined &&
+    trade.S_score !== null && trade.S_score !== undefined &&
+    trade.N_why &&
+    trade.I_why &&
+    trade.C_why &&
+    trade.S_why
+  );
+}
+
+function mergeNicsJudgments(targetTrades: TradeEvent[], gradedTrades: TradeEvent[]): number {
+  const byKey = new Map<string, TradeEvent>();
+  for (const trade of targetTrades) {
+    byKey.set(nicsMergeKey(trade), trade);
+  }
+  let merged = 0;
+  for (const graded of gradedTrades) {
+    const target = byKey.get(nicsMergeKey(graded));
+    if (!target) continue;
+    for (const column of LLM_NICS_COLUMNS) {
+      const value = graded[column];
+      if (value !== null && value !== undefined && value !== '') {
+        (target as unknown as Record<string, unknown>)[column] = value;
+      }
+    }
+    merged++;
+  }
+  return merged;
+}
+
+function nicsMergeKey(trade: TradeEvent): string {
+  return [
+    trade.mockape_trade_id ?? '',
+    String(trade.trade_id ?? ''),
+    trade.token_name.trim().toLowerCase(),
+  ].join('::');
+}
+
+function renderNicsBackfillPrompt(trades: TradeEvent[], transcriptSegments: TranscriptSegment[]): string {
+  const transcriptText = transcriptSegments.length > 0
+    ? transcriptSegments.map((segment) => segment.text).join('\n')
+    : '(Full transcript unavailable in this finalize path; use each row excerpt as evidence.)';
+  const rowsForGrading = trades.map((trade) => ({
+    trade_id: trade.trade_id,
+    token_name: trade.token_name,
+    mockape_trade_id: trade.mockape_trade_id,
+    rationale: trade.rationale,
+    pre_transcript_excerpt: trade.pre_transcript_excerpt,
+    post_transcript_excerpt: trade.post_transcript_excerpt,
+    target_low_mc: trade.target_low_mc,
+    target_high_mc: trade.target_high_mc,
+    stop_loss_mc: trade.stop_loss_mc,
+    outcome_summary: trade.outcome_summary,
+    adherence_self_assessment: trade.adherence_self_assessment,
+    notes: trade.notes,
+  }));
+  return `You are grading Snipalot trade rows for NICS/meta classification.
+
+Return ONLY a JSON array. Return one object per input trade. Each object MUST include:
+trade_id, token_name, mockape_trade_id, meta_name, N_score, N_why, I_score, I_why, C_score, C_why, S_score, S_why, NICS_score, trade_type, llm_grade_notes.
+
+Scoring rules:
+- N_score, I_score, C_score, and S_score are binary 0 or 1.
+- NICS_score = N_score + I_score + max(C_score, S_score).
+- N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
+- I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry.
+- C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working.
+- S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or upside management.
+- meta_name should identify the repeatable meta cluster, not necessarily the ticker.
+- Use 0 and explain the missing evidence when a component is absent. Do not leave any N/I/C/S fields blank.
+- Use Core NICS++ only when N=1, I=1, and either C=1 or S=1. Otherwise use Scout or Non-NICS.
+- Do not populate meta_cluster_id, size_ok, zone_ok, cooldown_ok, counts_toward_50, hard_reset, running_count, non_nics_pnl_pct, or cluster_pnl_pct.
+
+Trades to grade:
+${JSON.stringify(rowsForGrading, null, 2)}
+
+Transcript evidence:
+${transcriptText}
+`;
+}
+
 /** Format ms offset as "M:SS" for the markers payload + extraction prompt. */
 function formatOffset(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -990,7 +1170,7 @@ Use null for any field the transcript / data genuinely doesn't speak to.
     "C_why": "<WHY_C_SCORE_WAS_OR_WAS_NOT_EARNED>",
     "S_score": <0_OR_1>,
     "S_why": "<WHY_S_SCORE_WAS_OR_WAS_NOT_EARNED>",
-    "NICS_score": <SUM_OF_N_I_C_S>,
+    "NICS_score": <N_SCORE_PLUS_I_SCORE_PLUS_MAX_OF_C_OR_S>,
     "trade_type": "<Core NICS++|Scout|Non-NICS|OTHER_SHORT_LABEL>",
     "llm_grade_notes": "<ONE_OR_TWO_SENTENCE_RECONCILIATION_NOTE>"
   }
@@ -1038,12 +1218,14 @@ Rules:
   non-trivial field. Better to flag than to silently fabricate.
 
 **NICS / META CLUSTER SCORING:**
-- NICS is four binary checks scored 0 or 1. NICS_score is N_score + I_score + C_score + S_score.
-- N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
-- I = the trader states why this specific token is the selected ticket for that meta.
-- C = the trader states what would prove the trade wrong, a cut condition, invalidation, stop, weakness signal, or exit discipline.
-- S = the trader states sizing/risk discipline or otherwise makes the bet intentionally scoped.
-- A trade only qualifies as full Core NICS++ when NICS_score = 4. Missing one or more letters should be Scout or Non-NICS depending on quality.
+- The NICS fields are REQUIRED on every output object: meta_name, N_score, N_why, I_score, I_why, C_score, C_why, S_score, S_why, NICS_score, trade_type, and llm_grade_notes. Do not omit them even when the score is 0.
+- Score N_score, I_score, C_score, and S_score as separate binary evidence fields.
+- NICS_score is the three-part unlock score: N_score + I_score + max(C_score, S_score). It ranges from 0 to 3.
+- N = the trader clearly names the narrative/meta/setup being traded, not just the ticker. This is required for a counted trade.
+- I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry. This is required for a counted trade.
+- C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working. C can come from exit commentary or the immediate post-trade note. "Dead" / "unclear" can earn C if it is the trader's stated exit reason, but flag it in llm_grade_notes because it needs review.
+- S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or how they manage upside after deciding to stay in.
+- A trade qualifies as Core NICS++ evidence when N_score = 1, I_score = 1, and either C_score = 1 or S_score = 1. Missing N, missing I, or missing both C and S should be Non-NICS unless another explicit label is clearly warranted.
 - meta_name should identify the repeatable meta cluster, not necessarily the ticker. If multiple tokens are lottery tickets for the same idea, use the same meta_name for them.
 - Do not populate meta_cluster_id. Leave it null; master sync assigns stable historical IDs such as M.260518.1.
 - Do not treat cooldown as a hard reset. If the transcript suggests a cooldown concern, mention it in llm_grade_notes, but the sync process will track cooldown separately.
@@ -1281,6 +1463,7 @@ async function finalizeTradeOutputsFromResponsePath(
       kept: outputTrades.length,
     });
   }
+  await ensureNicsJudgmentsForTrades(sessionDir, outputTrades, [], undefined, abortSignal);
   await writeTradeLogXlsx(sessionDir, outputTrades, startedAtMs, durationMs);
   writeTradeLogMd(sessionDir, outputTrades, startedAtMs, durationMs);
   writeAdherenceReport(getTradeInputsDir(sessionDir), outputTrades);
@@ -1434,7 +1617,14 @@ function getTradeInputPath(sessionDir: string, fileName: string): string {
   return path.join(getTradeInputsDir(sessionDir), fileName);
 }
 
-const XLSX_COLUMNS = [
+const XLSX_SOURCE_COLUMNS = [
+  'source_session',
+  'source_log_type',
+  'source_folder_archived_path',
+  'processed_at',
+] as const;
+
+const XLSX_WORKFLOW_COLUMNS = [
   'trade_id',
   'token_name',
   'trade_date',
@@ -1461,6 +1651,16 @@ const XLSX_COLUMNS = [
   'notes',
   'needs_review',
   'mockape_trade_id',
+] as const;
+
+const XLSX_TIME_BUCKET_COLUMNS = [
+  'Hour',
+  'Weekday',
+  'WeekdayNum',
+  'TimeBucket',
+] as const;
+
+const XLSX_NICS_COLUMNS = [
   'meta_cluster_id',
   'meta_name',
   'N_score',
@@ -1484,6 +1684,13 @@ const XLSX_COLUMNS = [
   'llm_grade_notes',
 ] as const;
 
+const XLSX_COLUMNS = [
+  ...XLSX_SOURCE_COLUMNS,
+  ...XLSX_WORKFLOW_COLUMNS,
+  ...XLSX_TIME_BUCKET_COLUMNS,
+  ...XLSX_NICS_COLUMNS,
+] as const;
+
 type XlsxColumn = typeof XLSX_COLUMNS[number];
 type XlsxRow = Record<XlsxColumn, string>;
 
@@ -1494,7 +1701,7 @@ async function writeTradeLogXlsx(
   durationMs: number
 ): Promise<string> {
   const xlsxPath = path.join(sessionDir, 'trade_log.xlsx');
-  const rows = trades.map((trade) => buildTradeXlsxRow(trade, recordingStartedAtMs, durationMs));
+  const rows = trades.map((trade) => buildTradeXlsxRow(sessionDir, trade, recordingStartedAtMs, durationMs));
   const widths = computeXlsxColumnWidths(rows);
   const zip = new JSZip();
 
@@ -1515,6 +1722,7 @@ async function writeTradeLogXlsx(
 }
 
 function buildTradeXlsxRow(
+  sessionDir: string,
   trade: TradeEvent,
   recordingStartedAtMs: number,
   durationMs: number
@@ -1524,9 +1732,14 @@ function buildTradeXlsxRow(
   const sizeOk = trade.size_ok ?? isHalfSol(trade.sol_invested);
   const zoneOk = trade.zone_ok ?? isNicsMarketCapZone(trade.entry_mc_actual);
   const countsToward50 = trade.counts_toward_50 ?? (
-    nicsScore !== null && nicsScore >= 4 && sizeOk === true && zoneOk === true
+    hasCountedNicsEvidence(trade) === true && sizeOk === true && zoneOk === true
   );
+  const bucketSource = timeline.entryInferred ?? timeline.entryCommentary ?? timeline.exitActual ?? timeline.videoStart;
   return {
+    source_session: path.basename(sessionDir),
+    source_log_type: 'generated-trade-xlsx',
+    source_folder_archived_path: '',
+    processed_at: new Date().toISOString(),
     trade_id: String(trade.trade_id),
     token_name: trade.token_name,
     trade_date: formatTradeDate(timeline.tradeDate),
@@ -1553,6 +1766,10 @@ function buildTradeXlsxRow(
     notes: wrapSpreadsheetText(trade.notes),
     needs_review: trade.needs_review ? 'true' : 'false',
     mockape_trade_id: trade.mockape_trade_id ?? '',
+    Hour: bucketSource ? String(bucketSource.getHours()) : '',
+    Weekday: bucketSource ? formatWeekday(bucketSource) : '',
+    WeekdayNum: bucketSource ? String(weekdayNumMondayFirst(bucketSource)) : '',
+    TimeBucket: bucketSource ? timeBucketLabel(bucketSource) : '',
     meta_cluster_id: trade.meta_cluster_id ?? '',
     meta_name: trade.meta_name ?? '',
     N_score: formatOptionalNumber(trade.N_score),
@@ -1578,9 +1795,22 @@ function buildTradeXlsxRow(
 }
 
 function sumNicsScore(trade: TradeEvent): number | null {
-  const scores = [trade.N_score, trade.I_score, trade.C_score, trade.S_score];
-  if (scores.some((score) => score === null || score === undefined || !Number.isFinite(score))) return null;
-  return scores.reduce<number>((sum, score) => sum + Number(score), 0);
+  const n = binaryScoreOrNull(trade.N_score);
+  const i = binaryScoreOrNull(trade.I_score);
+  const c = binaryScoreOrNull(trade.C_score);
+  const s = binaryScoreOrNull(trade.S_score);
+  if (n === null || i === null || (c === null && s === null)) return null;
+  return n + i + Math.max(c ?? 0, s ?? 0);
+}
+
+function hasCountedNicsEvidence(trade: TradeEvent): boolean | null {
+  const score = sumNicsScore(trade);
+  return score === null ? null : score >= 3;
+}
+
+function binaryScoreOrNull(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return Number(value) === 1 ? 1 : 0;
 }
 
 function isHalfSol(value: number | null | undefined): boolean | null {
@@ -1669,6 +1899,33 @@ function formatTradeTime(date: Date | null): string {
     second: '2-digit',
     hour12: true,
   }).format(date);
+}
+
+function formatWeekday(date: Date): string {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(date);
+}
+
+function weekdayNumMondayFirst(date: Date): number {
+  const day = date.getDay();
+  return day === 0 ? 7 : day;
+}
+
+function timeBucketLabel(date: Date): string {
+  const hour = date.getHours();
+  const weekdayNum = weekdayNumMondayFirst(date);
+  if (weekdayNum <= 4 && hour < 18) return 'WD 6am-6pm';
+  if (weekdayNum === 5 && hour < 18) return 'WD 6am-6pm';
+  if (weekdayNum <= 4 && (hour === 18 || hour === 19)) return 'WD 6pm-8pm';
+  if (weekdayNum <= 4 && hour >= 20 && hour <= 23) return 'WD 8pm-12am';
+  if (weekdayNum <= 4 && (hour === 0 || hour === 1)) return 'WD 6am-6pm';
+  if ((weekdayNum === 6 || weekdayNum === 7) && hour >= 2 && hour <= 11) return 'WE 6am-12pm';
+  if ((weekdayNum === 6 || weekdayNum === 7) && hour >= 12 && hour <= 17) return 'WE 12pm-6pm';
+  if ((weekdayNum === 5 || weekdayNum === 6 || weekdayNum === 7) && (hour === 18 || hour === 19)) return 'WE 6pm-8pm';
+  if (weekdayNum === 5 && hour >= 20 && hour <= 23) return 'WE 8pm-2am';
+  if (weekdayNum === 6 && (hour >= 20 || hour <= 1)) return 'WE 8pm-2am';
+  if (weekdayNum === 7 && hour >= 20 && hour <= 23) return 'WE 8pm-2am';
+  if (weekdayNum === 7 && (hour === 0 || hour === 1)) return 'WE 8pm-2am';
+  return '';
 }
 
 function wrapSpreadsheetText(value: string | null | undefined, width = 40): string {

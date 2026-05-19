@@ -1,7 +1,11 @@
 param(
   [string]$CapturesRoot = "",
   [switch]$BackfillArchive,
-  [switch]$RepairOnly
+  [switch]$RepairOnly,
+  [switch]$ArchiveOnly,
+  [switch]$TestMode,
+  [switch]$NoArchive,
+  [switch]$ReplaceSourceRows
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,7 +20,11 @@ if (-not (Test-Path -LiteralPath $node)) {
 }
 
 Write-Host "Snipalot trade sync"
-Write-Host "Close master trading log.xlsx in Excel before running this."
+if ($ArchiveOnly) {
+  Write-Host "Archive-only mode: master trading log.xlsx is not imported, rewritten, or finalized."
+} else {
+  Write-Host "Close master trading log.xlsx in Excel before running this."
+}
 Write-Host ""
 
 Push-Location (Split-Path -Parent $scriptDir)
@@ -31,18 +39,32 @@ try {
   if ($RepairOnly) {
     $args += "--repair-only"
   }
+  if ($ArchiveOnly) {
+    $args += "--archive-only"
+  }
+  if ($TestMode) {
+    $args += "--test-mode"
+  }
+  if ($NoArchive) {
+    $args += "--no-archive"
+  }
+  if ($ReplaceSourceRows) {
+    $args += "--replace-source-rows"
+  }
   & $node @args
   if ($LASTEXITCODE -ne 0) {
     throw "Trade sync failed with exit code $LASTEXITCODE."
   }
 
-  $finalizeArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $finalizeScript)
-  if ($CapturesRoot) {
-    $finalizeArgs += @("-CapturesRoot", $CapturesRoot)
-  }
-  & powershell.exe @finalizeArgs
-  if ($LASTEXITCODE -ne 0) {
-    throw "Excel workbook finalization failed with exit code $LASTEXITCODE."
+  if (-not $ArchiveOnly) {
+    $finalizeArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $finalizeScript)
+    if ($CapturesRoot) {
+      $finalizeArgs += @("-CapturesRoot", $CapturesRoot)
+    }
+    & powershell.exe @finalizeArgs
+    if ($LASTEXITCODE -ne 0) {
+      throw "Excel workbook finalization failed with exit code $LASTEXITCODE."
+    }
   }
 } finally {
   Pop-Location
@@ -50,4 +72,8 @@ try {
 
 Write-Host ""
 $displayRoot = if ($CapturesRoot) { $CapturesRoot } else { "the Snipalot Captures folder" }
-Write-Host "Done. $displayRoot\master trading log.xlsx has been recalculated and saved."
+if ($ArchiveOnly) {
+  Write-Host "Done. Completed current trade folders have been moved into $displayRoot\Archive."
+} else {
+  Write-Host "Done. $displayRoot\master trading log.xlsx has been recalculated and saved."
+}

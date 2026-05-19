@@ -69,6 +69,28 @@ export interface TradeEvent {
   target_hit_low?: boolean | null;
   target_hit_high?: boolean | null;
   exit_scenario?: 'early' | 'in_range' | 'overshoot' | null;
+  /** NICS/meta judgment fields from the LLM. History-dependent fields are reconciled during master sync. */
+  meta_cluster_id?: string | null;
+  meta_name?: string | null;
+  N_score?: number | null;
+  N_why?: string | null;
+  I_score?: number | null;
+  I_why?: string | null;
+  C_score?: number | null;
+  C_why?: string | null;
+  S_score?: number | null;
+  S_why?: string | null;
+  NICS_score?: number | null;
+  trade_type?: string | null;
+  llm_grade_notes?: string | null;
+  size_ok?: boolean | null;
+  zone_ok?: boolean | null;
+  cooldown_ok?: boolean | null;
+  counts_toward_50?: boolean | null;
+  hard_reset?: boolean | null;
+  running_count?: number | null;
+  non_nics_pnl_pct?: number | null;
+  cluster_pnl_pct?: number | null;
 }
 
 export interface TradePipelineInput {
@@ -958,7 +980,19 @@ Use null for any field the transcript / data genuinely doesn't speak to.
     "pre_confidence": "<low|medium|high|null>",
     "post_confidence": "<low|medium|high|null>",
     "needs_review": <true_OR_false>,
-    "notes": "<ANY_RELEVANT_FLAG_OR_NULL>"
+    "notes": "<ANY_RELEVANT_FLAG_OR_NULL>",
+    "meta_name": "<SHORT_META_CLUSTER_NAME_OR_NULL>",
+    "N_score": <0_OR_1>,
+    "N_why": "<WHY_N_SCORE_WAS_OR_WAS_NOT_EARNED>",
+    "I_score": <0_OR_1>,
+    "I_why": "<WHY_I_SCORE_WAS_OR_WAS_NOT_EARNED>",
+    "C_score": <0_OR_1>,
+    "C_why": "<WHY_C_SCORE_WAS_OR_WAS_NOT_EARNED>",
+    "S_score": <0_OR_1>,
+    "S_why": "<WHY_S_SCORE_WAS_OR_WAS_NOT_EARNED>",
+    "NICS_score": <SUM_OF_N_I_C_S>,
+    "trade_type": "<Core NICS++|Scout|Non-NICS|OTHER_SHORT_LABEL>",
+    "llm_grade_notes": "<ONE_OR_TWO_SENTENCE_RECONCILIATION_NOTE>"
   }
 ]
 
@@ -1002,6 +1036,18 @@ Rules:
   captured and decide whether to re-record more clearly next time.
 - needs_review=true on any trade where you had to guess at any
   non-trivial field. Better to flag than to silently fabricate.
+
+**NICS / META CLUSTER SCORING:**
+- NICS is four binary checks scored 0 or 1. NICS_score is N_score + I_score + C_score + S_score.
+- N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
+- I = the trader states why this specific token is the selected ticket for that meta.
+- C = the trader states what would prove the trade wrong, a cut condition, invalidation, stop, weakness signal, or exit discipline.
+- S = the trader states sizing/risk discipline or otherwise makes the bet intentionally scoped.
+- A trade only qualifies as full Core NICS++ when NICS_score = 4. Missing one or more letters should be Scout or Non-NICS depending on quality.
+- meta_name should identify the repeatable meta cluster, not necessarily the ticker. If multiple tokens are lottery tickets for the same idea, use the same meta_name for them.
+- Do not populate meta_cluster_id. Leave it null; master sync assigns stable historical IDs such as M.260518.1.
+- Do not treat cooldown as a hard reset. If the transcript suggests a cooldown concern, mention it in llm_grade_notes, but the sync process will track cooldown separately.
+- N_why, I_why, C_why, S_why must be evidence-based and compact. If the evidence is absent, score 0 and say what was missing.
 
 **PARTIAL EXITS:**
 - Mock Ape's export sometimes shows ONE entry/exit pair per trade even
@@ -1293,6 +1339,27 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
       post_confidence: confOrNull(e.post_confidence),
       needs_review: typeof e.needs_review === 'boolean' ? e.needs_review : false,
       notes: strOrNull(e.notes),
+      meta_cluster_id: strOrNull(e.meta_cluster_id),
+      meta_name: strOrNull(e.meta_name),
+      N_score: binaryOrNull(e.N_score),
+      N_why: strOrNull(e.N_why),
+      I_score: binaryOrNull(e.I_score),
+      I_why: strOrNull(e.I_why),
+      C_score: binaryOrNull(e.C_score),
+      C_why: strOrNull(e.C_why),
+      S_score: binaryOrNull(e.S_score),
+      S_why: strOrNull(e.S_why),
+      NICS_score: numOrNull(e.NICS_score),
+      trade_type: strOrNull(e.trade_type),
+      llm_grade_notes: strOrNull(e.llm_grade_notes),
+      size_ok: boolOrNull(e.size_ok),
+      zone_ok: boolOrNull(e.zone_ok),
+      cooldown_ok: boolOrNull(e.cooldown_ok),
+      counts_toward_50: boolOrNull(e.counts_toward_50),
+      hard_reset: boolOrNull(e.hard_reset),
+      running_count: numOrNull(e.running_count),
+      non_nics_pnl_pct: numOrNull(e.non_nics_pnl_pct),
+      cluster_pnl_pct: numOrNull(e.cluster_pnl_pct),
       leg_index: numOrNull(e.leg_index),
       leg_count: numOrNull(e.leg_count),
       position_fraction: numOrNull(e.position_fraction),
@@ -1307,6 +1374,14 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
 
 function numOrNull(v: unknown): number | null {
   return typeof v === 'number' && !Number.isNaN(v) ? v : null;
+}
+function binaryOrNull(v: unknown): number | null {
+  const n = numOrNull(v);
+  if (n === null) return null;
+  return n >= 1 ? 1 : 0;
+}
+function boolOrNull(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null;
 }
 function strOrNull(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
@@ -1386,6 +1461,27 @@ const XLSX_COLUMNS = [
   'notes',
   'needs_review',
   'mockape_trade_id',
+  'meta_cluster_id',
+  'meta_name',
+  'N_score',
+  'N_why',
+  'I_score',
+  'I_why',
+  'C_score',
+  'C_why',
+  'S_score',
+  'S_why',
+  'NICS_score',
+  'size_ok',
+  'zone_ok',
+  'cooldown_ok',
+  'trade_type',
+  'counts_toward_50',
+  'hard_reset',
+  'running_count',
+  'non_nics_pnl_pct',
+  'cluster_pnl_pct',
+  'llm_grade_notes',
 ] as const;
 
 type XlsxColumn = typeof XLSX_COLUMNS[number];
@@ -1424,6 +1520,12 @@ function buildTradeXlsxRow(
   durationMs: number
 ): XlsxRow {
   const timeline = buildTradeTimeline(trade, recordingStartedAtMs, durationMs);
+  const nicsScore = trade.NICS_score ?? sumNicsScore(trade);
+  const sizeOk = trade.size_ok ?? isHalfSol(trade.sol_invested);
+  const zoneOk = trade.zone_ok ?? isNicsMarketCapZone(trade.entry_mc_actual);
+  const countsToward50 = trade.counts_toward_50 ?? (
+    nicsScore !== null && nicsScore >= 4 && sizeOk === true && zoneOk === true
+  );
   return {
     trade_id: String(trade.trade_id),
     token_name: trade.token_name,
@@ -1451,7 +1553,54 @@ function buildTradeXlsxRow(
     notes: wrapSpreadsheetText(trade.notes),
     needs_review: trade.needs_review ? 'true' : 'false',
     mockape_trade_id: trade.mockape_trade_id ?? '',
+    meta_cluster_id: trade.meta_cluster_id ?? '',
+    meta_name: trade.meta_name ?? '',
+    N_score: formatOptionalNumber(trade.N_score),
+    N_why: wrapSpreadsheetText(trade.N_why),
+    I_score: formatOptionalNumber(trade.I_score),
+    I_why: wrapSpreadsheetText(trade.I_why),
+    C_score: formatOptionalNumber(trade.C_score),
+    C_why: wrapSpreadsheetText(trade.C_why),
+    S_score: formatOptionalNumber(trade.S_score),
+    S_why: wrapSpreadsheetText(trade.S_why),
+    NICS_score: formatOptionalNumber(nicsScore),
+    size_ok: formatOptionalBoolean(sizeOk),
+    zone_ok: formatOptionalBoolean(zoneOk),
+    cooldown_ok: formatOptionalBoolean(trade.cooldown_ok),
+    trade_type: trade.trade_type ?? '',
+    counts_toward_50: formatOptionalBoolean(countsToward50),
+    hard_reset: formatOptionalBoolean(trade.hard_reset),
+    running_count: formatOptionalNumber(trade.running_count),
+    non_nics_pnl_pct: formatFixedDecimal(trade.non_nics_pnl_pct, 1),
+    cluster_pnl_pct: formatFixedDecimal(trade.cluster_pnl_pct, 1),
+    llm_grade_notes: wrapSpreadsheetText(trade.llm_grade_notes),
   };
+}
+
+function sumNicsScore(trade: TradeEvent): number | null {
+  const scores = [trade.N_score, trade.I_score, trade.C_score, trade.S_score];
+  if (scores.some((score) => score === null || score === undefined || !Number.isFinite(score))) return null;
+  return scores.reduce<number>((sum, score) => sum + Number(score), 0);
+}
+
+function isHalfSol(value: number | null | undefined): boolean | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return Math.abs(value - 0.5) < 0.0001;
+}
+
+function isNicsMarketCapZone(value: number | null | undefined): boolean | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return value >= 2000 && value <= 20000;
+}
+
+function formatOptionalNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '';
+  return String(value);
+}
+
+function formatOptionalBoolean(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  return value ? 'true' : 'false';
 }
 
 function buildTradeTimeline(

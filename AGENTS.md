@@ -408,6 +408,10 @@ Agent behavior:
  - The importer also reports `rowsBackfilled` and can update existing master rows when the row was already imported but NICS fields were blank, preserving `tblTrades` as `A:BC`.
  - Validation on 2026-05-18: `npm test` passed; a temp sync with AA:AU stripped from `trade_log.xlsx` proved session workbook writeback, and a duplicate-row temp sync proved master NICS backfill (`rowsAdded=0`, `rowsBackfilled=8`).
 - **v1.0.44 local installer build:** Built the NICS automation installer at **`release/Snipalot-1.0.44-setup.exe`** with `npm run package:nopublish -- --config.win.signAndEditExecutable=false`. SHA256: `93D83C4AF8C62A22E7549E2C14600DBDE77434A2F51D222312223F6B2D238C6A`. Build killed a stale installed `Snipalot.exe` first, then completed successfully.
+- **Screenshot overlay selection fix (v1.0.45 local branch):**
+ - Root cause: after monitor/display rebuilds, old overlay BrowserWindows closed asynchronously and deleted the replacement window from `overlayWindows` when the display id was reused. Screenshot selection still entered `selecting-screenshot`, but `broadcastOverlay('overlay:enter-region-select')` had no live overlay map entry, so the user never saw or could draw the selection layer.
+ - Fix: overlay `closed` handlers now only remove the map entry if the closing BrowserWindow is still the registered value; stale closes are logged as `stale overlay closed`.
+ - Validation/build: `npm test` passed on 2026-05-19. Local installer built at **`release/Snipalot-1.0.45-setup.exe`** with `npm run package:nopublish -- --config.win.signAndEditExecutable=false`. SHA256: `A77DDEA8664AC5C17E24082BC93808DDE6334F39E7AD8B3683A9ADD808E4AD6D`. Build killed a stale installed `Snipalot.exe` first, then completed successfully.
 
 ## Packaged app logs
 

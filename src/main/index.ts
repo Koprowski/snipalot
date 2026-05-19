@@ -727,8 +727,15 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
   });
 
   win.on('closed', () => {
-    overlayWindows.delete(displayId);
-    log('main', 'overlay closed', { displayId });
+    // Rebuilds can create a replacement overlay for the same display before
+    // the old BrowserWindow finishes closing. Only remove the map entry when
+    // this exact window is still the registered overlay.
+    if (overlayWindows.get(displayId) === win) {
+      overlayWindows.delete(displayId);
+      log('main', 'overlay closed', { displayId, removedFromMap: true });
+    } else {
+      log('main', 'stale overlay closed', { displayId, removedFromMap: false });
+    }
   });
   return win;
 }

@@ -148,6 +148,7 @@ const INTEGER_COLUMNS = new Set([
   "C_score",
   "S_score",
   "NICS_score",
+  "counts_toward_50",
   "running_count",
 ]);
 
@@ -175,7 +176,6 @@ const BOOLEAN_COLUMNS = new Set([
   "size_ok",
   "zone_ok",
   "cooldown_ok",
-  "counts_toward_50",
   "hard_reset",
 ]);
 
@@ -964,14 +964,14 @@ Use the saved evidence from the session folder to fill only missing NICS/meta cl
 Scoring rules:
 - N_score, I_score, C_score, and S_score are binary 0 or 1.
 - NICS_score = N_score + I_score + C_score + S_score. It ranges from 0 to 4.
-- A trade counts toward the 50-trade target when NICS_score >= 3 and the size target is met. Zone and cooldown are tracked separately by the sync script.
+- A trade counts toward the 50-trade target when size_ok is true, N_score = 1, I_score = 1, and at least one of C_score or S_score is 1. Zone and cooldown are tracked separately by the sync script.
 - N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working.
 - S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or upside management.
 - meta_name should identify the repeatable meta cluster, not necessarily the ticker. If multiple tickers are lottery tickets for the same idea, use the same meta_name.
 - Use 0 and explain the missing evidence when a component is absent. Do not leave any N/I/C/S fields blank.
-- Use Core NICS++ for NICS_score >= 3. Use Scout when the row has partial NICS evidence worth reviewing. Use Non-NICS when it lacks a named/intentional setup.
+- Use Core NICS++ when N_score = 1, I_score = 1, and at least one of C_score or S_score is 1. Use Scout when the row has partial NICS evidence worth reviewing. Use Non-NICS when it lacks a named/intentional setup.
 - Do not populate meta_cluster_id, size_ok, zone_ok, cooldown_ok, counts_toward_50, hard_reset, running_count, non_nics_pnl_pct, or cluster_pnl_pct. The sync script owns those fields.
 - Existing prompt text is context only; the scoring rules above override older prompt instructions if they conflict.
 
@@ -1390,7 +1390,7 @@ function fillCountFields(row, history) {
   const sizeOk = parseBoolean(row.size_ok);
   const hardReset = isAboveHalfSol(row) === true;
   const counts = evidenceOk === true && sizeOk === true && hardReset === false;
-  row.counts_toward_50 = counts ? "true" : "false";
+  row.counts_toward_50 = counts ? "1" : "0";
   row.hard_reset = hardReset ? "true" : "false";
 
   const previousCount = latestRunningCount(history);
@@ -1409,8 +1409,12 @@ function nicsUnlockScore(row) {
 }
 
 function hasCountedNicsEvidence(row) {
-  const score = nicsUnlockScore(row);
-  return score === null ? null : score >= 3;
+  const n = binaryScoreOrNull(row.N_score);
+  const i = binaryScoreOrNull(row.I_score);
+  const c = binaryScoreOrNull(row.C_score);
+  const s = binaryScoreOrNull(row.S_score);
+  if (n === null || i === null || c === null || s === null) return null;
+  return n === 1 && i === 1 && (c + s) >= 1;
 }
 
 function binaryScoreOrNull(value) {

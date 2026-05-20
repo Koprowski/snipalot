@@ -417,7 +417,7 @@ Agent behavior:
  - Settings `check-for-updates` now reuses a successful cached startup result or joins an in-flight startup request; failed checks are retried on the next request so the footer retry path still works.
  - Validation/build: `npm test` passed on 2026-05-19. Local installer built at **`release/Snipalot-1.0.46-setup.exe`** with `npm run package:nopublish -- --config.win.signAndEditExecutable=false`. SHA256: `46029761D70346F4F32D9B2B961675781848ADC7492BD722D2A6657A1AF59E59`. Build killed a stale installed `Snipalot.exe` first, then completed successfully.
 - **NICS scoring standard update (2026-05-19):**
- - `src/main/trade-pipeline.ts` now prompts Gemini/API extraction to score N/I/C/S separately. v1.0.48 changed `NICS_score` to `N_score + I_score + C_score + S_score`; v1.0.49 then aligned counting to the current operating rule: score >= 3 plus size target, with zone/cooldown tracked but not gating.
+ - `src/main/trade-pipeline.ts` now prompts Gemini/API extraction to score N/I/C/S separately. v1.0.48 changed `NICS_score` to `N_score + I_score + C_score + S_score`; v1.0.51 aligned counting to the explicit component rule: `size_ok=true`, `N_score=1`, `I_score=1`, and at least one of `C_score`/`S_score=1`, with zone/cooldown tracked but not gating.
  - `tools/sync-master-trading-log.mjs` is the enforcement/reconciliation layer for master import. It recomputes `NICS_score`, setup flags, cooldown, count, hard-reset, and non-NICS P&L fields during sync; it no longer allows same-cluster re-entry inside the 5-minute post-loss cooldown.
  - The live shared sync script at `E:\OneDrive\Snipalot Captures\Trade Sync Scripts\sync-master-trading-log.mjs` was updated to match the repo mirror. Validation: `npm test` and `node --check tools\sync-master-trading-log.mjs` passed.
 - **Trade sync test-mode loop (2026-05-19):**
@@ -446,8 +446,13 @@ Agent behavior:
 - **Trade sync actuals repair and count rule fix (v1.0.50 local branch):**
  - Root cause for apparent Q:T column shifts was corrupted source values in session `trade_log.xlsx`, especially `20260519.1529 trade`, not a master header mismatch. When target/stop fields were blank, actual exit/size/P&L values had previously been written into the wrong adjacent workflow fields.
  - Sync now repairs workflow values from authoritative session evidence before import: `Inputs\extraction_response.json` restores target/stop/commentary fields and `Inputs\mockape.json` overwrites actual entry/exit market caps plus SOL/P&L fields by `mockape_trade_id`. This also writes the repaired 55-column session workbook back to disk.
- - Count logic now matches the current operating rule: `counts_toward_50=true` when `NICS_score >= 3` and `size_ok=true`. `zone_ok` and `cooldown_ok` are still tracked, but no longer block counting or trigger `hard_reset`; `hard_reset` is now tied to oversizing above 0.5 SOL.
+ - v1.0.50 temporarily counted via `NICS_score >= 3` plus size; v1.0.51 supersedes that with the explicit component rule below.
  - Validation: reran live `_test` sync with `-NoArchive -ReplaceSourceRows`. `master trading log_test.xlsx` opens as `A1:BC36`; `20260519.1529 trade` actuals now land in `exit_mc_actual`, `sol_invested`, `sol_received`, `pnl_sol`, and `pnl_percentage` correctly, and count summaries were `20260519.1529 trade` 6 true / 9, `20260519.1710 trade` 13 true / 16, `20260519.2002 trade` 1 true / 2. Source folders remained in place. `npm test` passed.
+- **Count-to-50 numeric output (v1.0.51 local branch):**
+ - `counts_toward_50` is now written as numeric `1`/`0` instead of boolean `TRUE`/`FALSE` so Excel can sum it directly.
+ - The count rule is explicit and component-based: `size_ok=true`, `N_score=1`, `I_score=1`, and `C_score + S_score >= 1`. `NICS_score` remains the four-component total, but a raw score threshold alone is not used for counting.
+ - `tools\sync-master-trading-log.mjs` treats `counts_toward_50` as an integer column when writing both master and session workbooks. Generated app workbooks also emit `1`/`0` for this column before sync.
+ - Validation: reran live `_test` sync with `-NoArchive -ReplaceSourceRows`. Excel COM verified `master trading log_test.xlsx` opens as `A1:BC36`, `counts_toward_50` is column 50, values are numeric `0/1`, and there were zero mismatches against the explicit count rule. Count sums were `20260519.1529 trade` 6, `20260519.1710 trade` 12, and `20260519.2002 trade` 1.
 
 ## Packaged app logs
 

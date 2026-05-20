@@ -929,7 +929,7 @@ Scoring rules:
 - S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or upside management.
 - meta_name should identify the repeatable meta cluster, not necessarily the ticker.
 - Use 0 and explain the missing evidence when a component is absent. Do not leave any N/I/C/S fields blank.
-- Use Core NICS++ when NICS_score >= 3. Otherwise use Scout or Non-NICS.
+- Use Core NICS++ when N_score = 1, I_score = 1, and at least one of C_score or S_score is 1. Otherwise use Scout or Non-NICS.
 - Do not populate meta_cluster_id, size_ok, zone_ok, cooldown_ok, counts_toward_50, hard_reset, running_count, non_nics_pnl_pct, or cluster_pnl_pct.
 
 Trades to grade:
@@ -1225,7 +1225,7 @@ Rules:
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry. This is required for a counted trade.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working. C can come from exit commentary or the immediate post-trade note. "Dead" / "unclear" can earn C if it is the trader's stated exit reason, but flag it in llm_grade_notes because it needs review.
 - S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or how they manage upside after deciding to stay in.
-- A trade qualifies as Core NICS++ evidence when NICS_score >= 3. Lower scores should be Scout or Non-NICS unless another explicit label is clearly warranted.
+- A trade qualifies as Core NICS++ evidence when N_score = 1, I_score = 1, and at least one of C_score or S_score is 1. Lower evidence should be Scout or Non-NICS unless another explicit label is clearly warranted.
 - meta_name should identify the repeatable meta cluster, not necessarily the ticker. If multiple tokens are lottery tickets for the same idea, use the same meta_name for them.
 - Do not populate meta_cluster_id. Leave it null; master sync assigns stable historical IDs such as M.260518.1.
 - Do not treat cooldown as a hard reset. If the transcript suggests a cooldown concern, mention it in llm_grade_notes, but the sync process will track cooldown separately.
@@ -1785,7 +1785,7 @@ function buildTradeXlsxRow(
     zone_ok: formatOptionalBoolean(zoneOk),
     cooldown_ok: formatOptionalBoolean(trade.cooldown_ok),
     trade_type: trade.trade_type ?? '',
-    counts_toward_50: formatOptionalBoolean(countsToward50),
+    counts_toward_50: formatOptionalCount(countsToward50),
     hard_reset: formatOptionalBoolean(trade.hard_reset),
     running_count: formatOptionalNumber(trade.running_count),
     non_nics_pnl_pct: formatFixedDecimal(trade.non_nics_pnl_pct, 1),
@@ -1804,8 +1804,12 @@ function sumNicsScore(trade: TradeEvent): number | null {
 }
 
 function hasCountedNicsEvidence(trade: TradeEvent): boolean | null {
-  const score = sumNicsScore(trade);
-  return score === null ? null : score >= 3;
+  const n = binaryScoreOrNull(trade.N_score);
+  const i = binaryScoreOrNull(trade.I_score);
+  const c = binaryScoreOrNull(trade.C_score);
+  const s = binaryScoreOrNull(trade.S_score);
+  if (n === null || i === null || c === null || s === null) return null;
+  return n === 1 && i === 1 && (c + s) >= 1;
 }
 
 function binaryScoreOrNull(value: number | null | undefined): number | null {
@@ -1831,6 +1835,11 @@ function formatOptionalNumber(value: number | null | undefined): string {
 function formatOptionalBoolean(value: boolean | null | undefined): string {
   if (value === null || value === undefined) return '';
   return value ? 'true' : 'false';
+}
+
+function formatOptionalCount(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  return value ? '1' : '0';
 }
 
 function buildTradeTimeline(

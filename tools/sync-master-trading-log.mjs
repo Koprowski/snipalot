@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import fss from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = resolveCapturesRoot();
 const ARCHIVE = path.join(ROOT, "Archive");
-const MASTER = path.join(ROOT, "master trading log.xlsx");
+const MASTER = resolveMasterPath();
 const MANIFEST = path.join(ARCHIVE, "master-trading-log-sync-manifest.json");
 const ENABLE_ARCHIVE_BACKFILL = process.argv.includes("--backfill-archive");
 const REPAIR_ONLY = process.argv.includes("--repair-only");
@@ -122,6 +124,20 @@ function resolveCapturesRoot() {
     return parent;
   }
   return "E:/OneDrive/Snipalot Captures";
+}
+
+function resolveMasterPath() {
+  const masterArgIndex = process.argv.indexOf("--master");
+  if (masterArgIndex >= 0 && process.argv[masterArgIndex + 1]) {
+    return path.resolve(process.argv[masterArgIndex + 1]);
+  }
+  if (process.env.SNIPALOT_MASTER_TRADING_LOG) {
+    return path.resolve(process.env.SNIPALOT_MASTER_TRADING_LOG);
+  }
+
+  const statementsMaster = path.join(ROOT, "Statements", "master trading log.xlsx");
+  if (fss.existsSync(statementsMaster)) return statementsMaster;
+  return path.join(ROOT, "master trading log.xlsx");
 }
 
 const INTEGER_COLUMNS = new Set([
@@ -617,7 +633,7 @@ async function importTradeFolder(dir, { allRows, seen, archiveAfterImport }) {
     rawRows = await readCsvRows(csv);
     sourceType = "legacy-csv";
   }
-  rawRows = await mergeNicsResponseRows(dir, rawRows);
+  rawRows = await ensureNicsResponseRows(dir, rawRows);
 
   let added = 0;
   let backfilled = 0;
@@ -683,8 +699,394 @@ async function mergeNicsResponseRows(sessionDir, rawRows) {
   return rawRows;
 }
 
+async function ensureNicsResponseRows(sessionDir, rawRows) {
+  let rows = await mergeNicsResponseRows(sessionDir, rawRows);
+  if (!hasMissingNicsJudgments(rows)) return rows;
+
+  const generated = await generateNicsResponseFromSessionEvidence(sessionDir, rows);
+  if (!generated) return rows;
+  rows = await mergeNicsResponseRows(sessionDir, rows);
+  return rows;
+}
+
+function hasMissingNicsJudgments(rows) {
+  return rows.some((row) => !hasCompleteNicsJudgment(row));
+}
+
+function hasCompleteNicsJudgment(row) {
+  return !isBlank(row.meta_name)
+    && !isBlank(row.N_score)
+    && !isBlank(row.N_why)
+    && !isBlank(row.I_score)
+    && !isBlank(row.I_why)
+    && !isBlank(row.C_score)
+    && !isBlank(row.C_why)
+    && !isBlank(row.S_score)
+    && !isBlank(row.S_why);
+}
+
+async function generateNicsResponseFromSessionEvidence(sessionDir, rawRows) {
+  const evidence = await readSessionEvidence(sessionDir);
+  if (!evidence.hasUsefulEvidence && !rawRows.some(rowHasNicsEvidenceText)) {
+    console.warn(`[sync] NICS missing for ${path.basename(sessionDir)}, but no transcript/prompt/extraction evidence was found.`);
+    return false;
+  }
+
+  const inputsDir = path.join(sessionDir, "Inputs");
+  const responsePath = path.join(inputsDir, "nics_response.json");
+  const promptText = renderSyncNicsPrompt(sessionDir, rawRows, evidence);
+  console.log(`[sync] generating missing NICS classifications for ${path.basename(sessionDir)} from saved session evidence`);
+
+  let gradedRows = [];
+  try {
+    gradedRows = await runGeminiCliForNics(promptText);
+  } catch (err) {
+    console.warn(`[sync] NICS generation failed for ${path.basename(sessionDir)}: ${err.message}`);
+    return false;
+  }
+  if (!Array.isArray(gradedRows) || gradedRows.length === 0) {
+    console.warn(`[sync] NICS generation returned no rows for ${path.basename(sessionDir)}.`);
+    return false;
+  }
+
+  await fs.mkdir(inputsDir, { recursive: true });
+  await fs.writeFile(responsePath, `${JSON.stringify(gradedRows, null, 2)}\n`, "utf8");
+  console.log(`[sync] wrote generated NICS response to ${responsePath}`);
+  return true;
+}
+
+function rowHasNicsEvidenceText(row) {
+  return !isBlank(row.rationale)
+    || !isBlank(row.pre_transcript_excerpt)
+    || !isBlank(row.post_transcript_excerpt)
+    || !isBlank(row.adherence_self_assessment)
+    || !isBlank(row.notes);
+}
+
+async function readSessionEvidence(sessionDir) {
+  const transcript = await readTextIfExists(path.join(sessionDir, "transcript.txt"), 90000);
+  const prompt = await readTextIfExists(path.join(sessionDir, "prompt.txt"), 50000);
+  const extractionResponse = await readTextIfExists(path.join(sessionDir, "Inputs", "extraction_response.json"), 50000);
+  const mockape = await readTextIfExists(path.join(sessionDir, "Inputs", "mockape.json"), 40000);
+  const markers = await readTextIfExists(path.join(sessionDir, "Inputs", "markers.json"), 20000);
+  return {
+    transcript,
+    prompt,
+    extractionResponse,
+    mockape,
+    markers,
+    hasUsefulEvidence: Boolean(transcript || prompt || extractionResponse || mockape || markers),
+  };
+}
+
+async function readTextIfExists(filePath, maxChars) {
+  if (!fss.existsSync(filePath)) return "";
+  try {
+    const text = await fs.readFile(filePath, "utf8");
+    return truncateForPrompt(text.replace(/^\uFEFF/, ""), maxChars, filePath);
+  } catch (err) {
+    console.warn(`[sync] Could not read ${filePath}: ${err.message}`);
+    return "";
+  }
+}
+
+function truncateForPrompt(text, maxChars, label) {
+  if (!text || text.length <= maxChars) return text;
+  const keepHead = Math.floor(maxChars * 0.65);
+  const keepTail = maxChars - keepHead;
+  return `${text.slice(0, keepHead)}\n\n[${label} truncated for sync-time NICS grading]\n\n${text.slice(-keepTail)}`;
+}
+
+function renderSyncNicsPrompt(sessionDir, rawRows, evidence) {
+  const rowsForGrading = rawRows.map((row) => {
+    const out = {};
+    for (const column of [
+      "trade_id",
+      "token_name",
+      "mockape_trade_id",
+      "trade_date",
+      "entry_time_inferred",
+      "exit_time_actual",
+      "entry_mc_actual",
+      "target_exit_low_mc",
+      "target_exit_high_mc",
+      "stop_loss_mc",
+      "exit_mc_actual",
+      "sol_invested",
+      "pnl_percentage",
+      "rationale",
+      "pre_transcript_excerpt",
+      "post_transcript_excerpt",
+      "adherence_self_assessment",
+      "notes",
+      ...LLM_NICS_COLUMNS,
+    ]) {
+      out[column] = row[column] ?? "";
+    }
+    return out;
+  });
+
+  return `You are reconciling Snipalot trade rows during master-log sync.
+
+Return ONLY a JSON array. Return one object per input trade row. Each object MUST include:
+trade_id, token_name, mockape_trade_id, meta_name, N_score, N_why, I_score, I_why, C_score, C_why, S_score, S_why, NICS_score, trade_type, llm_grade_notes.
+
+Use the saved evidence from the session folder to fill only missing NICS/meta classification fields.
+
+Scoring rules:
+- N_score, I_score, C_score, and S_score are binary 0 or 1.
+- NICS_score = N_score + I_score + C_score + S_score. It ranges from 0 to 4.
+- A trade counts as Core NICS++ only when NICS_score = 4, subject to the separate size/zone/cooldown checks handled by the sync script.
+- N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
+- I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry.
+- C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working.
+- S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or upside management.
+- meta_name should identify the repeatable meta cluster, not necessarily the ticker. If multiple tickers are lottery tickets for the same idea, use the same meta_name.
+- Use 0 and explain the missing evidence when a component is absent. Do not leave any N/I/C/S fields blank.
+- Use Core NICS++ only for NICS_score = 4. Use Scout when the row has partial NICS evidence worth reviewing. Use Non-NICS when it lacks a named/intentional setup.
+- Do not populate meta_cluster_id, size_ok, zone_ok, cooldown_ok, counts_toward_50, hard_reset, running_count, non_nics_pnl_pct, or cluster_pnl_pct. The sync script owns those fields.
+- Existing prompt text is context only; the scoring rules above override older prompt instructions if they conflict.
+
+Session folder:
+${path.basename(sessionDir)}
+
+Trade rows to grade:
+${JSON.stringify(rowsForGrading, null, 2)}
+
+Transcript evidence:
+${evidence.transcript || "(missing)"}
+
+Original prompt evidence:
+${evidence.prompt || "(missing)"}
+
+Original extraction response evidence:
+${evidence.extractionResponse || "(missing)"}
+
+MockApe evidence:
+${evidence.mockape || "(missing)"}
+
+Marker evidence:
+${evidence.markers || "(missing)"}
+`;
+}
+
+async function runGeminiCliForNics(promptText) {
+  const { command, model } = readGeminiCliSyncConfig();
+  const resolvedCli = resolveGeminiCliExecutable(command);
+  const timeoutMs = Number(process.env.SNIPALOT_NICS_SYNC_TIMEOUT_MS ?? 8 * 60 * 1000);
+  const instruction = "Grade the Snipalot trade rows from stdin. Return only the requested JSON array.";
+
+  let result = await runProcess(
+    resolvedCli,
+    ["--model", model, "--output-format", "json", "--prompt", instruction],
+    promptText,
+    timeoutMs
+  );
+  let fallback = "none";
+  if (result.code !== 0 && /Cannot use both a positional prompt and the --prompt flag together/i.test(result.stderr)) {
+    result = await runProcess(
+      resolvedCli,
+      ["--model", model, "--output-format", "json", instruction],
+      promptText,
+      timeoutMs
+    );
+    fallback = "positional-prompt";
+  }
+
+  if (result.timedOut) {
+    throw new Error(`Gemini CLI timed out after ${timeoutMs} ms`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`Gemini CLI exited ${result.code} (${fallback}): ${result.stderr.slice(0, 700)}`);
+  }
+
+  const rawText = extractGeminiCliResponseText(result.stdout);
+  if (!rawText) throw new Error("Gemini CLI returned an empty response.");
+  const parsed = parseNicsResponseJson(rawText);
+  if (!Array.isArray(parsed)) throw new Error("Gemini CLI response did not parse to a JSON array.");
+  return parsed;
+}
+
+function readGeminiCliSyncConfig() {
+  let command = process.env.SNIPALOT_GEMINI_CLI_COMMAND || "";
+  let model = process.env.SNIPALOT_GEMINI_CLI_MODEL || "";
+  if (!command || !model) {
+    const configPath = path.join(os.homedir(), ".snipalot", "config.json");
+    try {
+      if (fss.existsSync(configPath)) {
+        const config = JSON.parse(fss.readFileSync(configPath, "utf8").replace(/^\uFEFF/, ""));
+        command ||= config?.trade?.geminiCliCommand ?? "";
+        model ||= config?.trade?.geminiCliModel ?? "";
+      }
+    } catch (err) {
+      console.warn(`[sync] Could not read Gemini CLI settings from ${configPath}: ${err.message}`);
+    }
+  }
+  return {
+    command: (command || "gemini").trim(),
+    model: (model || "gemini-3.1-pro-preview").trim(),
+  };
+}
+
+function resolveGeminiCliExecutable(cliCommand) {
+  const raw = (cliCommand || "gemini").trim() || "gemini";
+  const trimmed = raw.replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+  const asTarget = (command, prefixArgs = [], shell = false) => ({ command, prefixArgs, shell });
+  const ext = path.extname(trimmed).toLowerCase();
+  const cmdLikeExt = ext === ".cmd" || ext === ".bat";
+
+  const tryNodeEntryFromShim = (shimPath) => {
+    const shimDir = path.dirname(shimPath);
+    const pkgRoot = path.join(shimDir, "node_modules", "@google", "gemini-cli");
+    try {
+      const pkgJsonPath = path.join(pkgRoot, "package.json");
+      if (fss.existsSync(pkgJsonPath)) {
+        const pkg = JSON.parse(fss.readFileSync(pkgJsonPath, "utf8"));
+        const binEntry = typeof pkg.bin === "string"
+          ? pkg.bin
+          : (pkg.bin && (pkg.bin.gemini ?? Object.values(pkg.bin)[0])) ?? pkg.main;
+        if (binEntry) {
+          const resolved = path.join(pkgRoot, binEntry);
+          if (fss.existsSync(resolved)) return asTarget(process.execPath, [resolved]);
+        }
+      }
+    } catch {
+      // fall through to static candidates
+    }
+    const candidates = [
+      path.join(pkgRoot, "bundle", "gemini.js"),
+      path.join(pkgRoot, "dist", "index.js"),
+      path.join(pkgRoot, "bin", "gemini.js"),
+      path.join(pkgRoot, "index.js"),
+    ];
+    const entry = candidates.find((candidate) => fss.existsSync(candidate));
+    return entry ? asTarget(process.execPath, [entry]) : null;
+  };
+
+  if (path.isAbsolute(trimmed)) {
+    if (fss.existsSync(trimmed)) {
+      if (process.platform === "win32" && cmdLikeExt) return tryNodeEntryFromShim(trimmed) ?? asTarget(trimmed, [], true);
+      return asTarget(trimmed);
+    }
+    const withCmd = `${trimmed}.cmd`;
+    if (fss.existsSync(withCmd)) return tryNodeEntryFromShim(withCmd) ?? asTarget(withCmd, [], true);
+    const withExe = `${trimmed}.exe`;
+    if (fss.existsSync(withExe)) return asTarget(withExe);
+    return process.platform === "win32" && !ext ? asTarget(withCmd, [], true) : asTarget(trimmed);
+  }
+
+  if (trimmed.includes(path.sep) || trimmed.includes("/")) {
+    if (process.platform === "win32" && !ext) return asTarget(`${trimmed}.cmd`, [], true);
+    if (process.platform === "win32" && cmdLikeExt) return asTarget(trimmed, [], true);
+    return asTarget(trimmed);
+  }
+
+  if (process.platform !== "win32") return asTarget(trimmed);
+
+  const tryWhere = (name) => {
+    try {
+      const stdout = execFileSync("where.exe", [name], {
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      return lines.find((candidate) => /\.(cmd|exe|bat)$/i.test(candidate) && fss.existsSync(candidate))
+        ?? lines.find((candidate) => fss.existsSync(candidate))
+        ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const fromWhere = tryWhere(`${trimmed}.cmd`) ?? tryWhere(`${trimmed}.exe`) ?? tryWhere(trimmed);
+  if (fromWhere) {
+    if (/\.(cmd|bat)$/i.test(fromWhere)) return tryNodeEntryFromShim(fromWhere) ?? asTarget(fromWhere, [], true);
+    return asTarget(fromWhere);
+  }
+
+  const appData = process.env.APPDATA;
+  if (appData) {
+    const npmShim = path.join(appData, "npm", `${trimmed}.cmd`);
+    if (fss.existsSync(npmShim)) return tryNodeEntryFromShim(npmShim) ?? asTarget(npmShim, [], true);
+  }
+  const userProfile = process.env.USERPROFILE;
+  if (userProfile) {
+    const npmShim = path.join(userProfile, "AppData", "Roaming", "npm", `${trimmed}.cmd`);
+    if (fss.existsSync(npmShim)) return tryNodeEntryFromShim(npmShim) ?? asTarget(npmShim, [], true);
+  }
+
+  return asTarget(trimmed);
+}
+
+function runProcess(resolvedCli, args, stdinText, timeoutMs) {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const env = {
+      ...process.env,
+      GEMINI_CLI_TRUST_WORKSPACE: process.env.GEMINI_CLI_TRUST_WORKSPACE ?? "true",
+      GEMINI_CLI_NO_RELAUNCH: "true",
+    };
+    delete env.GEMINI_API_KEY;
+
+    let child;
+    try {
+      child = spawn(resolvedCli.command, [...resolvedCli.prefixArgs, ...args], {
+        windowsHide: true,
+        shell: resolvedCli.shell,
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      resolve({ code: -1, stdout, stderr: err.message, timedOut });
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill();
+      } catch {
+        // ignore
+      }
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ code: -1, stdout, stderr: err.message, timedOut });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr, timedOut });
+    });
+    child.stdin?.end(stdinText, "utf8");
+  });
+}
+
+function extractGeminiCliResponseText(stdout) {
+  const trimmed = stdout.trim();
+  if (!trimmed) return "";
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed.response === "string" && parsed.response.trim()) return parsed.response.trim();
+    if (typeof parsed.text === "string" && parsed.text.trim()) return parsed.text.trim();
+    if (parsed.content && typeof parsed.content.text === "string" && parsed.content.text.trim()) {
+      return parsed.content.text.trim();
+    }
+  } catch {
+    // CLI can return plain JSON/text when output-format behavior changes.
+  }
+  return trimmed;
+}
+
 function parseNicsResponseJson(rawText) {
   let text = rawText.trim().replace(/^\uFEFF/, "");
+  const directFence = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/);
+  if (directFence) text = directFence[1].trim();
   const wrapper = JSON.parse(text);
   if (Array.isArray(wrapper)) return wrapper;
   if (wrapper && typeof wrapper.response === "string") {
@@ -872,13 +1274,13 @@ function nicsUnlockScore(row) {
   const i = binaryScoreOrNull(row.I_score);
   const c = binaryScoreOrNull(row.C_score);
   const s = binaryScoreOrNull(row.S_score);
-  if (n === null || i === null || (c === null && s === null)) return null;
-  return n + i + Math.max(c ?? 0, s ?? 0);
+  if (n === null || i === null || c === null || s === null) return null;
+  return n + i + c + s;
 }
 
 function hasCountedNicsEvidence(row) {
   const score = nicsUnlockScore(row);
-  return score === null ? null : score >= 3;
+  return score === null ? null : score >= 4;
 }
 
 function binaryScoreOrNull(value) {
@@ -1038,6 +1440,7 @@ async function appendRowsToExistingWorkbook(filePath, rowsToAppend) {
   masterXml = masterXml.replace("</sheetData>", `${appendedRows}</sheetData>`);
   masterXml = await normalizeMasterTradeDates(zip, masterXml, styles.date);
   masterXml = updateWorksheetDimension(masterXml, lastColumn, targetLastRow);
+  masterXml = removeWorksheetAutoFilter(masterXml);
   zip.file(masterPath, masterXml);
 
   await updateMasterTable(zip, masterPath, lastColumn, targetLastRow);
@@ -1096,7 +1499,7 @@ async function rewriteExistingMasterWorkbook(filePath, rows) {
   masterXml = masterXml.replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData>${headerRow}${bodyRows}</sheetData>`);
   masterXml = await normalizeMasterTradeDates(zip, masterXml, styles.date);
   masterXml = updateWorksheetDimension(masterXml, lastColumn, lastRow);
-  masterXml = updateWorksheetAutoFilter(masterXml, lastColumn, lastRow);
+  masterXml = removeWorksheetAutoFilter(masterXml);
   zip.file(masterPath, masterXml);
 
   await updateMasterTable(zip, masterPath, lastColumn, lastRow);
@@ -1117,8 +1520,9 @@ async function repairExistingWorkbook(filePath) {
     const workbookStylesXml = await zip.file("xl/styles.xml")?.async("string") ?? "";
     const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
     const repairedMasterXml = await normalizeMasterTradeDates(zip, masterXml, styles.date);
-    if (repairedMasterXml !== masterXml) {
-      masterXml = repairedMasterXml;
+    const repairedXml = removeWorksheetAutoFilter(repairedMasterXml);
+    if (repairedXml !== masterXml) {
+      masterXml = repairedXml;
       zip.file(masterPath, masterXml);
       changed = true;
     }
@@ -1311,6 +1715,10 @@ function updateWorksheetAutoFilter(sheetXml, lastColumn, lastRow) {
     return sheetXml.replace(/(<\/sheetData>)/, `$1${autoFilter}`);
   }
   return sheetXml;
+}
+
+function removeWorksheetAutoFilter(sheetXml) {
+  return sheetXml.replace(/<autoFilter\b[^>]*(?:\/>|>[\s\S]*?<\/autoFilter>)/g, "");
 }
 
 async function updateMasterTable(zip, masterPath, lastColumn, lastRow) {

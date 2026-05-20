@@ -922,14 +922,14 @@ trade_id, token_name, mockape_trade_id, meta_name, N_score, N_why, I_score, I_wh
 
 Scoring rules:
 - N_score, I_score, C_score, and S_score are binary 0 or 1.
-- NICS_score = N_score + I_score + max(C_score, S_score).
+- NICS_score = N_score + I_score + C_score + S_score.
 - N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working.
 - S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or upside management.
 - meta_name should identify the repeatable meta cluster, not necessarily the ticker.
 - Use 0 and explain the missing evidence when a component is absent. Do not leave any N/I/C/S fields blank.
-- Use Core NICS++ only when N=1, I=1, and either C=1 or S=1. Otherwise use Scout or Non-NICS.
+- Use Core NICS++ only when NICS_score = 4. Otherwise use Scout or Non-NICS.
 - Do not populate meta_cluster_id, size_ok, zone_ok, cooldown_ok, counts_toward_50, hard_reset, running_count, non_nics_pnl_pct, or cluster_pnl_pct.
 
 Trades to grade:
@@ -1170,7 +1170,7 @@ Use null for any field the transcript / data genuinely doesn't speak to.
     "C_why": "<WHY_C_SCORE_WAS_OR_WAS_NOT_EARNED>",
     "S_score": <0_OR_1>,
     "S_why": "<WHY_S_SCORE_WAS_OR_WAS_NOT_EARNED>",
-    "NICS_score": <N_SCORE_PLUS_I_SCORE_PLUS_MAX_OF_C_OR_S>,
+    "NICS_score": <N_SCORE_PLUS_I_SCORE_PLUS_C_SCORE_PLUS_S_SCORE>,
     "trade_type": "<Core NICS++|Scout|Non-NICS|OTHER_SHORT_LABEL>",
     "llm_grade_notes": "<ONE_OR_TWO_SENTENCE_RECONCILIATION_NOTE>"
   }
@@ -1220,12 +1220,12 @@ Rules:
 **NICS / META CLUSTER SCORING:**
 - The NICS fields are REQUIRED on every output object: meta_name, N_score, N_why, I_score, I_why, C_score, C_why, S_score, S_why, NICS_score, trade_type, and llm_grade_notes. Do not omit them even when the score is 0.
 - Score N_score, I_score, C_score, and S_score as separate binary evidence fields.
-- NICS_score is the three-part unlock score: N_score + I_score + max(C_score, S_score). It ranges from 0 to 3.
+- NICS_score = N_score + I_score + C_score + S_score. It ranges from 0 to 4.
 - N = the trader clearly names the narrative/meta/setup being traded, not just the ticker. This is required for a counted trade.
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry. This is required for a counted trade.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working. C can come from exit commentary or the immediate post-trade note. "Dead" / "unclear" can earn C if it is the trader's stated exit reason, but flag it in llm_grade_notes because it needs review.
 - S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or how they manage upside after deciding to stay in.
-- A trade qualifies as Core NICS++ evidence when N_score = 1, I_score = 1, and either C_score = 1 or S_score = 1. Missing N, missing I, or missing both C and S should be Non-NICS unless another explicit label is clearly warranted.
+- A trade qualifies as Core NICS++ evidence when NICS_score = 4. Missing any N/I/C/S component should be Scout or Non-NICS unless another explicit label is clearly warranted.
 - meta_name should identify the repeatable meta cluster, not necessarily the ticker. If multiple tokens are lottery tickets for the same idea, use the same meta_name for them.
 - Do not populate meta_cluster_id. Leave it null; master sync assigns stable historical IDs such as M.260518.1.
 - Do not treat cooldown as a hard reset. If the transcript suggests a cooldown concern, mention it in llm_grade_notes, but the sync process will track cooldown separately.
@@ -1799,13 +1799,13 @@ function sumNicsScore(trade: TradeEvent): number | null {
   const i = binaryScoreOrNull(trade.I_score);
   const c = binaryScoreOrNull(trade.C_score);
   const s = binaryScoreOrNull(trade.S_score);
-  if (n === null || i === null || (c === null && s === null)) return null;
-  return n + i + Math.max(c ?? 0, s ?? 0);
+  if (n === null || i === null || c === null || s === null) return null;
+  return n + i + c + s;
 }
 
 function hasCountedNicsEvidence(trade: TradeEvent): boolean | null {
   const score = sumNicsScore(trade);
-  return score === null ? null : score >= 3;
+  return score === null ? null : score >= 4;
 }
 
 function binaryScoreOrNull(value: number | null | undefined): number | null {

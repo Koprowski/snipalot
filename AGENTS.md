@@ -437,6 +437,11 @@ Agent behavior:
  - Master XML rewrites no longer add a worksheet-level `autoFilter` over the Excel table filter; this was the cause of repeat sync outputs that Excel refused to open. Always keep an Excel-open validation pass after changing this writer.
  - Validation on 2026-05-19: fresh temp sync generated `Inputs\nics_response.json` for `20260519.1529 trade` from saved evidence, merged 9 NICS rows, rewrote the session workbook, and imported into a temp copy of the Statements master. Excel COM verified both temp workbooks open (`Master Trading Log` 337x55, `Trade Log` 10x55).
  - Validation/build: `npm test` passed on 2026-05-19. Local installer built at **`release/Snipalot-1.0.48-setup.exe`** with `npm run package:nopublish -- --config.win.signAndEditExecutable=false`. SHA256: `A90D67821A24B1B2F8B191F03BD5C7AE08AAF483EC499DB1DBB62F0D811B772A`. Build killed a stale installed `Snipalot.exe` first, then completed successfully.
+- **Trade sync wrapper alignment (2026-05-19):**
+ - `run-trade-sync.ps1` and `finalize-master-workbook.ps1` now resolve the same master workbook as the Node importer: explicit `-MasterPath`, `SNIPALOT_MASTER_TRADING_LOG`, then `Statements\master trading log.xlsx`, then root `master trading log.xlsx`.
+ - The wrapper forwards `-MasterPath` into both the Node importer (`--master`) and Excel finalizer, and its completion message prints the actual workbook finalized.
+ - The finalizer COM cleanup now ignores non-COM values returned by Excel calls, preventing cleanup from failing an otherwise successful finalization.
+ - Validation: temp `-RepairOnly` run against a root containing only `Statements\master trading log.xlsx` completed successfully and finalized the Statements workbook. Excel COM schema audit verified the live Statements `tblTrades` has 55 columns, range `A1:BC9`, and zero header mismatches against `tools\sync-master-trading-log.mjs`.
 
 ## Packaged app logs
 

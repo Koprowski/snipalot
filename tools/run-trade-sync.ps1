@@ -5,7 +5,8 @@ param(
   [switch]$ArchiveOnly,
   [switch]$TestMode,
   [switch]$NoArchive,
-  [switch]$ReplaceSourceRows
+  [switch]$ReplaceSourceRows,
+  [string]$MasterPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +15,21 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $syncScript = Join-Path $scriptDir "sync-master-trading-log.mjs"
 $finalizeScript = Join-Path $scriptDir "finalize-master-workbook.ps1"
 $node = "C:\Users\kopro\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
+
+function Resolve-DisplayMasterPath([string]$Root, [string]$RequestedMaster) {
+  if ($RequestedMaster) {
+    return [System.IO.Path]::GetFullPath($RequestedMaster)
+  }
+  if ($env:SNIPALOT_MASTER_TRADING_LOG) {
+    return [System.IO.Path]::GetFullPath($env:SNIPALOT_MASTER_TRADING_LOG)
+  }
+  $baseRoot = if ($Root) { $Root } else { Split-Path -Parent $scriptDir }
+  $statementsMaster = Join-Path (Join-Path $baseRoot "Statements") "master trading log.xlsx"
+  if (Test-Path -LiteralPath $statementsMaster) {
+    return $statementsMaster
+  }
+  return Join-Path $baseRoot "master trading log.xlsx"
+}
 
 if (-not (Test-Path -LiteralPath $node)) {
   $node = "node"
@@ -32,6 +48,9 @@ try {
   $args = @($syncScript)
   if ($CapturesRoot) {
     $args += @("--root", $CapturesRoot)
+  }
+  if ($MasterPath) {
+    $args += @("--master", $MasterPath)
   }
   if ($BackfillArchive) {
     $args += "--backfill-archive"
@@ -61,6 +80,9 @@ try {
     if ($CapturesRoot) {
       $finalizeArgs += @("-CapturesRoot", $CapturesRoot)
     }
+    if ($MasterPath) {
+      $finalizeArgs += @("-MasterPath", $MasterPath)
+    }
     & powershell.exe @finalizeArgs
     if ($LASTEXITCODE -ne 0) {
       throw "Excel workbook finalization failed with exit code $LASTEXITCODE."
@@ -71,9 +93,10 @@ try {
 }
 
 Write-Host ""
-$displayRoot = if ($CapturesRoot) { $CapturesRoot } else { "the Snipalot Captures folder" }
 if ($ArchiveOnly) {
+  $displayRoot = if ($CapturesRoot) { $CapturesRoot } else { "the Snipalot Captures folder" }
   Write-Host "Done. Completed current trade folders have been moved into $displayRoot\Archive."
 } else {
-  Write-Host "Done. $displayRoot\master trading log.xlsx has been recalculated and saved."
+  $displayMaster = Resolve-DisplayMasterPath $CapturesRoot $MasterPath
+  Write-Host "Done. $displayMaster has been recalculated and saved."
 }

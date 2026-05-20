@@ -1,5 +1,6 @@
 param(
-  [string]$CapturesRoot = ""
+  [string]$CapturesRoot = "",
+  [string]$MasterPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,7 +10,22 @@ if (-not $CapturesRoot) {
   $CapturesRoot = Split-Path -Parent $scriptDir
 }
 
-$masterPath = Join-Path $CapturesRoot "master trading log.xlsx"
+function Resolve-MasterPath([string]$Root, [string]$RequestedMaster) {
+  if ($RequestedMaster) {
+    return [System.IO.Path]::GetFullPath($RequestedMaster)
+  }
+  if ($env:SNIPALOT_MASTER_TRADING_LOG) {
+    return [System.IO.Path]::GetFullPath($env:SNIPALOT_MASTER_TRADING_LOG)
+  }
+
+  $statementsMaster = Join-Path (Join-Path $Root "Statements") "master trading log.xlsx"
+  if (Test-Path -LiteralPath $statementsMaster) {
+    return $statementsMaster
+  }
+  return Join-Path $Root "master trading log.xlsx"
+}
+
+$masterPath = Resolve-MasterPath $CapturesRoot $MasterPath
 if (-not (Test-Path -LiteralPath $masterPath)) {
   throw "Master workbook not found: $masterPath"
 }
@@ -20,7 +36,11 @@ $workbook = $null
 
 function Release-ComObjectQuietly($object) {
   if ($null -ne $object) {
-    [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($object)
+    try {
+      [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($object)
+    } catch {
+      # Some Excel calls return plain .NET values; only COM RCWs need release.
+    }
   }
 }
 

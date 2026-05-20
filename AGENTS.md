@@ -463,6 +463,9 @@ Agent behavior:
  - The row appears under the launcher buttons/shortcut hints and reads `Snipalot <version> is available. Click here to install.`
  - The launcher uses the same installer download/launch path as Settings and asks main to resize the launcher only while the update row is visible. Settings footer copy now also says `click here to install`.
  - May 4 reconstruction helper scripts were archived outside the repo at `E:\OneDrive\Snipalot Captures\Archive\developer-tools\20260520-may4-reconstruction-scripts` and removed from the working tree because they were one-off scripts with hard-coded local paths.
+- **Trade sync finalizer RPC hardening (local branch):**
+ - `tools\finalize-master-workbook.ps1` now wraps `Get-LastNonBlankRow()` cell reads in `Invoke-ExcelRetry`, fixing an Excel COM `RPC_E_CALL_REJECTED` failure while scanning `Analysis!Q`.
+ - The deployed copy at `E:\OneDrive\Snipalot Captures\Trade Sync Scripts\finalize-master-workbook.ps1` was updated. A clean rerun finalized `E:\OneDrive\Snipalot Captures\Statements\master trading log.xlsx` successfully (`tblTrades` `A1:BC361`, 55 columns).
 
 ## Packaged app logs
 

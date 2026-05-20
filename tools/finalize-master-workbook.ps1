@@ -68,7 +68,7 @@ function Invoke-ExcelRetry([scriptblock]$Action) {
 
 function Get-LastNonBlankRow($sheet, [string]$column, [int]$firstRow, [int]$lastRow) {
   for ($row = $lastRow; $row -ge $firstRow; $row--) {
-    $value = $sheet.Range("${column}${row}").Value2
+    $value = Invoke-ExcelRetry { $sheet.Range("${column}${row}").Value2 }
     if ($null -ne $value -and "$value" -ne "") {
       return $row
     }

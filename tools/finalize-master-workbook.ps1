@@ -177,7 +177,7 @@ try {
   $excel.EnableEvents = $false
   $excel.ScreenUpdating = $false
 
-  $workbook = $excel.Workbooks.Open($masterPath)
+  $workbook = Invoke-ExcelRetry { $excel.Workbooks.Open($masterPath) }
   Invoke-ExcelRetry { $excel.Calculation = -4135 } | Out-Null
   $master = $workbook.Worksheets.Item("Master Trading Log")
   $analysis = $workbook.Worksheets.Item("Analysis")

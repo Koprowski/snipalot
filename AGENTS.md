@@ -440,8 +440,9 @@ Agent behavior:
 - **Trade sync wrapper alignment (2026-05-19):**
  - `run-trade-sync.ps1` and `finalize-master-workbook.ps1` now resolve the same master workbook as the Node importer: explicit `-MasterPath`, `SNIPALOT_MASTER_TRADING_LOG`, then `Statements\master trading log.xlsx`, then root `master trading log.xlsx`.
  - The wrapper forwards `-MasterPath` into both the Node importer (`--master`) and Excel finalizer, and its completion message prints the actual workbook finalized.
- - The finalizer COM cleanup now ignores non-COM values returned by Excel calls, preventing cleanup from failing an otherwise successful finalization.
+ - The finalizer COM cleanup now ignores non-COM values returned by Excel calls, preventing cleanup from failing an otherwise successful finalization. Workbook open is also wrapped in the existing Excel retry loop because OneDrive can briefly hold the `.xlsx` after the Node writer closes it.
  - Validation: temp `-RepairOnly` run against a root containing only `Statements\master trading log.xlsx` completed successfully and finalized the Statements workbook. Excel COM schema audit verified the live Statements `tblTrades` has 55 columns, range `A1:BC9`, and zero header mismatches against `tools\sync-master-trading-log.mjs`.
+ - Test execution requested by user: ran live `Trade Sync Scripts\run-trade-sync.ps1 -CapturesRoot E:\OneDrive\Snipalot Captures -MasterPath E:\OneDrive\Snipalot Captures\Statements\master trading log_test.xlsx -NoArchive -ReplaceSourceRows`. The first run imported rows but hit an Excel RPC open race; after adding workbook-open retry, the rerun completed. Result: `master trading log_test.xlsx` opens, `tblTrades` is `A1:BC36`, and sessions imported `20260519.1529 trade` 9 rows, `20260519.1710 trade` 16 rows, `20260519.2002 trade` 2 rows, all with complete NICS judgment fields. `20260519.1954 trade` had no importable trade log and stayed skipped. No current trade folders were archived.
 
 ## Packaged app logs
 

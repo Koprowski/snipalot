@@ -26,6 +26,7 @@ import { createTray, updateTrayMenu, destroyTray } from './tray';
 import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
 import { writeSessionLog } from './session-log';
+import type { SessionLogStatus } from './session-log';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
@@ -88,6 +89,16 @@ let pendingRecorderStartRegion: RegionSelection | null = null;
 let pendingRecorderStartTimeout: NodeJS.Timeout | null = null;
 let captureSurfacesInitialized = false;
 
+interface PendingRecorderLifecycleEvent {
+  ts: string;
+  event: string;
+  details?: unknown;
+  status: SessionLogStatus;
+}
+
+const MAX_PENDING_RECORDER_LIFECYCLE_EVENTS = 250;
+let pendingRecorderLifecycleEvents: PendingRecorderLifecycleEvent[] = [];
+
 const LAUNCHER_WIDTH = 480;
 const LAUNCHER_BASE_HEIGHT = 218;
 const LAUNCHER_UPDATE_HEIGHT = 246;
@@ -97,6 +108,54 @@ function clearPendingRecorderStartTimeout(): void {
     clearTimeout(pendingRecorderStartTimeout);
     pendingRecorderStartTimeout = null;
   }
+}
+
+function resetRecorderLifecycleBuffer(reason: string): void {
+  pendingRecorderLifecycleEvents = [];
+  recordRecorderLifecycle('recorder lifecycle buffer reset', { reason }, 'start');
+}
+
+function recordRecorderLifecycle(
+  event: string,
+  details?: unknown,
+  status: SessionLogStatus = 'info'
+): void {
+  const ts = new Date().toISOString();
+  const enrichedDetails = {
+    appVersion: app.getVersion(),
+    appState,
+    currentSessionMode,
+    recorderMediaReady,
+    details,
+  };
+  log('recorder-lifecycle', event, enrichedDetails);
+  const sessionDir = liveSessionDir ?? activeProcessingRun?.sessionDir ?? pendingProcessing?.preCreatedSessionDir ?? null;
+  if (sessionDir) {
+    writeSessionLog(sessionDir, 'recorder', event, enrichedDetails, status, ts);
+    return;
+  }
+  pendingRecorderLifecycleEvents.push({ ts, event, details: enrichedDetails, status });
+  if (pendingRecorderLifecycleEvents.length > MAX_PENDING_RECORDER_LIFECYCLE_EVENTS) {
+    pendingRecorderLifecycleEvents.shift();
+  }
+}
+
+function flushPendingRecorderLifecycle(sessionDir: string): void {
+  const pending = pendingRecorderLifecycleEvents;
+  pendingRecorderLifecycleEvents = [];
+  for (const entry of pending) {
+    writeSessionLog(
+      sessionDir,
+      'recorder',
+      entry.event,
+      { bufferedBeforeSessionDir: true, ...(entry.details as Record<string, unknown>) },
+      entry.status,
+      entry.ts
+    );
+  }
+  writeSessionLog(sessionDir, 'recorder', 'recorder lifecycle buffer flushed', {
+    eventCount: pending.length,
+  }, 'info');
 }
 
 function resourcesRoot(): string {
@@ -760,6 +819,7 @@ function createRecorderWindow(): BrowserWindow {
   win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html'));
   win.webContents.on('did-finish-load', () => {
     log('recorder', 'window finished load');
+    recordRecorderLifecycle('recorder window finished load');
     // Fallback: if renderer-ready IPC is missing due preload/runtime quirks,
     // still dispatch queued start once the page has loaded.
     if (pendingRecorderStartRegion && !win.isDestroyed()) {
@@ -768,6 +828,7 @@ function createRecorderWindow(): BrowserWindow {
       clearPendingRecorderStartTimeout();
       win.webContents.send('recorder:start', queued);
       log('recorder', 'dispatched queued start after did-finish-load fallback');
+      recordRecorderLifecycle('recorder start dispatched after load fallback', { region: queued }, 'start');
     }
   });
   win.webContents.on(
@@ -779,6 +840,12 @@ function createRecorderWindow(): BrowserWindow {
         validatedURL,
         isMainFrame,
       });
+      recordRecorderLifecycle('recorder window failed load', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      }, 'error');
     }
   );
   win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
@@ -786,15 +853,21 @@ function createRecorderWindow(): BrowserWindow {
   });
   win.webContents.on('preload-error', (_event, preloadPath, error) => {
     log('recorder', 'preload error', { preloadPath, err: error.message });
+    recordRecorderLifecycle('recorder preload error', {
+      preloadPath,
+      error: error.message,
+    }, 'error');
   });
   win.webContents.on('render-process-gone', (_event, details) => {
     recorderRendererReady = false;
     log('recorder', 'renderer process gone', details);
+    recordRecorderLifecycle('recorder renderer process gone', details, 'error');
   });
   win.on('closed', () => {
     recorderRendererReady = false;
     pendingRecorderStartRegion = null;
     clearPendingRecorderStartTimeout();
+    recordRecorderLifecycle('recorder window closed', undefined, 'warning');
   });
   if (isDebug) win.webContents.openDevTools({ mode: 'detach' });
   return win;
@@ -3665,7 +3738,14 @@ async function discardRecording(reason: string): Promise<void> {
 
   // Tell the recorder to finalize (so the MediaRecorder unwinds cleanly
   // and releases mic/screen streams), even though we'll discard the buffer.
-  if (recorderWindow) recorderWindow.webContents.send('recorder:stop');
+  if (recorderWindow) {
+    recordRecorderLifecycle('main sending recorder stop', {
+      reason,
+      pendingProcessing: Boolean(pendingProcessing),
+      activeProcessingRun: Boolean(activeProcessingRun),
+    }, 'start');
+    recorderWindow.webContents.send('recorder:stop');
+  }
 
   // Drop straight back to idle (no processing state — nothing's processing).
   setAppState('idle', `discard: ${reason}`);
@@ -3755,6 +3835,10 @@ function stopRecording(reason: string): void {
   // sit in 'processing' forever waiting for save-webm. Bail out cleanly.
   if (!recorderMediaReady) {
     log('main', 'stopRecording: recorder never reported started — cannot finalize');
+    recordRecorderLifecycle('main stop requested before recorder media ready', {
+      reason,
+      appState,
+    }, 'error');
     writeSessionLog(liveSessionDir, 'recorder', 'stop requested before recorder was media-ready', {
       reason,
       appState,
@@ -3777,7 +3861,10 @@ function stopRecording(reason: string): void {
     }
     if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
     broadcastOverlay('overlay:recording-stopped');
-    if (recorderWindow) recorderWindow.webContents.send('recorder:stop');
+    if (recorderWindow) {
+      recordRecorderLifecycle('main sending recorder stop after failed start', { reason }, 'start');
+      recorderWindow.webContents.send('recorder:stop');
+    }
     recorderMediaReady = false;
     return;
   }
@@ -3852,7 +3939,14 @@ function stopRecording(reason: string): void {
 
   // Tell the recorder to finalize its stream. The webm buffer arrives
   // later via the save-webm IPC — we don't wait for it here.
-  if (recorderWindow) recorderWindow.webContents.send('recorder:stop');
+  if (recorderWindow) {
+    recordRecorderLifecycle('main sending recorder stop', {
+      reason,
+      pendingProcessing: Boolean(pendingProcessing),
+      activeProcessingRun: Boolean(activeProcessingRun),
+    }, 'start');
+    recorderWindow.webContents.send('recorder:stop');
+  }
 
   // Clear UI IMMEDIATELY so the user doesn't see annotations + HUD frozen
   // while ffmpeg/whisper grind away in the background. Transition through
@@ -3918,12 +4012,42 @@ ipcMain.handle('log', (_evt, scope: string, ...args: unknown[]) => {
   log(`r:${scope}`, ...args);
 });
 
+ipcMain.handle(
+  'recorder:lifecycle',
+  (_evt, payload: { event?: unknown; details?: unknown; status?: unknown }) => {
+    const event = typeof payload?.event === 'string' && payload.event.trim()
+      ? payload.event.trim()
+      : 'renderer lifecycle event';
+    const allowedStatuses: SessionLogStatus[] = [
+      'info',
+      'start',
+      'success',
+      'warning',
+      'error',
+      'timeout',
+      'skipped',
+    ];
+    const status = allowedStatuses.includes(payload?.status as SessionLogStatus)
+      ? payload.status as SessionLogStatus
+      : 'info';
+    recordRecorderLifecycle(event, payload?.details, status);
+    return { ok: true };
+  }
+);
+
 // ─── IPC: overlay ↔ main ──────────────────────────────────────────────
 
 function dispatchRecorderStart(region: RegionSelection): void {
+  resetRecorderLifecycleBuffer('new recorder start dispatch');
+  recordRecorderLifecycle('recorder start dispatch requested', {
+    region,
+    rendererReady: recorderRendererReady,
+    hasRecorderWindow: Boolean(recorderWindow && !recorderWindow.isDestroyed()),
+  }, 'start');
   if (!recorderWindow || recorderWindow.isDestroyed()) {
     recorderWindow = createRecorderWindow();
     log('recorder', 'recorder window recreated before start dispatch');
+    recordRecorderLifecycle('recorder window recreated before start dispatch', undefined, 'start');
   }
   if (!recorderRendererReady) {
     pendingRecorderStartRegion = region;
@@ -3932,6 +4056,10 @@ function dispatchRecorderStart(region: RegionSelection): void {
       pendingRecorderStartTimeout = null;
       if (!pendingRecorderStartRegion || appState !== 'recording') return;
       log('recorder', 'renderer readiness timeout; aborting recording start');
+      recordRecorderLifecycle('recorder readiness timeout before start', {
+        appState,
+        hasPendingStartRegion: Boolean(pendingRecorderStartRegion),
+      }, 'timeout');
       pendingRecorderStartRegion = null;
       recorderMediaReady = false;
       pendingRegion = null;
@@ -3951,12 +4079,14 @@ function dispatchRecorderStart(region: RegionSelection): void {
       );
     }, 5000);
     log('recorder', 'queued start; recorder renderer not ready yet');
+    recordRecorderLifecycle('recorder start queued because renderer not ready', { region }, 'start');
     return;
   }
   pendingRecorderStartRegion = null;
   clearPendingRecorderStartTimeout();
   recorderWindow.webContents.send('recorder:start', region);
   log('recorder', 'dispatched start to recorder renderer');
+  recordRecorderLifecycle('recorder start sent to renderer', { region }, 'start');
 }
 
 ipcMain.handle('overlay:set-interactive', (_evt, displayId: string, interactive: boolean) => {
@@ -4090,11 +4220,13 @@ ipcMain.handle('recorder:ready', () => {
   recorderRendererReady = true;
   clearPendingRecorderStartTimeout();
   log('recorder', 'renderer signaled ready');
+  recordRecorderLifecycle('recorder renderer signaled ready', undefined, 'success');
   if (pendingRecorderStartRegion && recorderWindow && !recorderWindow.isDestroyed()) {
     const queued = pendingRecorderStartRegion;
     pendingRecorderStartRegion = null;
     recorderWindow.webContents.send('recorder:start', queued);
     log('recorder', 'flushed queued start to recorder renderer');
+    recordRecorderLifecycle('queued recorder start flushed to renderer', { region: queued }, 'start');
   }
 });
 
@@ -4118,6 +4250,9 @@ ipcMain.handle('recorder:prepare-display-capture', () => {
   overlayPrecaptureDepth += 1;
   if (overlayPrecaptureDepth === 1) {
     log('recorder', 'prepare-display-capture: lowering overlays for screen picker');
+    recordRecorderLifecycle('prepare display capture', {
+      overlayCount: overlayWindows.size,
+    });
     for (const win of overlayWindows.values()) {
       if (!win.isDestroyed()) win.setAlwaysOnTop(false);
     }
@@ -4128,6 +4263,9 @@ ipcMain.handle('recorder:restore-display-capture', () => {
   overlayPrecaptureDepth = Math.max(0, overlayPrecaptureDepth - 1);
   if (overlayPrecaptureDepth === 0) {
     log('recorder', 'restore-display-capture: re-raising overlays');
+    recordRecorderLifecycle('restore display capture', {
+      overlayCount: overlayWindows.size,
+    });
     for (const win of overlayWindows.values()) {
       if (!win.isDestroyed()) win.setAlwaysOnTop(true, 'screen-saver');
     }
@@ -4139,6 +4277,12 @@ ipcMain.handle(
   (_evt, payload: { buffer: ArrayBuffer; filepath: string }) => {
     const buf = Buffer.from(payload.buffer);
     log('recorder', 'save-webm received', { bytes: buf.length });
+    recordRecorderLifecycle('main received save-webm', {
+      bytes: buf.length,
+      filepath: payload.filepath,
+      hasPendingProcessing: Boolean(pendingProcessing),
+      pendingDiscard,
+    }, buf.length > 0 ? 'success' : 'error');
 
     // Discard path: user pressed Discard mid-recording. Throw the buffer
     // away (no pipeline, no clipboard, no files), clear the flag, return.
@@ -4311,6 +4455,11 @@ ipcMain.handle(
     micDiagnostics?: unknown
   ) => {
     log('recorder', 'state', { state, detail, hasMicDiagnostics: Boolean(micDiagnostics) });
+    recordRecorderLifecycle('main received recorder state', {
+      state,
+      detail,
+      hasMicDiagnostics: Boolean(micDiagnostics),
+    }, state === 'error' ? 'error' : 'info');
 
     if (state === 'started') {
       // Confirm transition (we already moved to 'recording' on region-confirmed).
@@ -4341,6 +4490,7 @@ ipcMain.handle(
         displayId: activeDisplayId,
         sourceId: activeSourceId,
       }, 'start');
+      flushPendingRecorderLifecycle(liveSessionDir);
 
       if (isMicDiagnosticsPayload(micDiagnostics)) {
         const d = micDiagnostics;

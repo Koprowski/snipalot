@@ -11,6 +11,7 @@ interface Window {
   snipalotRecorder: {
     reportReady: () => Promise<void>;
     mainLog: (line: string) => Promise<void>;
+    lifecycle: (event: string, details?: unknown, status?: string) => Promise<void>;
     prepareDisplayCapture: () => Promise<void>;
     restoreDisplayCapture: () => Promise<void>;
     getOutputPath: () => Promise<string>;

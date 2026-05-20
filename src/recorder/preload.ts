@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('snipalotRecorder', {
   reportReady: () => ipcRenderer.invoke('recorder:ready'),
   /** Lines land in main snipalot.log (same file as other scopes). */
   mainLog: (line: string) => ipcRenderer.invoke('log', 'recorder', line),
+  lifecycle: (event: string, details?: unknown, status?: string) =>
+    ipcRenderer.invoke('recorder:lifecycle', { event, details, status }),
   /** Lower fullscreen overlays so Windows' screen-share picker is not hidden behind them. */
   prepareDisplayCapture: () => ipcRenderer.invoke('recorder:prepare-display-capture'),
   /** Restore overlay always-on-top after getDisplayMedia completes or fails. */

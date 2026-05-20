@@ -43,6 +43,9 @@ let sourceVideo: HTMLVideoElement | null = null;
 let cropCanvas: HTMLCanvasElement | null = null;
 let rafHandle: number | null = null;
 let pendingFilepath: string | null = null;
+let chunkCount = 0;
+let chunkBytes = 0;
+let lastChunkLifecycleAtMs = 0;
 
 function log(line: string): void {
   const ts = new Date().toLocaleTimeString();
@@ -50,6 +53,10 @@ function log(line: string): void {
   logEl.scrollTop = logEl.scrollHeight;
   console.log(`[recorder] ${line}`);
   void window.snipalotRecorder.mainLog(line);
+}
+
+function lifecycle(event: string, details?: Record<string, unknown>, status: string = 'info'): void {
+  void window.snipalotRecorder.lifecycle(event, details, status);
 }
 
 function pickJsonSafeSettings(track: MediaStreamTrack): Record<string, unknown> {
@@ -113,8 +120,14 @@ async function collectMicDiagnostics(
 }
 
 async function startRecording(region: RecorderRegion): Promise<void> {
+  lifecycle('renderer start received', { region }, 'start');
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     log('already recording, ignoring start');
+    lifecycle('renderer start ignored because already recording', {
+      mediaRecorderState: mediaRecorder.state,
+      chunkCount,
+      chunkBytes,
+    }, 'warning');
     return;
   }
 
@@ -124,6 +137,7 @@ async function startRecording(region: RecorderRegion): Promise<void> {
     // Windows: fullscreen overlay is alwaysOnTop 'screen-saver' — the OS
     // screen-share dialog can open behind it; main lowers overlays first.
     log('calling getDisplayMedia (watch for Windows "pick what to share")…');
+    lifecycle('getDisplayMedia requested', { frameRate: 30 });
     await window.snipalotRecorder.prepareDisplayCapture();
     try {
       displayStream = await navigator.mediaDevices.getDisplayMedia({
@@ -134,6 +148,18 @@ async function startRecording(region: RecorderRegion): Promise<void> {
       await window.snipalotRecorder.restoreDisplayCapture();
     }
     log('getDisplayMedia resolved');
+    const displayTracks = displayStream.getVideoTracks();
+    lifecycle('getDisplayMedia resolved', {
+      videoTrackCount: displayTracks.length,
+      tracks: displayTracks.map((t) => ({
+        label: t.label,
+        id: t.id,
+        enabled: t.enabled,
+        muted: t.muted,
+        readyState: t.readyState,
+        settings: pickJsonSafeSettings(t),
+      })),
+    }, displayTracks.length > 0 ? 'success' : 'warning');
 
     // 2. Pipe the stream into a hidden video element so we can read frames.
     sourceVideo = document.createElement('video');
@@ -162,6 +188,15 @@ async function startRecording(region: RecorderRegion): Promise<void> {
     // Even dimensions help encoders (especially vp9).
     const outW = cropW % 2 === 0 ? cropW : cropW - 1;
     const outH = cropH % 2 === 0 ? cropH : cropH - 1;
+    lifecycle('recording crop computed', {
+      sourceWidth: srcW,
+      sourceHeight: srcH,
+      cropX,
+      cropY,
+      cropWidth: outW,
+      cropHeight: outH,
+      region,
+    });
 
     log(`source ${srcW}×${srcH}  →  crop ${outW}×${outH} at (${cropX},${cropY})`);
 
@@ -186,10 +221,15 @@ async function startRecording(region: RecorderRegion): Promise<void> {
     // 4. Mic (best-effort). No system audio in this build.
     let micGetUserMediaError: string | null = null;
     try {
+      lifecycle('getUserMedia audio requested');
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      lifecycle('getUserMedia audio resolved', {
+        audioTrackCount: micStream.getAudioTracks().length,
+      }, 'success');
     } catch (err) {
       micGetUserMediaError = (err as Error).message;
       log(`mic unavailable, continuing without audio: ${micGetUserMediaError}`);
+      lifecycle('getUserMedia audio failed', { error: micGetUserMediaError }, 'warning');
       micStream = null;
     }
     const micDiagnostics = await collectMicDiagnostics(micStream, micGetUserMediaError);
@@ -213,24 +253,62 @@ async function startRecording(region: RecorderRegion): Promise<void> {
     for (const t of displayStream.getVideoTracks()) {
       t.addEventListener('ended', () => {
         log('display track ended; stopping');
+        lifecycle('display track ended', {
+          label: t.label,
+          id: t.id,
+          readyState: t.readyState,
+        }, 'warning');
         stopRecording();
       });
     }
 
     chunks = [];
+    chunkCount = 0;
+    chunkBytes = 0;
+    lastChunkLifecycleAtMs = 0;
     const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
       ? 'video/webm;codecs=vp9,opus'
       : 'video/webm';
     mediaRecorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 4_000_000 });
+    lifecycle('MediaRecorder constructed', {
+      mimeType,
+      videoBitsPerSecond: 4_000_000,
+      combinedVideoTracks: combined.getVideoTracks().length,
+      combinedAudioTracks: combined.getAudioTracks().length,
+    });
 
     mediaRecorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) chunks.push(e.data);
+      if (e.data && e.data.size > 0) {
+        chunks.push(e.data);
+        chunkCount += 1;
+        chunkBytes += e.data.size;
+        const now = Date.now();
+        if (chunkCount === 1 || now - lastChunkLifecycleAtMs >= 10_000) {
+          lastChunkLifecycleAtMs = now;
+          lifecycle('MediaRecorder data chunk', {
+            chunkCount,
+            chunkBytes,
+            lastChunkBytes: e.data.size,
+            mediaRecorderState: mediaRecorder?.state ?? null,
+          });
+        }
+      }
     };
 
     mediaRecorder.onstop = async () => {
       log('stopped; assembling blob');
+      lifecycle('MediaRecorder onstop fired', {
+        chunkCount,
+        chunkBytes,
+      }, 'start');
       const blob = new Blob(chunks, { type: 'video/webm' });
       const buffer = await blob.arrayBuffer();
+      lifecycle('webm blob assembled', {
+        blobBytes: blob.size,
+        bufferBytes: buffer.byteLength,
+        chunkCount,
+        chunkBytes,
+      }, blob.size > 0 ? 'success' : 'error');
       // Tell main we're done capturing BEFORE starting the save. Main's
       // save-webm handler is now fire-and-forget (returns immediately while
       // the pipeline runs in the background), so reporting first gives main
@@ -239,27 +317,49 @@ async function startRecording(region: RecorderRegion): Promise<void> {
       window.snipalotRecorder.reportState('stopped');
       cleanup();
       const filepath = pendingFilepath ?? (await window.snipalotRecorder.getOutputPath());
+      lifecycle('save-webm ipc sending', {
+        filepath,
+        bufferBytes: buffer.byteLength,
+      }, 'start');
       const result = await window.snipalotRecorder.saveWebm({ buffer, filepath });
       log(`save-webm IPC returned: ${JSON.stringify(result)}`);
+      lifecycle('save-webm ipc returned', result as Record<string, unknown>, 'success');
     };
 
     pendingFilepath = await window.snipalotRecorder.getOutputPath();
+    lifecycle('temp output path assigned', { pendingFilepath });
     mediaRecorder.start(250);
+    lifecycle('MediaRecorder started', {
+      pendingFilepath,
+      state: mediaRecorder.state,
+      timesliceMs: 250,
+    }, 'success');
     log(`recording started → ${pendingFilepath}`);
     window.snipalotRecorder.reportState('started', undefined, micDiagnostics);
   } catch (err) {
     const msg = (err as Error).message;
     log(`start failed: ${msg}`);
+    lifecycle('renderer start failed', { error: msg }, 'error');
     cleanup();
     window.snipalotRecorder.reportState('error', msg);
   }
 }
 
 function stopRecording(): void {
+  lifecycle('renderer stop received', {
+    hasMediaRecorder: Boolean(mediaRecorder),
+    mediaRecorderState: mediaRecorder?.state ?? null,
+    chunkCount,
+    chunkBytes,
+  }, 'start');
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   } else {
     log('no active recording to stop');
+    lifecycle('renderer stop ignored because no active recorder', {
+      hasMediaRecorder: Boolean(mediaRecorder),
+      mediaRecorderState: mediaRecorder?.state ?? null,
+    }, 'warning');
   }
 }
 
@@ -278,6 +378,13 @@ function resumeRecording(): void {
 }
 
 function cleanup(): void {
+  lifecycle('renderer cleanup started', {
+    hasCanvasStream: Boolean(canvasStream),
+    hasDisplayStream: Boolean(displayStream),
+    hasMicStream: Boolean(micStream),
+    chunkCount,
+    chunkBytes,
+  });
   if (rafHandle !== null) {
     cancelAnimationFrame(rafHandle);
     rafHandle = null;
@@ -300,11 +407,16 @@ function cleanup(): void {
   }
   cropCanvas = null;
   mediaRecorder = null;
+  lifecycle('renderer cleanup complete', {
+    chunkCount,
+    chunkBytes,
+  });
 }
 
 // ─── wiring ──────────────────────────────────────────────────────────
 
 window.snipalotRecorder.onStart((region) => {
+  lifecycle('recorder:start ipc received', { region }, 'start');
   startRecording(region);
 });
 
@@ -323,6 +435,7 @@ window.snipalotRecorder.onSnap(() => {
 });
 
 window.snipalotRecorder.onStop(() => {
+  lifecycle('recorder:stop ipc received', undefined, 'start');
   stopRecording();
 });
 
@@ -335,4 +448,5 @@ window.snipalotRecorder.onResume(() => {
 });
 
 void window.snipalotRecorder.reportReady();
+lifecycle('renderer ready reported');
 log('recorder ready · awaiting region-select');

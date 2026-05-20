@@ -77,14 +77,15 @@ export function writeSessionLog(
   phase: string,
   event: string,
   details?: unknown,
-  status: SessionLogStatus = 'info'
+  status: SessionLogStatus = 'info',
+  ts?: string
 ): void {
   if (!sessionDir) return;
   try {
     const inputsDir = sessionInputsDir(sessionDir);
     fs.mkdirSync(inputsDir, { recursive: true });
     const entry = {
-      ts: new Date().toISOString(),
+      ts: ts ?? new Date().toISOString(),
       phase,
       event,
       status,
@@ -95,4 +96,3 @@ export function writeSessionLog(
     // Session diagnostics must never interfere with capture or processing.
   }
 }
-

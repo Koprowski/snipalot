@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.53)
+## Recent improvements (v1.0.1 onward; current release v1.0.55)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -479,6 +479,10 @@ Agent behavior:
  - Main now writes session-local diagnostics when stop is requested before MediaRecorder is ready, when stop is snapshotted for processing, and when the processing watchdog fires before `save-webm`/pipeline completion.
  - Future `mic_diagnostics.json` files include `appVersion` so support can correlate capture failures with the installed Snipalot build.
  - Trade extraction parsing now skips spoken-only rows with no `token_name` and no `mockape_trade_id` instead of rejecting the whole response. This prevents one non-executed setup/musing from blocking matched trades from generating `trade_log.xlsx`.
+- **Recorder lifecycle flight recorder (v1.0.55 local branch):**
+ - Recorder renderer now emits sanitized lifecycle events for start receipt, `getDisplayMedia`, mic capture, crop computation, MediaRecorder creation/start, first and periodic data chunks, stop receipt, `onstop`, WebM blob assembly, and `save-webm` IPC handoff.
+ - Main buffers recorder lifecycle events that occur before the session folder exists, then flushes them into `Inputs/processing_log.jsonl` once `liveSessionDir` is created. This is meant to distinguish future missing-recording failures: no stop sent, renderer crash, no `onstop`, zero-byte blob, or missing main `save-webm`.
+ - Validation: `npm.cmd test` passed after the lifecycle IPC/preload/session-log changes.
 
 ## Packaged app logs
 

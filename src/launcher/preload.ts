@@ -28,6 +28,19 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     | { ok: true; mode: 'file' | 'text'; path: string; bytes: number }
     | { ok: false; error: string }
   > => ipcRenderer.invoke('launcher:copy-support-log'),
+  checkForUpdates: (): Promise<{
+    ok: boolean;
+    currentVersion: string;
+    latestVersion: string | null;
+    releaseUrl: string;
+    updateAvailable: boolean;
+    message: string;
+    installerAssetUrl?: string | null;
+  }> => ipcRenderer.invoke('launcher:check-for-updates'),
+  installUpdate: (): Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }> =>
+    ipcRenderer.invoke('launcher:install-update'),
+  setUpdateBannerVisible: (visible: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('launcher:set-update-banner-visible', visible),
   settings: () => ipcRenderer.invoke('launcher:settings'),
   exitApp: (): Promise<boolean> => ipcRenderer.invoke('settings:exit-app'),
   toggleMinimize: () => ipcRenderer.invoke('launcher:toggle-minimize'),

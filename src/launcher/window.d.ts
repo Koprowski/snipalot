@@ -21,6 +21,17 @@ interface Window {
       | { ok: true; mode: 'file' | 'text'; path: string; bytes: number }
       | { ok: false; error: string }
     >;
+    checkForUpdates: () => Promise<{
+      ok: boolean;
+      currentVersion: string;
+      latestVersion: string | null;
+      releaseUrl: string;
+      updateAvailable: boolean;
+      message: string;
+      installerAssetUrl?: string | null;
+    }>;
+    installUpdate: () => Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }>;
+    setUpdateBannerVisible: (visible: boolean) => Promise<boolean>;
     settings: () => Promise<void>;
     exitApp: () => Promise<boolean>;
     toggleMinimize: () => Promise<void>;

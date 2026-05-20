@@ -610,7 +610,7 @@ function setUpdateFooterFromResult(
     return;
   }
   if (update.updateAvailable && update.latestVersion) {
-    versionLabelEl.textContent = `Version: ${installedVersion} · ${update.latestVersion} available - install`;
+    versionLabelEl.textContent = `Version: ${installedVersion} · ${update.latestVersion} available - click here to install`;
     versionLabelEl.classList.add('can-install');
     versionLabelEl.classList.remove('can-retry');
     versionLabelEl.disabled = false;

@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.36)
+## Recent improvements (v1.0.1 onward; current release v1.0.53)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -458,6 +458,11 @@ Agent behavior:
  - The parent output root still receives a best-effort `recording.mp4` copy for the "latest recording" convenience, but GIF, transcript, frame extraction, and trade pipeline all use the session-local MP4. This prevents overlapping processing runs from overwriting each other's media and leaves a reviewable MP4 in failed/incomplete session folders.
  - `Inputs/processing_log.jsonl` now records session WebM write, session MP4 write, latest-copy success/failure, and WebM cleanup/retention.
  - `organizeTradeSessionRoot()` keeps root `recording.mp4` alongside GIF, `prompt.txt`, `transcript.txt`, `trade_log.xlsx`, and `trade_log.md`; Abandon still deletes the whole session folder by design and its UI copy reflects that.
+- **Launcher update notice (v1.0.53 local branch):**
+ - The primary launcher checks GitHub releases on startup and only shows an update row when an installer update is available.
+ - The row appears under the launcher buttons/shortcut hints and reads `Snipalot <version> is available. Click here to install.`
+ - The launcher uses the same installer download/launch path as Settings and asks main to resize the launcher only while the update row is visible. Settings footer copy now also says `click here to install`.
+ - May 4 reconstruction helper scripts were archived outside the repo at `E:\OneDrive\Snipalot Captures\Archive\developer-tools\20260520-may4-reconstruction-scripts` and removed from the working tree because they were one-off scripts with hard-coded local paths.
 
 ## Packaged app logs
 

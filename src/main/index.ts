@@ -14,6 +14,7 @@ import {
   shell,
   nativeImage,
 } from 'electron';
+import type { WebContents } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -86,6 +87,10 @@ let recorderRendererReady = false;
 let pendingRecorderStartRegion: RegionSelection | null = null;
 let pendingRecorderStartTimeout: NodeJS.Timeout | null = null;
 let captureSurfacesInitialized = false;
+
+const LAUNCHER_WIDTH = 480;
+const LAUNCHER_BASE_HEIGHT = 218;
+const LAUNCHER_UPDATE_HEIGHT = 246;
 
 function clearPendingRecorderStartTimeout(): void {
   if (pendingRecorderStartTimeout) {
@@ -799,10 +804,10 @@ function createLauncherWindow(): BrowserWindow {
   const primary = screen.getPrimaryDisplay();
   // Bumped to 480 to fit three primary actions side by side
   // (Record + Screenshot + Trade) without label truncation.
-  const w = 480;
+  const w = LAUNCHER_WIDTH;
   // Custom title bar 28px + content includes the launcher capture-mode
   // segmented control, action row, shortcuts, hint, and processing bar.
-  const h = 218;
+  const h = LAUNCHER_BASE_HEIGHT;
   const margin = 16;
   const x = primary.workArea.x + primary.workArea.width - w - margin;
   const y = primary.workArea.y + margin;
@@ -1695,6 +1700,10 @@ ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateChe
   return getSnipalotUpdateCheckResult('settings');
 });
 
+ipcMain.handle('launcher:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
+  return getSnipalotUpdateCheckResult('launcher');
+});
+
 ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
   const target = url && /^https?:\/\//i.test(url)
     ? url
@@ -1764,7 +1773,10 @@ async function launchUpdateInstaller(installerPath: string): Promise<void> {
   });
 }
 
-ipcMain.handle('settings:download-and-install-update', async (evt): Promise<SettingsUpdateInstallResult> => {
+async function downloadAndInstallSnipalotUpdate(
+  sender: WebContents,
+  source: 'settings' | 'launcher'
+): Promise<SettingsUpdateInstallResult> {
   const currentVersion = app.getVersion();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
@@ -1789,14 +1801,14 @@ ipcMain.handle('settings:download-and-install-update', async (evt): Promise<Sett
     }
     const updateDir = path.join(os.tmpdir(), 'snipalot-updates');
     installerPath = path.join(updateDir, safeUpdateInstallerName(release.installerAssetName));
-    log('settings', 'update download start', {
+    log(source, 'update download start', {
       currentVersion,
       latestVersion: release.version,
       installerName: release.installerAssetName,
     });
     const sendProgress = (progress: DownloadProgress) => {
-      if (evt.sender.isDestroyed()) return;
-      evt.sender.send('settings:update-download-progress', {
+      if (sender.isDestroyed()) return;
+      sender.send('settings:update-download-progress', {
         version: release.version,
         installerName: release.installerAssetName,
         ...progress,
@@ -1807,7 +1819,7 @@ ipcMain.handle('settings:download-and-install-update', async (evt): Promise<Sett
       onProgress: sendProgress,
     });
     sendProgress({ downloadedBytes: bytes, totalBytes: bytes, percent: 100 });
-    log('settings', 'update download complete', { installerPath, bytes });
+    log(source, 'update download complete', { installerPath, bytes });
     await launchUpdateInstaller(installerPath);
     setTimeout(() => requestAppExit(`install update v${release.version}`), 750);
     return {
@@ -1818,7 +1830,7 @@ ipcMain.handle('settings:download-and-install-update', async (evt): Promise<Sett
     };
   } catch (err) {
     const message = (err as Error).message;
-    log('settings', 'download-and-install-update failed', { err: message });
+    log(source, 'download-and-install-update failed', { err: message });
     if (installerPath && fs.existsSync(installerPath)) {
       shell.showItemInFolder(installerPath);
       return {
@@ -1836,6 +1848,14 @@ ipcMain.handle('settings:download-and-install-update', async (evt): Promise<Sett
   } finally {
     clearTimeout(timeout);
   }
+}
+
+ipcMain.handle('settings:download-and-install-update', async (evt): Promise<SettingsUpdateInstallResult> => {
+  return downloadAndInstallSnipalotUpdate(evt.sender, 'settings');
+});
+
+ipcMain.handle('launcher:install-update', async (evt): Promise<SettingsUpdateInstallResult> => {
+  return downloadAndInstallSnipalotUpdate(evt.sender, 'launcher');
 });
 
 function sanitizeSettingsPartialForLog(
@@ -4649,6 +4669,17 @@ ipcMain.handle('launcher:get-pin-state', () => {
 });
 
 ipcMain.handle('launcher:get-capture-mode', () => getConfig().capture.mode);
+
+ipcMain.handle('launcher:set-update-banner-visible', (_evt, visible: boolean) => {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return false;
+  const nextHeight = visible ? LAUNCHER_UPDATE_HEIGHT : LAUNCHER_BASE_HEIGHT;
+  const [currentWidth, currentHeight] = launcherWindow.getSize();
+  if (currentWidth !== LAUNCHER_WIDTH || currentHeight !== nextHeight) {
+    launcherWindow.setSize(LAUNCHER_WIDTH, nextHeight, false);
+    log('launcher', 'resize for update banner', { visible, height: nextHeight });
+  }
+  return true;
+});
 
 ipcMain.handle('launcher:set-capture-mode', (_evt, mode: 'region' | 'fullscreen' | 'window') => {
   const nextMode = mode === 'fullscreen' ? 'fullscreen' : mode === 'window' ? 'window' : 'region';

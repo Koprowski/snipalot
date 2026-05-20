@@ -25,6 +25,8 @@ const hintEl = document.getElementById('hint')!;
 const hkRecordEl = document.getElementById('hk-record')!;
 const hkScreenshotEl = document.getElementById('hk-screenshot')!;
 const hkTradeEl = document.getElementById('hk-trade')!;
+const launcherUpdateEl = document.getElementById('launcher-update') as HTMLButtonElement;
+const launcherUpdateLabelEl = document.getElementById('launcher-update-label')!;
 const captureModeEl = document.querySelector('.capture-mode') as HTMLDivElement;
 const captureModeButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('.capture-mode-btn')
@@ -55,6 +57,10 @@ let currentVisibleActions = {
   screenshot: true,
   trade: false,
 };
+let availableUpdateVersion: string | null = null;
+let availableUpdateHasInstaller = false;
+let updateInstallInProgress = false;
+let updateBannerVisible: boolean | null = null;
 // Tracks whether the active recording is record-mode or trade-mode (both
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';
@@ -107,6 +113,7 @@ function renderLauncherImpl(): void {
   const visibleCount = [shouldShowRecord, shouldShowScreenshot, shouldShowTrade].filter(Boolean).length;
   document.body.dataset.visibleActionCount = String(Math.max(1, visibleCount));
   renderCaptureModeButtons();
+  renderLauncherUpdate();
 
   // Disable the off-action buttons while another mode is mid-flight so the
   // user can't accidentally start a different mode partway through.
@@ -197,6 +204,25 @@ function formatProgressTime(sec: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function renderLauncherUpdate(): void {
+  const shouldShow = Boolean(availableUpdateVersion);
+  launcherUpdateEl.hidden = !shouldShow;
+  if (updateBannerVisible !== shouldShow) {
+    updateBannerVisible = shouldShow;
+    void window.snipalotLauncher.setUpdateBannerVisible(shouldShow).catch((err) => {
+      window.snipalotLauncher.log('update-banner-resize', 'fail', { message: (err as Error).message });
+    });
+  }
+  if (!shouldShow) return;
+  launcherUpdateEl.disabled = updateInstallInProgress || !availableUpdateHasInstaller;
+  launcherUpdateLabelEl.textContent = updateInstallInProgress
+    ? `Installing Snipalot ${availableUpdateVersion}...`
+    : `Snipalot ${availableUpdateVersion} is available. Click here to install.`;
+  launcherUpdateEl.title = availableUpdateHasInstaller
+    ? `Download and install Snipalot ${availableUpdateVersion}`
+    : `Snipalot ${availableUpdateVersion} is available, but no installer asset was found`;
 }
 
 function renderCaptureModeButtons(): void {
@@ -374,6 +400,32 @@ window.snipalotLauncher.onState((state) => {
   renderLauncherImpl();
 });
 
+launcherUpdateEl.addEventListener('click', async () => {
+  if (!availableUpdateVersion || updateInstallInProgress || !availableUpdateHasInstaller) return;
+  updateInstallInProgress = true;
+  renderLauncherUpdate();
+  try {
+    const result = await window.snipalotLauncher.installUpdate();
+    if (!result.ok) {
+      updateInstallInProgress = false;
+      launcherUpdateLabelEl.textContent = result.message;
+      launcherUpdateEl.disabled = false;
+      launcherUpdateEl.title = result.message;
+      window.snipalotLauncher.log('update-install', 'fail', result);
+      return;
+    }
+    launcherUpdateLabelEl.textContent = result.message;
+    window.snipalotLauncher.log('update-install', 'success', result);
+  } catch (err) {
+    updateInstallInProgress = false;
+    const message = `Update install failed: ${(err as Error).message}`;
+    launcherUpdateLabelEl.textContent = message;
+    launcherUpdateEl.disabled = false;
+    launcherUpdateEl.title = message;
+    window.snipalotLauncher.log('update-install', 'error', { message });
+  }
+});
+
 renderLauncherImpl();
 window.snipalotLauncher.getCaptureMode()
   .then((mode) => {
@@ -381,4 +433,15 @@ window.snipalotLauncher.getCaptureMode()
     renderLauncherImpl();
   })
   .catch(() => { /* ignore */ });
+window.snipalotLauncher.checkForUpdates()
+  .then((result) => {
+    if (result.ok && result.updateAvailable && result.latestVersion) {
+      availableUpdateVersion = result.latestVersion;
+      availableUpdateHasInstaller = Boolean(result.installerAssetUrl);
+      renderLauncherImpl();
+    }
+  })
+  .catch((err) => {
+    window.snipalotLauncher.log('update-check', 'fail', { message: (err as Error).message });
+  });
 window.snipalotLauncher.log('boot', 'launcher ready');

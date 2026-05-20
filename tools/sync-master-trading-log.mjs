@@ -633,6 +633,8 @@ async function importTradeFolder(dir, { allRows, seen, archiveAfterImport }) {
     rawRows = await readCsvRows(csv);
     sourceType = "legacy-csv";
   }
+  rawRows = await mergeExtractionResponseRows(dir, rawRows);
+  rawRows = await mergeMockApeRows(dir, rawRows);
   rawRows = await ensureNicsResponseRows(dir, rawRows);
 
   let added = 0;
@@ -697,6 +699,132 @@ async function mergeNicsResponseRows(sessionDir, rawRows) {
   }
   if (merged > 0) console.log(`[sync] merged ${merged} NICS response row(s) from ${responsePath}`);
   return rawRows;
+}
+
+async function mergeExtractionResponseRows(sessionDir, rawRows) {
+  if (rawRows.length === 0) return rawRows;
+  const responsePath = firstExistingPath(
+    path.join(sessionDir, "Inputs", "extraction_response.json"),
+    path.join(sessionDir, "extraction_response.json")
+  );
+  if (!responsePath) return rawRows;
+
+  let extractedRows = [];
+  try {
+    extractedRows = parseJsonArrayResponse(await fs.readFile(responsePath, "utf8"));
+  } catch (err) {
+    console.warn(`[sync] Ignoring invalid extraction response ${responsePath}: ${err.message}`);
+    return rawRows;
+  }
+
+  const byKey = new Map(rawRows.map((row) => [nicsMergeKey(row), row]));
+  let merged = 0;
+  for (const extracted of extractedRows) {
+    const target = byKey.get(nicsMergeKey(extracted));
+    if (!target) continue;
+    mergeExtractedTradeFields(target, extracted);
+    merged++;
+  }
+  if (merged > 0) console.log(`[sync] merged ${merged} extraction response row(s) from ${responsePath}`);
+  return rawRows;
+}
+
+function mergeExtractedTradeFields(target, extracted) {
+  const directFields = [
+    "trade_id",
+    "token_name",
+    "mockape_trade_id",
+    "rationale",
+    "pre_transcript_excerpt",
+    "post_transcript_excerpt",
+    "adherence_self_assessment",
+    "notes",
+    "needs_review",
+  ];
+  for (const field of directFields) {
+    if (Object.prototype.hasOwnProperty.call(extracted, field)) {
+      target[field] = extracted[field] ?? "";
+    }
+  }
+  const mappedFields = [
+    ["target_exit_low_mc", "target_low_mc"],
+    ["target_exit_high_mc", "target_high_mc"],
+    ["stop_loss_mc", "stop_loss_mc"],
+  ];
+  for (const [targetField, sourceField] of mappedFields) {
+    if (Object.prototype.hasOwnProperty.call(extracted, sourceField)) {
+      target[targetField] = extracted[sourceField] ?? "";
+    }
+  }
+}
+
+async function mergeMockApeRows(sessionDir, rawRows) {
+  if (rawRows.length === 0) return rawRows;
+  const mockapePath = firstExistingPath(
+    path.join(sessionDir, "Inputs", "mockape.json"),
+    path.join(sessionDir, "mockape.json")
+  );
+  if (!mockapePath) return rawRows;
+
+  let mockapeRows = [];
+  try {
+    mockapeRows = JSON.parse((await fs.readFile(mockapePath, "utf8")).replace(/^\uFEFF/, ""));
+  } catch (err) {
+    console.warn(`[sync] Ignoring invalid MockApe file ${mockapePath}: ${err.message}`);
+    return rawRows;
+  }
+  if (!Array.isArray(mockapeRows) || mockapeRows.length === 0) return rawRows;
+
+  const byId = new Map(mockapeRows.filter((row) => row && row.id).map((row) => [String(row.id), row]));
+  const groups = new Map();
+  for (const row of rawRows) {
+    const id = String(row.mockape_trade_id ?? "").trim();
+    if (!id || !byId.has(id)) continue;
+    const list = groups.get(id) ?? [];
+    list.push(row);
+    groups.set(id, list);
+  }
+
+  let merged = 0;
+  for (const [id, rows] of groups) {
+    const mockape = byId.get(id);
+    const shares = positionShares(rows);
+    rows.forEach((row, index) => {
+      mergeMockApeTradeFields(row, mockape, shares[index] ?? (1 / rows.length));
+      merged++;
+    });
+  }
+  if (merged > 0) console.log(`[sync] merged ${merged} MockApe actual row(s) from ${mockapePath}`);
+  return rawRows;
+}
+
+function mergeMockApeTradeFields(row, mockape, share) {
+  row.entry_mc_actual = mockape.entryMarketCap ?? "";
+  row.exit_mc_actual = mockape.exitMarketCap ?? "";
+  row.sol_invested = finiteNumberOrBlank(mockape.solInvested) === "" ? "" : roundTo(Number(mockape.solInvested) * share, 6);
+  row.sol_received = finiteNumberOrBlank(mockape.solReceived) === "" ? "" : roundTo(Number(mockape.solReceived) * share, 6);
+  row.pnl_sol = finiteNumberOrBlank(mockape.pnlSol) === "" ? "" : roundTo(Number(mockape.pnlSol) * share, 6);
+  row.pnl_percentage = finiteNumberOrBlank(mockape.pnlPercentage);
+}
+
+function positionShares(rows) {
+  const parsed = rows.map((row) => parseNumber(row.position_fraction));
+  if (parsed.every((value) => value !== null && value > 0)) return parsed;
+  return rows.map(() => 1 / rows.length);
+}
+
+function finiteNumberOrBlank(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : "";
+}
+
+function roundTo(value, decimals) {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function firstExistingPath(...paths) {
+  return paths.find((candidate) => fss.existsSync(candidate)) ?? null;
 }
 
 async function ensureNicsResponseRows(sessionDir, rawRows) {
@@ -836,14 +964,14 @@ Use the saved evidence from the session folder to fill only missing NICS/meta cl
 Scoring rules:
 - N_score, I_score, C_score, and S_score are binary 0 or 1.
 - NICS_score = N_score + I_score + C_score + S_score. It ranges from 0 to 4.
-- A trade counts as Core NICS++ only when NICS_score = 4, subject to the separate size/zone/cooldown checks handled by the sync script.
+- A trade counts toward the 50-trade target when NICS_score >= 3 and the size target is met. Zone and cooldown are tracked separately by the sync script.
 - N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working.
 - S = the trader states the sell/stay plan for a working trade: profit target, scale-out, cost recovery, trailing logic, or upside management.
 - meta_name should identify the repeatable meta cluster, not necessarily the ticker. If multiple tickers are lottery tickets for the same idea, use the same meta_name.
 - Use 0 and explain the missing evidence when a component is absent. Do not leave any N/I/C/S fields blank.
-- Use Core NICS++ only for NICS_score = 4. Use Scout when the row has partial NICS evidence worth reviewing. Use Non-NICS when it lacks a named/intentional setup.
+- Use Core NICS++ for NICS_score >= 3. Use Scout when the row has partial NICS evidence worth reviewing. Use Non-NICS when it lacks a named/intentional setup.
 - Do not populate meta_cluster_id, size_ok, zone_ok, cooldown_ok, counts_toward_50, hard_reset, running_count, non_nics_pnl_pct, or cluster_pnl_pct. The sync script owns those fields.
 - Existing prompt text is context only; the scoring rules above override older prompt instructions if they conflict.
 
@@ -1084,6 +1212,10 @@ function extractGeminiCliResponseText(stdout) {
 }
 
 function parseNicsResponseJson(rawText) {
+  return parseJsonArrayResponse(rawText);
+}
+
+function parseJsonArrayResponse(rawText) {
   let text = rawText.trim().replace(/^\uFEFF/, "");
   const directFence = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/);
   if (directFence) text = directFence[1].trim();
@@ -1094,7 +1226,7 @@ function parseNicsResponseJson(rawText) {
     const fence = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/);
     return JSON.parse(fence ? fence[1].trim() : text);
   }
-  throw new Error("NICS response must be a JSON array or Gemini JSON wrapper with response.");
+  throw new Error("Response must be a JSON array or Gemini JSON wrapper with response.");
 }
 
 function nicsMergeKey(row) {
@@ -1256,10 +1388,8 @@ function fillCooldownFlag(row, history) {
 function fillCountFields(row, history) {
   const evidenceOk = hasCountedNicsEvidence(row);
   const sizeOk = parseBoolean(row.size_ok);
-  const zoneOk = parseBoolean(row.zone_ok);
-  const cooldownOk = parseBoolean(row.cooldown_ok);
-  const hardReset = isAboveHalfSol(row) === true || cooldownOk === false;
-  const counts = evidenceOk === true && sizeOk === true && zoneOk === true && hardReset === false;
+  const hardReset = isAboveHalfSol(row) === true;
+  const counts = evidenceOk === true && sizeOk === true && hardReset === false;
   row.counts_toward_50 = counts ? "true" : "false";
   row.hard_reset = hardReset ? "true" : "false";
 
@@ -1280,7 +1410,7 @@ function nicsUnlockScore(row) {
 
 function hasCountedNicsEvidence(row) {
   const score = nicsUnlockScore(row);
-  return score === null ? null : score >= 4;
+  return score === null ? null : score >= 3;
 }
 
 function binaryScoreOrNull(value) {

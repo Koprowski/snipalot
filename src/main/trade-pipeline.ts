@@ -1494,15 +1494,23 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
   if (!Array.isArray(arr)) {
     throw new Error('Response root must be an array of trade events.');
   }
-  return arr.map((entry, i): TradeEvent => {
+  const out: TradeEvent[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const entry = arr[i];
     if (typeof entry !== 'object' || entry === null) {
       throw new Error(`Entry ${i + 1} is not an object`);
     }
     const e = entry as Record<string, unknown>;
+    if (typeof e.token_name !== 'string' && typeof e.mockape_trade_id !== 'string') {
+      // Gemini sometimes returns spoken-only setup/musing rows with no actual
+      // MockApe execution. Those rows are filtered from outputs later anyway;
+      // do not let one null token block real matched trades from generating.
+      continue;
+    }
     if (typeof e.token_name !== 'string') {
       throw new Error(`Entry ${i + 1} is missing required token_name (string)`);
     }
-    return {
+    out.push({
       trade_id: typeof e.trade_id === 'number' ? e.trade_id : i + 1,
       token_name: e.token_name,
       pre_call_offset_ms: numOrNull(e.pre_call_offset_ms),
@@ -1551,8 +1559,9 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
       // and just enriches with PnL from the matching trade.
       mockape_trade_id: strOrNull(e.mockape_trade_id),
       mockape_timestamp_ms: numOrNull(e.mockape_timestamp_ms),
-    };
-  });
+    });
+  }
+  return out;
 }
 
 function numOrNull(v: unknown): number | null {

@@ -3755,6 +3755,10 @@ function stopRecording(reason: string): void {
   // sit in 'processing' forever waiting for save-webm. Bail out cleanly.
   if (!recorderMediaReady) {
     log('main', 'stopRecording: recorder never reported started — cannot finalize');
+    writeSessionLog(liveSessionDir, 'recorder', 'stop requested before recorder was media-ready', {
+      reason,
+      appState,
+    }, 'error');
     showNotification(
       'Snipalot',
       'Recording did not start (screen/mic permission or display capture failed). Check that you allowed capture when prompted, then try again.'
@@ -3797,6 +3801,14 @@ function stopRecording(reason: string): void {
       mode: pendingProcessing.mode,
       tradeMarkers: pendingProcessing.tradeMarkers.length,
     });
+    writeSessionLog(liveSessionDir, 'recorder', 'stop snapshotted for processing', {
+      reason,
+      annotations: pendingProcessing.annotations.length,
+      chapters: pendingProcessing.chapters.length,
+      durationMs: pendingProcessing.durationMs,
+      mode: pendingProcessing.mode,
+      tradeMarkers: pendingProcessing.tradeMarkers.length,
+    }, 'start');
 
     // For trade-mode sessions, immediately open the trade-context window
     // (parallel to the pipeline's mp4/whisper work) so the user can paste
@@ -3868,6 +3880,11 @@ function stopRecording(reason: string): void {
       processingWatchdog = null;
       if (appState !== 'processing') return;
       log('main', 'processing watchdog fired — save-webm or pipeline hung', { watchdogMs });
+      writeSessionLog(activeProcessingRun?.sessionDir ?? liveSessionDir, 'pipeline', 'processing watchdog fired before completion', {
+        watchdogMs,
+        hasPendingProcessing: Boolean(pendingProcessing),
+        hasActiveProcessingRun: Boolean(activeProcessingRun),
+      }, 'timeout');
       showNotification(
         'Snipalot',
         'Processing is taking too long or stalled. Quit from the tray and try again. Logs: %APPDATA%\\Snipalot\\logs\\snipalot.log'
@@ -4265,10 +4282,15 @@ function isMicDiagnosticsPayload(x: unknown): x is MicDiagnosticsPayload {
 
 function writeMicDiagnosticsFile(sessionDir: string, payload: MicDiagnosticsPayload): void {
   const outPath = path.join(sessionDir, 'mic_diagnostics.json');
+  const payloadWithVersion: MicDiagnosticsPayload = {
+    ...payload,
+    appVersion: app.getVersion(),
+  };
   try {
-    fs.writeFileSync(outPath, JSON.stringify(payload, null, 2), 'utf-8');
+    fs.writeFileSync(outPath, JSON.stringify(payloadWithVersion, null, 2), 'utf-8');
     log('recorder', 'mic_diagnostics.json written', { outPath });
     writeSessionLog(sessionDir, 'recorder', 'mic diagnostics written', {
+      appVersion: payloadWithVersion.appVersion,
       microphoneGranted: payload.microphoneGranted,
       getUserMediaError: payload.getUserMediaError,
       activeLabel: payload.activeAudioTrack?.label ?? null,

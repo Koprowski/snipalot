@@ -474,6 +474,11 @@ Agent behavior:
  - User-edited root workbook was audited after adding helper cells/charts. `tblTrades` stayed `A1:BC42` with the expected 55 columns and zero header mismatches; `tblAnalysis` stayed `A1:O42`.
  - `finalize-master-workbook.ps1` now preserves the split win/loss `P&L % per Trade (wins green, losses red)` chart by refreshing series named `P&L % (Win)` from `Analysis!BL` and `P&L % (Loss)` from `Analysis!BM`. Old one-series charts still fall back to `Analysis!AK/AQ`.
  - Excel COM retry attempts increased to handle transient `RPC_E_CALL_REJECTED` during `FillDown()`. Validation used a temp copy at `master trading log.sync-validation-temp.xlsx`; repair/finalize passed and OpenXML inspection confirmed `tblTrades` `A1:BC42`, `tblAnalysis` `A1:O42`, and the win/loss chart series still pointed to `Analysis!BL2:BL42` and `Analysis!BM2:BM42`.
+- **Recorder/trade diagnostics hardening (local branch):**
+ - Investigation of `20260520.1616 trade`, `20260520.1643 trade`, and `20260520.1646 trade` found only `mic_diagnostics.json` plus empty `Inputs`, with no recoverable session-local media. That means the recorder reached mic/session creation but did not reach `save-webm`/pipeline handoff; these folders predate the richer `processing_log.jsonl` evidence seen in `20260520.1720 trade`.
+ - Main now writes session-local diagnostics when stop is requested before MediaRecorder is ready, when stop is snapshotted for processing, and when the processing watchdog fires before `save-webm`/pipeline completion.
+ - Future `mic_diagnostics.json` files include `appVersion` so support can correlate capture failures with the installed Snipalot build.
+ - Trade extraction parsing now skips spoken-only rows with no `token_name` and no `mockape_trade_id` instead of rejecting the whole response. This prevents one non-executed setup/musing from blocking matched trades from generating `trade_log.xlsx`.
 
 ## Packaged app logs
 

@@ -22,6 +22,7 @@ export interface MicActiveTrackSummary {
 
 export interface MicDiagnosticsPayload {
   capturedAtIso: string;
+  appVersion?: string;
   microphoneRequested: boolean;
   microphoneGranted: boolean;
   getUserMediaError: string | null;

@@ -164,7 +164,7 @@ function renderLauncherImpl(): void {
       ? currentProcessingStep
       : 'Saving recording, transcribing, and generating prompt…';
     btnPrimaryEl.title = currentCanAbandonProcessing
-      ? 'Abandon this processing run and clear its session folder (recording.mp4 is kept)'
+      ? 'Abandon this processing run and delete its session folder'
       : 'Processing…';
   }
 

@@ -1205,9 +1205,8 @@ function buildCombinedSnapshotPrompt(args: {
   );
   lines.push('');
   lines.push(`Session folder: ${sessionDir}`);
-  // MP4 intentionally omitted — LLMs can't decode video, AND only the
-  // most recent recording.mp4 is kept on disk (overwritten each session
-  // at parent level), so a stale prompt would point at the wrong file.
+  // MP4 intentionally omitted because LLMs usually cannot decode video.
+  // Session-local recording.mp4 is retained for human troubleshooting.
   lines.push(`GIF preview (LLMs see the FIRST FRAME only — opening shot): ${gifPath}`);
   if (transcriptPath) lines.push(`Full transcript: ${transcriptPath}`);
   lines.push('');
@@ -1233,20 +1232,17 @@ function buildPromptText(args: {
   /**
    * Absolute path to the GIF preview. Included in the prompt so the LLM
    * (or whatever client opens the prompt) has a still-image reference
-   * for the opening shot of the recording. The MP4 is intentionally NOT
-   * passed in: LLMs can't decode video, AND only the most recent
-   * recording.mp4 is kept on disk (overwritten each session at parent
-   * level), so a stale prompt would point at the wrong file anyway.
+   * for the opening shot of the recording. The MP4 is intentionally not
+   * passed in because LLMs usually cannot decode video; the session-local
+   * recording.mp4 is retained for human troubleshooting.
    */
   gifPath: string;
 }): string {
   const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations, gifPath } = args;
 
-  // Source files block — only the LLM-readable artifacts. The MP4
-  // is intentionally NOT listed: (1) most LLMs can't decode video and
-  // (2) Snipalot keeps only the most recent recording.mp4 at parent
-  // level (overwritten each run), so by the time a stale prompt gets
-  // pasted, the path may point to a different recording.
+  // Source files block: only the LLM-readable artifacts. The MP4 is not
+  // listed because most LLMs cannot decode video; session-local recording.mp4
+  // remains available for human troubleshooting.
   const sourceBlock = [
     'Source files (all paths absolute):',
     `- GIF preview (12x speedup with timecode burned in): ${gifPath}`,
@@ -1350,15 +1346,16 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   ensureDir(sessionInputsDir);
   log('pipeline', 'session start', { sessionDir, annotations: input.annotations.length });
 
-  // Fixed-name MP4 in the parent output root — overwritten on each run, so
-  // only the most recent recording's MP4 is retained. Session subfolders
-  // keep GIF / transcript / frames / annotations / prompt for history.
+  // Session-local media is the processing source of truth. Parent-level fixed
+  // temp files can collide when a new recording starts while an older one is
+  // still processing, so only the latest MP4 convenience copy lives at root.
   //
   // The GIF filename mirrors the session folder name so it's self-describing
   // if moved or referenced elsewhere.
-  const webmPath = path.join(input.outputRoot, 'recording.webm');
-  const mp4Path = path.join(input.outputRoot, 'recording.mp4');
-  const wavPath = path.join(input.outputRoot, 'recording.wav');
+  const webmPath = path.join(sessionDir, 'recording.webm');
+  const mp4Path = path.join(sessionDir, 'recording.mp4');
+  const latestMp4Path = path.join(input.outputRoot, 'recording.mp4');
+  const wavPath = path.join(sessionInputsDir, 'recording.wav');
   const gifPath = path.join(sessionDir, `${sessionBasename}.gif`);
   const transcriptPath = path.join(sessionDir, 'transcript.txt');
   const annotationsPath = path.join(sessionInputsDir, 'annotations.json');
@@ -1385,8 +1382,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   step('Saving recording…');
   throwIfAborted(abortSignal);
   fs.writeFileSync(webmPath, input.webmBuffer);
-  log('pipeline', 'wrote webm', { bytes: input.webmBuffer.length });
-  writeSessionLog(sessionDir, 'pipeline', 'recording.webm written', { bytes: input.webmBuffer.length }, 'success');
+  log('pipeline', 'wrote session webm', { webmPath, bytes: input.webmBuffer.length });
+  writeSessionLog(sessionDir, 'pipeline', 'session recording.webm written', {
+    webmPath,
+    bytes: input.webmBuffer.length,
+  }, 'success');
 
   // 2-5. Parallel branches: audio (whisper) and video (mp4 + gif). Both
   //      read directly from the webm. Whisper is the long pole (~60s on
@@ -1517,8 +1517,25 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     step('Converting video to MP4…');
     try {
       await webmToMp4(webmPath, mp4Path, abortSignal);
-      log('pipeline', 'mp4 written (latest, parent level)', { mp4Path });
-      writeSessionLog(sessionDir, 'video', 'mp4 written', { mp4Path }, 'success');
+      log('pipeline', 'session mp4 written', { mp4Path });
+      writeSessionLog(sessionDir, 'video', 'session recording.mp4 written', { mp4Path }, 'success');
+      try {
+        fs.copyFileSync(mp4Path, latestMp4Path);
+        log('pipeline', 'latest parent mp4 copied', { latestMp4Path });
+        writeSessionLog(sessionDir, 'video', 'latest parent recording.mp4 copied', {
+          sourcePath: mp4Path,
+          latestMp4Path,
+        }, 'success');
+      } catch (copyErr) {
+        const message = (copyErr as Error).message;
+        warnings.push(`latest recording.mp4 copy failed: ${message}`);
+        log('pipeline', 'latest parent mp4 copy failed', { err: message, latestMp4Path });
+        writeSessionLog(sessionDir, 'video', 'latest parent recording.mp4 copy failed', {
+          sourcePath: mp4Path,
+          latestMp4Path,
+          error: message,
+        }, 'warning');
+      }
     } catch (err) {
       warnings.push(`mp4 conversion failed: ${(err as Error).message}`);
       log('pipeline', 'mp4 fail', { err: String(err) });
@@ -1705,8 +1722,9 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   //    so nothing else is reading from disk.
   try {
     fs.unlinkSync(webmPath);
+    writeSessionLog(sessionDir, 'pipeline', 'session recording.webm deleted after processing', { webmPath }, 'success');
   } catch {
-    /* leave it if we can't delete */
+    writeSessionLog(sessionDir, 'pipeline', 'session recording.webm retained', { webmPath }, 'warning');
   }
 
   // 10. Trade-mode extension: after the legacy pipeline finishes, run the

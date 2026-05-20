@@ -181,7 +181,7 @@ Agent behavior:
 - **v1.0.9 local installer build:** NSIS build succeeded at **`release-v1.0.9-dependency-setup/Snipalot-1.0.9-setup.exe`**, then installed locally and registry shows **Snipalot 1.0.9**. Packaged Whisper verified under installed `resources/resources/bin/whisper/whisper-cli.exe`; model verified under `resources/resources/models/ggml-base.en.bin`. SHA256: `D629042DDD4BCE07763D0DF3739CC7641E2D7C21E1E05296AD479A3C80016891`.
 - **Processing escape hatch + window show-race hardening (local branch):**
   - Launcher now exposes **Abandon** during post-stop `processing`. It cancels the in-flight pipeline/trade pipeline, closes any trade-context / response-paste windows, deletes the current session folder, and resets Snipalot to idle.
-  - The latest parent-level `recording.mp4` is intentionally preserved when abandoning; session-folder artifacts are cleared.
+  - Abandon cancels the in-flight pipeline and deletes the session folder. Do not rely on Abandon preserving a recording; normal failed/incomplete processing keeps the session-local `recording.mp4` for review.
   - Main now passes an abort signal through ffmpeg / whisper / Gemini / API extraction waits so abandoned sessions do not continue recreating outputs in the background.
   - Recorder HUD visibility is more reliable: if the HUD window has already finished loading before the show hook is attached, main now shows it immediately instead of waiting forever on a missed `ready-to-show`.
   - Trade-context and response-paste windows got the same show-race hardening so they do not stay invisible when the renderer loads unusually quickly.
@@ -453,6 +453,11 @@ Agent behavior:
  - The count rule is explicit and component-based: `size_ok=true`, `N_score=1`, `I_score=1`, and `C_score + S_score >= 1`. `NICS_score` remains the four-component total, but a raw score threshold alone is not used for counting.
  - `tools\sync-master-trading-log.mjs` treats `counts_toward_50` as an integer column when writing both master and session workbooks. Generated app workbooks also emit `1`/`0` for this column before sync.
  - Validation: reran live `_test` sync with `-NoArchive -ReplaceSourceRows`. Excel COM verified `master trading log_test.xlsx` opens as `A1:BC36`, `counts_toward_50` is column 50, values are numeric `0/1`, and there were zero mismatches against the explicit count rule. Count sums were `20260519.1529 trade` 6, `20260519.1710 trade` 12, and `20260519.2002 trade` 1.
+- **Session-local recording media isolation (local branch):**
+ - `src/main/pipeline.ts` now writes `recording.webm` and durable `recording.mp4` inside each session folder instead of using parent-level fixed temp files as the processing source. `Inputs/recording.wav` remains an intermediate and is removed after Whisper.
+ - The parent output root still receives a best-effort `recording.mp4` copy for the "latest recording" convenience, but GIF, transcript, frame extraction, and trade pipeline all use the session-local MP4. This prevents overlapping processing runs from overwriting each other's media and leaves a reviewable MP4 in failed/incomplete session folders.
+ - `Inputs/processing_log.jsonl` now records session WebM write, session MP4 write, latest-copy success/failure, and WebM cleanup/retention.
+ - `organizeTradeSessionRoot()` keeps root `recording.mp4` alongside GIF, `prompt.txt`, `transcript.txt`, `trade_log.xlsx`, and `trade_log.md`; Abandon still deletes the whole session folder by design and its UI copy reflects that.
 
 ## Packaged app logs
 

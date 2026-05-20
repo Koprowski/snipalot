@@ -3713,7 +3713,7 @@ function abandonProcessing(reason: string): boolean {
   broadcastStateToLauncher();
   showNotification(
     'Snipalot',
-    'Processing abandoned. Session files were cleared; recording.mp4 was kept.'
+    'Processing abandoned. The session folder was deleted.'
   );
   log('main', 'processing abandoned', {
     reason,

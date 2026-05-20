@@ -2202,7 +2202,14 @@ function markdownPath(value: string): string {
 
 function organizeTradeSessionRoot(sessionDir: string): void {
   const inputsDir = getTradeInputsDir(sessionDir);
-  const keep = new Set(['Inputs', 'prompt.txt', 'transcript.txt', 'trade_log.xlsx', 'trade_log.md']);
+  const keep = new Set([
+    'Inputs',
+    'prompt.txt',
+    'recording.mp4',
+    'transcript.txt',
+    'trade_log.xlsx',
+    'trade_log.md',
+  ]);
   try {
     for (const entry of fs.readdirSync(sessionDir, { withFileTypes: true })) {
       const name = entry.name;

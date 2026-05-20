@@ -6,6 +6,7 @@ param(
   [switch]$TestMode,
   [switch]$NoArchive,
   [switch]$ReplaceSourceRows,
+  [string[]]$IncludeSession = @(),
   [string]$MasterPath = ""
 )
 
@@ -24,11 +25,15 @@ function Resolve-DisplayMasterPath([string]$Root, [string]$RequestedMaster) {
     return [System.IO.Path]::GetFullPath($env:SNIPALOT_MASTER_TRADING_LOG)
   }
   $baseRoot = if ($Root) { $Root } else { Split-Path -Parent $scriptDir }
+  $rootMaster = Join-Path $baseRoot "master trading log.xlsx"
+  if (Test-Path -LiteralPath $rootMaster) {
+    return $rootMaster
+  }
   $statementsMaster = Join-Path (Join-Path $baseRoot "Statements") "master trading log.xlsx"
   if (Test-Path -LiteralPath $statementsMaster) {
     return $statementsMaster
   }
-  return Join-Path $baseRoot "master trading log.xlsx"
+  return $rootMaster
 }
 
 if (-not (Test-Path -LiteralPath $node)) {
@@ -69,6 +74,11 @@ try {
   }
   if ($ReplaceSourceRows) {
     $args += "--replace-source-rows"
+  }
+  foreach ($session in $IncludeSession) {
+    if ($session) {
+      $args += @("--include-session", $session)
+    }
   }
   & $node @args
   if ($LASTEXITCODE -ne 0) {

@@ -18,11 +18,15 @@ function Resolve-MasterPath([string]$Root, [string]$RequestedMaster) {
     return [System.IO.Path]::GetFullPath($env:SNIPALOT_MASTER_TRADING_LOG)
   }
 
+  $rootMaster = Join-Path $Root "master trading log.xlsx"
+  if (Test-Path -LiteralPath $rootMaster) {
+    return $rootMaster
+  }
   $statementsMaster = Join-Path (Join-Path $Root "Statements") "master trading log.xlsx"
   if (Test-Path -LiteralPath $statementsMaster) {
     return $statementsMaster
   }
-  return Join-Path $Root "master trading log.xlsx"
+  return $rootMaster
 }
 
 $masterPath = Resolve-MasterPath $CapturesRoot $MasterPath

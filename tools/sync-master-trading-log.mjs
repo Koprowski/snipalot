@@ -17,6 +17,7 @@ const ARCHIVE_ONLY = process.argv.includes("--archive-only");
 const TEST_MODE = process.argv.includes("--test-mode");
 const NO_ARCHIVE = TEST_MODE || process.argv.includes("--no-archive");
 const REPLACE_SOURCE_ROWS = TEST_MODE || process.argv.includes("--replace-source-rows");
+const INCLUDED_SESSIONS = resolveIncludedSessions();
 const SUPPLEMENTAL_IMPORTS = [
   {
     filePath: path.join(ROOT, "master_trade_tracking_log_20260504_trade_workflow_format.xlsx"),
@@ -135,9 +136,31 @@ function resolveMasterPath() {
     return path.resolve(process.env.SNIPALOT_MASTER_TRADING_LOG);
   }
 
+  const rootMaster = path.join(ROOT, "master trading log.xlsx");
+  if (fss.existsSync(rootMaster)) return rootMaster;
   const statementsMaster = path.join(ROOT, "Statements", "master trading log.xlsx");
   if (fss.existsSync(statementsMaster)) return statementsMaster;
-  return path.join(ROOT, "master trading log.xlsx");
+  return rootMaster;
+}
+
+function resolveIncludedSessions() {
+  const sessions = new Set();
+  for (let i = 0; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (arg !== "--include-session" && arg !== "--session") continue;
+    const value = process.argv[i + 1];
+    if (!value) continue;
+    for (const part of value.split(",")) {
+      const trimmed = part.trim();
+      if (trimmed) sessions.add(trimmed);
+    }
+    i++;
+  }
+  return sessions;
+}
+
+function isIncludedSession(dir) {
+  return INCLUDED_SESSIONS.size === 0 || INCLUDED_SESSIONS.has(path.basename(dir));
 }
 
 const INTEGER_COLUMNS = new Set([
@@ -524,12 +547,13 @@ async function main() {
     return;
   }
 
-  const dirs = await listCurrentTradeDirs();
+  const dirs = (await listCurrentTradeDirs()).filter(isIncludedSession);
 
   const archivedDirs = ENABLE_ARCHIVE_BACKFILL && fss.existsSync(ARCHIVE)
     ? (await fs.readdir(ARCHIVE, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && entry.name.endsWith(" trade"))
       .map((entry) => path.join(ARCHIVE, entry.name))
+      .filter(isIncludedSession)
       .sort()
     : [];
 
@@ -594,6 +618,7 @@ async function main() {
     testMode: TEST_MODE,
     archiveAfterImport: !NO_ARCHIVE,
     replaceSourceRows: REPLACE_SOURCE_ROWS,
+    includedSessions: [...INCLUDED_SESSIONS],
     processedFolders: results.length,
     backfilledArchivedFolders: backfillResults.length,
     rowsRemovedBeforeImport,

@@ -470,6 +470,10 @@ Agent behavior:
  - `tools\sync-master-trading-log.mjs`, `tools\run-trade-sync.ps1`, and `tools\finalize-master-workbook.ps1` now prefer `E:\OneDrive\Snipalot Captures\master trading log.xlsx` before the temporary `Statements` workbook. The live deployed scripts under `E:\OneDrive\Snipalot Captures\Trade Sync Scripts\` were updated to match.
  - `sync-master-trading-log.mjs` accepts `--include-session` / `--session`, and the PowerShell wrapper accepts `-IncludeSession`, so archived repair imports can target named sessions without crawling every archived trade folder and regenerating old NICS classifications.
  - Validation: backed up the root master, then ran targeted archive backfill for `20260519.1529 trade`, `20260519.1710 trade`, `20260519.2002 trade`, and `20260520.0828 trade` into the root master. Result: root `tblTrades` verified via Excel COM as `A1:BC42`, 55 columns, with session counts 9, 16, 2, and 6 respectively.
+- **Root master chart/finalizer compatibility check (2026-05-20):**
+ - User-edited root workbook was audited after adding helper cells/charts. `tblTrades` stayed `A1:BC42` with the expected 55 columns and zero header mismatches; `tblAnalysis` stayed `A1:O42`.
+ - `finalize-master-workbook.ps1` now preserves the split win/loss `P&L % per Trade (wins green, losses red)` chart by refreshing series named `P&L % (Win)` from `Analysis!BL` and `P&L % (Loss)` from `Analysis!BM`. Old one-series charts still fall back to `Analysis!AK/AQ`.
+ - Excel COM retry attempts increased to handle transient `RPC_E_CALL_REJECTED` during `FillDown()`. Validation used a temp copy at `master trading log.sync-validation-temp.xlsx`; repair/finalize passed and OpenXML inspection confirmed `tblTrades` `A1:BC42`, `tblAnalysis` `A1:O42`, and the win/loss chart series still pointed to `Analysis!BL2:BL42` and `Analysis!BM2:BM42`.
 
 ## Packaged app logs
 

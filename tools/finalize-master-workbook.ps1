@@ -59,7 +59,7 @@ function Set-FormulaDown($sheet, [string]$column, [int]$firstRow, [int]$lastRow,
 
 function Invoke-ExcelRetry([scriptblock]$Action) {
   $lastError = $null
-  for ($attempt = 1; $attempt -le 8; $attempt++) {
+  for ($attempt = 1; $attempt -le 20; $attempt++) {
     try {
       return & $Action
     } catch {
@@ -139,7 +139,13 @@ function Refresh-TradeCharts($workbook, $analysisSheet, [int]$lastMasterRow) {
       Set-FirstSeriesRange $chart $analysisSheet "A" "O" 2 $lastMasterRow
     } elseif ($title -like "P&L % per Trade*") {
       Set-CategoryAxis $chart
-      Set-FirstSeriesRange $chart $analysisSheet "AK" "AQ" 2 $lastMasterRow
+      Set-SeriesRangesByName $chart $analysisSheet "A" @{
+        "P&L % (Win)" = "BL"
+        "P&L % (Loss)" = "BM"
+      } 2 $lastMasterRow
+      if ($chart.SeriesCollection().Count -eq 1) {
+        Set-FirstSeriesRange $chart $analysisSheet "AK" "AQ" 2 $lastMasterRow
+      }
     } elseif ($title -eq "Entry Market Cap vs P&L %") {
       Set-FirstSeriesRange $chart $analysisSheet "AP" "AQ" 2 $lastMasterRow
     } elseif ($title -eq "Hold Time vs P&L %") {

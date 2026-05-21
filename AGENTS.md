@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.56)
+## Recent improvements (v1.0.1 onward; current release v1.0.57)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -487,6 +487,10 @@ Agent behavior:
  - The primary launcher update banner now listens for update-download progress events and renders the same percent/bytes status that Settings already showed.
  - Main sends update progress on `launcher:update-download-progress` when the update install is initiated from the launcher, while Settings continues using `settings:update-download-progress`.
  - Validation: `npm.cmd test` passed after the launcher IPC/UI update.
+- **Session manifest diagnostics (v1.0.57 local branch):**
+ - Each new record/trade session now writes `Inputs/session_manifest.json` as soon as `liveSessionDir` is created, before Whisper/MP4/GIF/Gemini processing can fail.
+ - Manifest includes app version, packaged/dev state, process/runtime paths, session mode, output root, active display/source, region percentages, display geometry, config path, and a sanitized config summary. API keys are not written; only key-presence booleans are included.
+ - Validation: `npm.cmd test` passed after adding the manifest writer.
 
 ## Packaged app logs
 

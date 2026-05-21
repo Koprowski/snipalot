@@ -21,7 +21,7 @@ import * as os from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { getLogPath, log } from './logger';
 import { runPipeline, AnnotationRecord, ChapterRecord, TradeMarkerRecord, formatSessionStamp } from './pipeline';
-import { loadConfig, saveConfig, getConfig, SnipalotConfig } from './config';
+import { loadConfig, saveConfig, getConfig, SnipalotConfig, CONFIG_PATH } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
@@ -4449,6 +4449,102 @@ function writeMicDiagnosticsFile(sessionDir: string, payload: MicDiagnosticsPayl
   }
 }
 
+function sanitizedConfigSummaryForSessionManifest(config: SnipalotConfig): Record<string, unknown> {
+  const tradeConfig = config.trade as SnipalotConfig['trade'] & {
+    geminiApiKey?: string;
+  };
+  return {
+    outputDir: config.outputDir,
+    retention: config.retention,
+    audio: {
+      microphone: config.audio.microphone,
+    },
+    hotkeys: { ...config.hotkeys },
+    annotation: {
+      color: config.annotation.color,
+      strokeWidth: config.annotation.strokeWidth,
+    },
+    snapshot: {
+      clearAnnotationsAfter: config.snapshot.clearAnnotationsAfter,
+    },
+    trade: {
+      autoPromptForTradeData: config.trade.autoPromptForTradeData,
+      llmMode: config.trade.llmMode,
+      geminiCliCommand: config.trade.geminiCliCommand,
+      geminiCliModel: config.trade.geminiCliModel,
+      openaiBaseUrl: config.trade.openaiBaseUrl,
+      openaiModel: config.trade.openaiModel,
+      hasOpenaiApiKey: Boolean(config.trade.openaiApiKey),
+      hasLegacyGeminiApiKey: Boolean(tradeConfig.geminiApiKey),
+    },
+    launcher: {
+      pinnedOnTop: config.launcher.pinnedOnTop,
+      visibleActions: { ...config.launcher.visibleActions },
+    },
+    capture: { ...config.capture },
+    firstRun: config.firstRun,
+  };
+}
+
+function writeSessionManifestFile(sessionDir: string): void {
+  const manifestPath = path.join(sessionDir, 'Inputs', 'session_manifest.json');
+  const cfg = getConfig();
+  try {
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    const manifest = {
+      schemaVersion: 1,
+      capturedAtIso: new Date().toISOString(),
+      app: {
+        name: app.getName(),
+        version: app.getVersion(),
+        isPackaged: app.isPackaged,
+      },
+      process: {
+        pid: process.pid,
+        platform: process.platform,
+        arch: process.arch,
+        cwd: process.cwd(),
+        resourcesPath: process.resourcesPath,
+        userDataPath: app.getPath('userData'),
+        logPath: getLogPath(),
+      },
+      session: {
+        mode: currentSessionMode,
+        sessionDir,
+        outputRoot: cfg.outputDir,
+        startedAtMs: recordingStartedAt,
+        startedAtIso: recordingStartedAt ? new Date(recordingStartedAt).toISOString() : null,
+        displayId: activeDisplayId,
+        sourceId: activeSourceId,
+        regionPct: pendingRegion,
+      },
+      config: {
+        path: CONFIG_PATH,
+        summary: sanitizedConfigSummaryForSessionManifest(cfg),
+      },
+      displays: screen.getAllDisplays().map((display) => ({
+        id: String(display.id),
+        bounds: display.bounds,
+        workArea: display.workArea,
+        scaleFactor: display.scaleFactor,
+        rotation: display.rotation,
+        internal: display.internal,
+      })),
+      diagnostics: {
+        processingLogPath: path.join(sessionDir, 'Inputs', 'processing_log.jsonl'),
+        micDiagnosticsPath: path.join(sessionDir, 'mic_diagnostics.json'),
+      },
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+    log('main', 'session_manifest.json written', { manifestPath });
+    writeSessionLog(sessionDir, 'session', 'session manifest written', { manifestPath }, 'success');
+  } catch (err) {
+    const message = (err as Error).message;
+    log('main', 'session_manifest.json write failed', { err: message, sessionDir });
+    writeSessionLog(sessionDir, 'session', 'session manifest write failed', { error: message }, 'error');
+  }
+}
+
 ipcMain.handle(
   'recorder:state',
   (
@@ -4487,6 +4583,7 @@ ipcMain.handle(
       liveSessionDir = path.join(outputRoot, `${stamp} ${suffix}`);
       if (!fs.existsSync(liveSessionDir)) fs.mkdirSync(liveSessionDir, { recursive: true });
       log('main', 'liveSessionDir created', { liveSessionDir, mode: currentSessionMode });
+      writeSessionManifestFile(liveSessionDir);
       writeSessionLog(liveSessionDir, 'recorder', 'session folder created', {
         mode: currentSessionMode,
         outputRoot,

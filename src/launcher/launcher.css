@@ -455,9 +455,10 @@ body[data-visible-action-count="3"] .shortcut-row {
   position: relative;
   overflow: hidden;
   width: 100%;
-  border: 1px solid rgba(34, 197, 94, 0.45);
-  background: rgba(22, 101, 52, 0.18);
-  color: #86efac;
+  margin-block: auto;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  background: rgba(127, 29, 29, 0.20);
+  color: #fecaca;
   border-radius: 5px;
   padding: 5px 8px;
   font-family: inherit;
@@ -480,6 +481,12 @@ body[data-visible-action-count="3"] .shortcut-row {
   pointer-events: none;
 }
 
+.launcher-update.installing {
+  border-color: rgba(34, 197, 94, 0.50);
+  background: rgba(22, 101, 52, 0.18);
+  color: #86efac;
+}
+
 .launcher-update.downloading .launcher-update-progress-track {
   opacity: 1;
 }
@@ -494,6 +501,12 @@ body[data-visible-action-count="3"] .shortcut-row {
 }
 
 .launcher-update:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.85);
+  background: rgba(185, 28, 28, 0.24);
+  color: #fee2e2;
+}
+
+.launcher-update.installing:hover:not(:disabled) {
   border-color: rgba(74, 222, 128, 0.85);
   background: rgba(22, 163, 74, 0.24);
   color: #bbf7d0;

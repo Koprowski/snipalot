@@ -233,6 +233,7 @@ function renderLauncherUpdate(): void {
   }
   if (!shouldShow) return;
   launcherUpdateEl.disabled = updateInstallInProgress || !availableUpdateHasInstaller;
+  launcherUpdateEl.classList.toggle('installing', updateInstallInProgress && !updateStatusIsError);
   launcherUpdateEl.classList.toggle('downloading', updateInstallInProgress && updateDownloadProgress !== null);
   launcherUpdateEl.classList.toggle('err', updateStatusIsError);
   const percent = updateDownloadProgress?.percent ?? (

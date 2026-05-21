@@ -487,6 +487,15 @@ function toAccelerator(combo: string): string {
   return combo.replace(/\bCtrl\b/gi, 'Control');
 }
 
+function isLocalOnlyUndoHotkey(combo: string): boolean {
+  const parts = combo
+    .split('+')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .map((part) => (part === 'ctrl' ? 'control' : part));
+  return parts.length === 2 && parts.includes('control') && parts.includes('z');
+}
+
 function registerAnnotationHotkey(): void {
   const accel = toAccelerator(getConfig().hotkeys.annotate);
   if (globalShortcut.isRegistered(accel)) return;
@@ -610,9 +619,13 @@ function reloadGlobalHotkeys(): void {
     log('hotkey', 'pauseResume fired', { appState });
     togglePause();
   });
-  reg('undo', hk.undo, () => {
-    if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-undo');
-  });
+  if (isLocalOnlyUndoHotkey(hk.undo)) {
+    skip('undo', hk.undo, 'Ctrl+Z is local-only so it does not block Undo in other apps');
+  } else {
+    reg('undo', hk.undo, () => {
+      if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-undo');
+    });
+  }
   reg('clear', hk.clear, () => {
     if (activeDisplayId) targetOverlay(activeDisplayId, 'overlay:global-clear');
   });

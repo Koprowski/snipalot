@@ -455,6 +455,21 @@ select:focus {
   background: color-mix(in srgb, #f59e0b 10%, var(--surface));
 }
 
+.hotkey-input.local-only {
+  border-color: #38bdf8;
+  background: color-mix(in srgb, #38bdf8 10%, var(--surface));
+}
+
+.hotkey-warning {
+  border: 1px solid color-mix(in srgb, #38bdf8 45%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, #38bdf8 10%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+}
+
 .btn-link {
   background: none;
   border: none;

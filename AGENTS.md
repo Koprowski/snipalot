@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.58)
+## Recent improvements (v1.0.1 onward; current release v1.0.59)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -495,6 +495,10 @@ Agent behavior:
  - The launcher update banner is now vertically balanced in the lower free space below the shortcut row instead of sitting tight under the primary controls.
  - Available-update state uses red/attention styling; active install/download state switches to green/progress styling.
  - Validation: `npm.cmd test` passed after the launcher CSS/state update.
+- **Undo hotkey safety (v1.0.59 local branch):**
+ - `Ctrl+Z` is now treated as local-only for annotation undo and is not registered through Electron `globalShortcut`, preserving normal Undo behavior in Word, Excel, Notepad, browsers, and other apps.
+ - Settings highlights the local-only `Ctrl+Z` undo binding and recommends `Ctrl+Alt+Z` when a user explicitly wants a global recording undo shortcut.
+ - Validation: `npm.cmd test` passed after changing this behavior.
 
 ## Packaged app logs
 

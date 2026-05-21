@@ -37,6 +37,7 @@ const settingsStatusTextEl = document.getElementById('status-text') as HTMLEleme
 const downloadProgressEl = document.getElementById('download-progress') as HTMLElement;
 const downloadProgressFillEl = document.getElementById('download-progress-fill') as HTMLElement;
 const hotkeysBody = document.getElementById('hotkeys-body') as HTMLTableSectionElement;
+const hotkeySafetyWarningEl = document.getElementById('hotkey-safety-warning') as HTMLElement;
 const firstRunBanner = document.getElementById('first-run-banner') as HTMLElement;
 const setupModalEl = document.getElementById('setup-modal') as HTMLElement;
 const setupModalStatusEl = document.getElementById('setup-modal-status') as HTMLElement;
@@ -738,6 +739,15 @@ function isValidHotkeyCombo(combo: string): boolean {
   return parts.slice(0, -1).some((part) => ['Ctrl', 'Control', 'Shift', 'Alt', 'Meta'].includes(part));
 }
 
+function isLocalOnlyUndoHotkey(combo: string): boolean {
+  const parts = combo
+    .split('+')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .map((part) => (part === 'ctrl' ? 'control' : part));
+  return parts.length === 2 && parts.includes('control') && parts.includes('z');
+}
+
 /**
  * Highlight any combo assigned to more than one action. We don't BLOCK
  * the save — the user might be reassigning and the duplicate is
@@ -753,6 +763,16 @@ function flagDuplicates(): void {
     const key = el.dataset.key!;
     const v = editedHotkeys[key];
     el.classList.toggle('duplicate', !!v && (counts.get(v) ?? 0) > 1);
+    el.classList.toggle('local-only', key === 'undo' && !!v && isLocalOnlyUndoHotkey(v));
+  }
+  const undoHotkey = editedHotkeys.undo ?? '';
+  if (isLocalOnlyUndoHotkey(undoHotkey)) {
+    hotkeySafetyWarningEl.style.display = 'block';
+    hotkeySafetyWarningEl.textContent =
+      'Undo is set to Ctrl+Z. Snipalot treats this as local-only so it works in Snipalot annotation windows but will not block Undo in Word, Excel, Notepad, or other apps. Use Ctrl+Alt+Z if you need a global recording undo shortcut.';
+  } else {
+    hotkeySafetyWarningEl.style.display = 'none';
+    hotkeySafetyWarningEl.textContent = '';
   }
 }
 

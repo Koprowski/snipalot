@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.59)
+## Recent improvements (v1.0.1 onward; current release v1.0.60)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -499,6 +499,10 @@ Agent behavior:
  - `Ctrl+Z` is now treated as local-only for annotation undo and is not registered through Electron `globalShortcut`, preserving normal Undo behavior in Word, Excel, Notepad, browsers, and other apps.
  - Settings highlights the local-only `Ctrl+Z` undo binding and recommends `Ctrl+Alt+Z` when a user explicitly wants a global recording undo shortcut.
  - Validation: `npm.cmd test` passed after changing this behavior.
+- **Installer taskbar icon cleanup (v1.0.60 local branch):**
+ - Root cause: local installers built with `--config.win.signAndEditExecutable=false` do not embed the app icon into `Snipalot.exe`, and older per-user Start Menu shortcuts can remain beside the newer all-users shortcut with stale taskbar identity metadata.
+ - Installer now deletes the legacy per-user `Snipalot.lnk` during install/uninstall, then recreates the active shortcut with the generated Snipalot `.ico` and `app.snipalot` AppUserModelID.
+ - Validation: after packaging, extract the installed or unpacked EXE icon with `[System.Drawing.Icon]::ExtractAssociatedIcon()` and confirm it is the red Snipalot icon, not Electron.
 
 ## Packaged app logs
 

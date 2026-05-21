@@ -452,6 +452,8 @@ body[data-visible-action-count="3"] .shortcut-row {
    container; fill grows left→right by JS-set inline width. ETA + elapsed
    time sit on a single row below in muted monospace. */
 .launcher-update {
+  position: relative;
+  overflow: hidden;
   width: 100%;
   border: 1px solid rgba(34, 197, 94, 0.45);
   background: rgba(22, 101, 52, 0.18);
@@ -464,6 +466,33 @@ body[data-visible-action-count="3"] .shortcut-row {
   cursor: pointer;
 }
 
+.launcher-update span {
+  position: relative;
+  z-index: 1;
+}
+
+.launcher-update-progress-track {
+  position: absolute !important;
+  inset: 0;
+  z-index: 0 !important;
+  opacity: 0;
+  background: rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+}
+
+.launcher-update.downloading .launcher-update-progress-track {
+  opacity: 1;
+}
+
+.launcher-update-progress-fill {
+  position: absolute !important;
+  inset: 0 auto 0 0;
+  z-index: 0 !important;
+  width: 0%;
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.30), rgba(22, 163, 74, 0.42));
+  transition: width 160ms ease-out;
+}
+
 .launcher-update:hover:not(:disabled) {
   border-color: rgba(74, 222, 128, 0.85);
   background: rgba(22, 163, 74, 0.24);
@@ -473,6 +502,12 @@ body[data-visible-action-count="3"] .shortcut-row {
 .launcher-update:disabled {
   opacity: 0.65;
   cursor: progress;
+}
+
+.launcher-update.err {
+  border-color: rgba(239, 68, 68, 0.65);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
 }
 
 .progress-block {

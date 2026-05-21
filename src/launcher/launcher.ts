@@ -27,6 +27,7 @@ const hkScreenshotEl = document.getElementById('hk-screenshot')!;
 const hkTradeEl = document.getElementById('hk-trade')!;
 const launcherUpdateEl = document.getElementById('launcher-update') as HTMLButtonElement;
 const launcherUpdateLabelEl = document.getElementById('launcher-update-label')!;
+const launcherUpdateProgressFillEl = document.getElementById('launcher-update-progress-fill') as HTMLElement;
 const captureModeEl = document.querySelector('.capture-mode') as HTMLDivElement;
 const captureModeButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('.capture-mode-btn')
@@ -61,6 +62,15 @@ let availableUpdateVersion: string | null = null;
 let availableUpdateHasInstaller = false;
 let updateInstallInProgress = false;
 let updateBannerVisible: boolean | null = null;
+let updateDownloadProgress: {
+  version: string;
+  installerName: string;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+} | null = null;
+let updateStatusMessage: string | null = null;
+let updateStatusIsError = false;
 // Tracks whether the active recording is record-mode or trade-mode (both
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';
@@ -206,6 +216,12 @@ function formatProgressTime(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function formatLauncherBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
 function renderLauncherUpdate(): void {
   const shouldShow = Boolean(availableUpdateVersion);
   launcherUpdateEl.hidden = !shouldShow;
@@ -217,9 +233,30 @@ function renderLauncherUpdate(): void {
   }
   if (!shouldShow) return;
   launcherUpdateEl.disabled = updateInstallInProgress || !availableUpdateHasInstaller;
-  launcherUpdateLabelEl.textContent = updateInstallInProgress
-    ? `Installing Snipalot ${availableUpdateVersion}...`
-    : `Snipalot ${availableUpdateVersion} is available. Click here to install.`;
+  launcherUpdateEl.classList.toggle('downloading', updateInstallInProgress && updateDownloadProgress !== null);
+  launcherUpdateEl.classList.toggle('err', updateStatusIsError);
+  const percent = updateDownloadProgress?.percent ?? (
+    updateDownloadProgress?.totalBytes
+      ? Math.round((updateDownloadProgress.downloadedBytes / updateDownloadProgress.totalBytes) * 100)
+      : null
+  );
+  launcherUpdateProgressFillEl.style.width = updateDownloadProgress
+    ? `${Math.max(0, Math.min(100, percent ?? 8))}%`
+    : '0%';
+  if (updateStatusMessage) {
+    launcherUpdateLabelEl.textContent = updateStatusMessage;
+  } else if (updateDownloadProgress) {
+    const sizeText = updateDownloadProgress.totalBytes
+      ? `${formatLauncherBytes(updateDownloadProgress.downloadedBytes)} of ${formatLauncherBytes(updateDownloadProgress.totalBytes)}`
+      : formatLauncherBytes(updateDownloadProgress.downloadedBytes);
+    launcherUpdateLabelEl.textContent = percent === null
+      ? `Downloading Snipalot ${updateDownloadProgress.version} installer... ${sizeText}`
+      : `Downloading Snipalot ${updateDownloadProgress.version} installer... ${percent}% (${sizeText})`;
+  } else {
+    launcherUpdateLabelEl.textContent = updateInstallInProgress
+      ? `Installing Snipalot ${availableUpdateVersion}...`
+      : `Snipalot ${availableUpdateVersion} is available. Click here to install.`;
+  }
   launcherUpdateEl.title = availableUpdateHasInstaller
     ? `Download and install Snipalot ${availableUpdateVersion}`
     : `Snipalot ${availableUpdateVersion} is available, but no installer asset was found`;
@@ -403,27 +440,49 @@ window.snipalotLauncher.onState((state) => {
 launcherUpdateEl.addEventListener('click', async () => {
   if (!availableUpdateVersion || updateInstallInProgress || !availableUpdateHasInstaller) return;
   updateInstallInProgress = true;
+  updateStatusMessage = null;
+  updateStatusIsError = false;
+  updateDownloadProgress = {
+    version: availableUpdateVersion,
+    installerName: '',
+    downloadedBytes: 0,
+    totalBytes: null,
+    percent: null,
+  };
   renderLauncherUpdate();
   try {
     const result = await window.snipalotLauncher.installUpdate();
     if (!result.ok) {
       updateInstallInProgress = false;
-      launcherUpdateLabelEl.textContent = result.message;
-      launcherUpdateEl.disabled = false;
-      launcherUpdateEl.title = result.message;
+      updateDownloadProgress = null;
+      updateStatusMessage = result.message;
+      updateStatusIsError = true;
+      renderLauncherUpdate();
       window.snipalotLauncher.log('update-install', 'fail', result);
       return;
     }
-    launcherUpdateLabelEl.textContent = result.message;
+    updateDownloadProgress = null;
+    updateStatusMessage = result.message;
+    updateStatusIsError = false;
+    renderLauncherUpdate();
     window.snipalotLauncher.log('update-install', 'success', result);
   } catch (err) {
     updateInstallInProgress = false;
     const message = `Update install failed: ${(err as Error).message}`;
-    launcherUpdateLabelEl.textContent = message;
-    launcherUpdateEl.disabled = false;
-    launcherUpdateEl.title = message;
+    updateDownloadProgress = null;
+    updateStatusMessage = message;
+    updateStatusIsError = true;
+    renderLauncherUpdate();
     window.snipalotLauncher.log('update-install', 'error', { message });
   }
+});
+
+window.snipalotLauncher.onUpdateDownloadProgress((progress) => {
+  updateInstallInProgress = true;
+  updateDownloadProgress = progress;
+  updateStatusMessage = null;
+  updateStatusIsError = false;
+  renderLauncherUpdate();
 });
 
 renderLauncherImpl();
@@ -438,6 +497,9 @@ window.snipalotLauncher.checkForUpdates()
     if (result.ok && result.updateAvailable && result.latestVersion) {
       availableUpdateVersion = result.latestVersion;
       availableUpdateHasInstaller = Boolean(result.installerAssetUrl);
+      updateStatusMessage = null;
+      updateStatusIsError = false;
+      updateDownloadProgress = null;
       renderLauncherImpl();
     }
   })

@@ -1881,7 +1881,10 @@ async function downloadAndInstallSnipalotUpdate(
     });
     const sendProgress = (progress: DownloadProgress) => {
       if (sender.isDestroyed()) return;
-      sender.send('settings:update-download-progress', {
+      const channel = source === 'launcher'
+        ? 'launcher:update-download-progress'
+        : 'settings:update-download-progress';
+      sender.send(channel, {
         version: release.version,
         installerName: release.installerAssetName,
         ...progress,

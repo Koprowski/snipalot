@@ -39,6 +39,23 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
   }> => ipcRenderer.invoke('launcher:check-for-updates'),
   installUpdate: (): Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }> =>
     ipcRenderer.invoke('launcher:install-update'),
+  onUpdateDownloadProgress: (callback: (progress: {
+    version: string;
+    installerName: string;
+    downloadedBytes: number;
+    totalBytes: number | null;
+    percent: number | null;
+  }) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: {
+      version: string;
+      installerName: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+      percent: number | null;
+    }) => callback(progress);
+    ipcRenderer.on('launcher:update-download-progress', listener);
+    return () => ipcRenderer.removeListener('launcher:update-download-progress', listener);
+  },
   setUpdateBannerVisible: (visible: boolean): Promise<boolean> =>
     ipcRenderer.invoke('launcher:set-update-banner-visible', visible),
   settings: () => ipcRenderer.invoke('launcher:settings'),

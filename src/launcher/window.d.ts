@@ -31,6 +31,13 @@ interface Window {
       installerAssetUrl?: string | null;
     }>;
     installUpdate: () => Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }>;
+    onUpdateDownloadProgress: (callback: (progress: {
+      version: string;
+      installerName: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+      percent: number | null;
+    }) => void) => (() => void);
     setUpdateBannerVisible: (visible: boolean) => Promise<boolean>;
     settings: () => Promise<void>;
     exitApp: () => Promise<boolean>;

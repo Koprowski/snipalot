@@ -19,6 +19,7 @@ import { getConfig } from './config';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
 import { TranscriptSegment, TradeMarkerRecord } from './pipeline';
 import { writeSessionLog } from './session-log';
+import type { SessionLogStatus } from './session-log';
 
 /**
  * Schema for a single extracted trade event. Matches the JSON shape the
@@ -269,7 +270,7 @@ export async function runTradePipeline(
         command: cliCommand,
         model: cliModel,
       }, 'start');
-      autoSucceeded = await tryGeminiCli(promptText, responsePath, cliCommand, cliModel, onStep, undefined, abortSignal);
+      autoSucceeded = await tryGeminiCli(promptText, responsePath, cliCommand, cliModel, onStep, undefined, abortSignal, sessionDir);
       autoLabel = 'Gemini CLI';
       writeSessionLog(sessionDir, 'trade-pipeline', 'gemini cli extraction attempt finished', {
         succeeded: autoSucceeded,
@@ -515,8 +516,9 @@ async function tryGeminiCli(
   cliCommand: string,
   model: string,
   onStep?: (step: string) => void,
-  timeoutMs: number = 5 * 60 * 1000,
-  abortSignal?: AbortSignal
+  timeoutMs: number = 15 * 60 * 1000,
+  abortSignal?: AbortSignal,
+  sessionDir?: string
 ): Promise<boolean> {
   if (!cliCommand) return false;
   throwIfAborted(abortSignal);
@@ -539,10 +541,35 @@ async function tryGeminiCli(
   };
   delete env.GEMINI_API_KEY;
 
+  const writeGeminiSessionLog = (
+    event: string,
+    details: Record<string, unknown>,
+    status: SessionLogStatus = 'info'
+  ): void => {
+    if (!sessionDir) return;
+    writeSessionLog(sessionDir, 'trade-pipeline', event, details, status);
+  };
+
+  const summarizeGeminiResult = (
+    result: { code: number | null; stdout: string; stderr: string; timedOut: boolean },
+    attemptTimeoutMs: number,
+    fallback: string
+  ): Record<string, unknown> => ({
+    code: result.code,
+    timedOut: result.timedOut,
+    timeoutMs: attemptTimeoutMs,
+    fallback,
+    stdoutChars: result.stdout.length,
+    stderrChars: result.stderr.length,
+    stdoutTail: result.stdout.slice(-500),
+    stderrTail: result.stderr.slice(-1000),
+  });
+
   const runGemini = (
     args: string[],
     attempt: 'prompt-flag' | 'prompt-positional',
-    stdinText?: string
+    stdinText?: string,
+    attemptTimeoutMs: number = timeoutMs
   ): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }> =>
     new Promise((resolve) => {
       throwIfAborted(abortSignal);
@@ -562,13 +589,17 @@ async function tryGeminiCli(
         });
       } catch (err) {
         log('trade-pipeline', 'gemini-cli: spawn failed', { attempt, err: (err as Error).message });
+        writeGeminiSessionLog('gemini cli spawn failed', {
+          attempt,
+          error: (err as Error).message,
+        }, 'error');
         resolve({ code: -1, stdout, stderr, timedOut });
         return;
       }
       const timer = setTimeout(() => {
         timedOut = true;
         child.kill();
-      }, timeoutMs);
+      }, attemptTimeoutMs);
       const onAbort = () => {
         timedOut = true;
         try {
@@ -599,6 +630,7 @@ async function tryGeminiCli(
       });
     });
 
+  const firstAttemptTimeoutMs = Math.min(timeoutMs, 5 * 60 * 1000);
   let result = await runGemini(
     [
       '--model',
@@ -609,15 +641,26 @@ async function tryGeminiCli(
       'Process the complete Snipalot trade extraction prompt supplied on stdin. Return only the requested JSON.',
     ],
     'prompt-flag',
-    promptText
+    promptText,
+    firstAttemptTimeoutMs
   );
   let fallback = 'none';
 
-  if (result.code !== 0 && /Cannot use both a positional prompt and the --prompt flag together/i.test(result.stderr)) {
-    log('trade-pipeline', 'gemini-cli: retrying positional prompt after parser conflict', {
+  const parserConflict = result.code !== 0 && /Cannot use both a positional prompt and the --prompt flag together/i.test(result.stderr);
+  const timedOutPromptFlag = result.timedOut;
+  if (parserConflict || timedOutPromptFlag) {
+    const reason = parserConflict ? 'parser-conflict' : 'prompt-flag-timeout';
+    log('trade-pipeline', 'gemini-cli: retrying positional prompt', {
+      reason,
       code: result.code,
+      timedOut: result.timedOut,
       stderr: result.stderr.slice(0, 500),
     });
+    writeGeminiSessionLog('gemini cli retrying positional prompt', {
+      reason,
+      firstAttempt: summarizeGeminiResult(result, firstAttemptTimeoutMs, fallback),
+    }, 'warning');
+    if (onStep) onStep('Gemini CLI first attempt stalled; retrying fallback...');
     result = await runGemini(
       [
         '--model',
@@ -627,14 +670,16 @@ async function tryGeminiCli(
         'Process the complete Snipalot trade extraction prompt supplied on stdin. Return only the requested JSON.',
       ],
       'prompt-positional',
-      promptText
+      promptText,
+      timeoutMs
     );
-    fallback = 'positional-prompt';
+    fallback = reason === 'parser-conflict' ? 'positional-prompt' : 'positional-after-timeout';
   }
 
   if (result.timedOut) {
     throwIfAborted(abortSignal);
     log('trade-pipeline', 'gemini-cli: timeout', { timeoutMs, fallback });
+    writeGeminiSessionLog('gemini cli timed out', summarizeGeminiResult(result, timeoutMs, fallback), 'warning');
     return false;
   }
   throwIfAborted(abortSignal);
@@ -644,6 +689,7 @@ async function tryGeminiCli(
       fallback,
       stderr: result.stderr.slice(0, 500),
     });
+    writeGeminiSessionLog('gemini cli non-zero exit', summarizeGeminiResult(result, timeoutMs, fallback), 'warning');
     return false;
   }
 
@@ -653,18 +699,33 @@ async function tryGeminiCli(
       stdoutPreview: result.stdout.slice(0, 500),
       stderrPreview: result.stderr.slice(0, 500),
     });
+    writeGeminiSessionLog('gemini cli empty response text', summarizeGeminiResult(result, timeoutMs, fallback), 'warning');
     return false;
   }
   try {
     parseAndValidateResponse(rawText);
     fs.writeFileSync(responsePath, rawText, 'utf-8');
     log('trade-pipeline', 'gemini-cli: auto-extraction succeeded', { chars: rawText.length, fallback });
+    writeGeminiSessionLog('gemini cli auto-extraction succeeded', {
+      responsePath,
+      chars: rawText.length,
+      fallback,
+      stdoutChars: result.stdout.length,
+      stderrChars: result.stderr.length,
+    }, 'success');
     return true;
   } catch (err) {
     log('trade-pipeline', 'gemini-cli: invalid response JSON', {
       err: (err as Error).message,
       preview: rawText.slice(0, 300),
     });
+    writeGeminiSessionLog('gemini cli invalid response JSON', {
+      error: (err as Error).message,
+      fallback,
+      preview: rawText.slice(0, 500),
+      stdoutChars: result.stdout.length,
+      stderrChars: result.stderr.length,
+    }, 'warning');
     return false;
   }
 }

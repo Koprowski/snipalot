@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.63)
+## Recent improvements (v1.0.1 onward; current release v1.0.64)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -516,6 +516,10 @@ Agent behavior:
  - The no-update launcher window height was reduced so the primary action buttons and shortcut row no longer sit above a large empty bottom band.
  - The update-banner height remains larger, preserving room for the install/download message when an update is available.
  - Validation: `npm.cmd test` passed after the launcher sizing change.
+- **Update check cache refresh (v1.0.64 local branch):**
+ - Root cause for installed v1.0.61 still showing "Up to date" after newer releases: successful update checks were cached for the entire app process.
+ - Settings/manual update checks now force a fresh GitHub latest-release request; background/launcher checks use a 5-minute cache TTL instead of an indefinite cache.
+ - Update-check logs now include cache age/TTL and whether the cache was bypassed for faster release-status troubleshooting.
 
 ## Packaged app logs
 

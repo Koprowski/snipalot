@@ -1624,7 +1624,10 @@ interface GitHubReleaseInfo {
   installerAssetName: string | null;
 }
 
+const UPDATE_CHECK_CACHE_TTL_MS = 5 * 60 * 1000;
+
 let cachedUpdateCheckResult: SettingsUpdateCheckResult | null = null;
+let cachedUpdateCheckResultAtMs = 0;
 let updateCheckPromise: Promise<SettingsUpdateCheckResult> | null = null;
 
 type SettingsTestLlmGuidance = {
@@ -1752,24 +1755,48 @@ async function performSnipalotUpdateCheck(reason: string): Promise<SettingsUpdat
   }
 }
 
-function getSnipalotUpdateCheckResult(reason: string): Promise<SettingsUpdateCheckResult> {
-  if (cachedUpdateCheckResult?.ok) {
+function getSnipalotUpdateCheckResult(
+  reason: string,
+  options: { force?: boolean } = {}
+): Promise<SettingsUpdateCheckResult> {
+  const cacheAgeMs = cachedUpdateCheckResultAtMs > 0
+    ? Date.now() - cachedUpdateCheckResultAtMs
+    : Number.POSITIVE_INFINITY;
+  if (
+    !options.force &&
+    cachedUpdateCheckResult?.ok &&
+    cacheAgeMs >= 0 &&
+    cacheAgeMs < UPDATE_CHECK_CACHE_TTL_MS
+  ) {
     log('settings', 'update check cache hit', {
       reason,
       currentVersion: cachedUpdateCheckResult.currentVersion,
       latestVersion: cachedUpdateCheckResult.latestVersion,
       updateAvailable: cachedUpdateCheckResult.updateAvailable,
+      cacheAgeMs,
+      cacheTtlMs: UPDATE_CHECK_CACHE_TTL_MS,
     });
     return Promise.resolve(cachedUpdateCheckResult);
   }
+  if (cachedUpdateCheckResult?.ok) {
+    log('settings', 'update check cache bypassed', {
+      reason,
+      force: Boolean(options.force),
+      cacheAgeMs,
+      cacheTtlMs: UPDATE_CHECK_CACHE_TTL_MS,
+      cachedLatestVersion: cachedUpdateCheckResult.latestVersion,
+      cachedUpdateAvailable: cachedUpdateCheckResult.updateAvailable,
+    });
+  }
   if (updateCheckPromise) {
-    log('settings', 'update check joining in-flight request', { reason });
+    log('settings', 'update check joining in-flight request', { reason, force: Boolean(options.force) });
     return updateCheckPromise;
   }
-  log('settings', 'update check start', { reason, currentVersion: app.getVersion() });
+  log('settings', 'update check start', { reason, force: Boolean(options.force), currentVersion: app.getVersion() });
   updateCheckPromise = performSnipalotUpdateCheck(reason)
     .then((result) => {
       cachedUpdateCheckResult = result;
+      cachedUpdateCheckResultAtMs = Date.now();
       return result;
     })
     .finally(() => {
@@ -1783,7 +1810,7 @@ function startBackgroundUpdateCheck(reason: string): void {
 }
 
 ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
-  return getSnipalotUpdateCheckResult('settings');
+  return getSnipalotUpdateCheckResult('settings', { force: true });
 });
 
 ipcMain.handle('launcher:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {

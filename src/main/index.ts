@@ -223,6 +223,17 @@ function requestAppExit(reason: string): boolean {
   }
   appExitRequested = true;
   log('main', 'app exit requested', { reason });
+  if (appState === 'recording') {
+    updateActiveSessionStatus('failed', {
+      stage: 'app exited while recording before finalization',
+      reason,
+    }, false);
+  } else if (appState === 'processing') {
+    updateActiveSessionStatus('stalled', {
+      stage: 'app exited while processing',
+      reason,
+    }, false);
+  }
   killSiblingSnipalotElectronProcesses();
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.close();
@@ -367,6 +378,130 @@ interface ActiveProcessingRun {
 
 let activeProcessingRun: ActiveProcessingRun | null = null;
 
+type SessionStatusState =
+  | 'recording'
+  | 'processing'
+  | 'complete'
+  | 'failed'
+  | 'stalled'
+  | 'abandoned'
+  | 'discarded';
+
+const SESSION_STATUS_JSON = 'session_status.json';
+const SESSION_STATUS_TEXT = 'SESSION_STATUS.txt';
+const SESSION_STATUS_HEARTBEAT_MS = 15 * 1000;
+
+let sessionStatusHeartbeat: NodeJS.Timeout | null = null;
+let activeSessionStatusDir: string | null = null;
+let activeSessionStatus: SessionStatusState | null = null;
+let activeSessionStatusDetails: Record<string, unknown> = {};
+
+function clearSessionStatusHeartbeat(): void {
+  if (sessionStatusHeartbeat) {
+    clearInterval(sessionStatusHeartbeat);
+    sessionStatusHeartbeat = null;
+  }
+}
+
+function writeSessionStatusFile(
+  sessionDir: string | null | undefined,
+  status: SessionStatusState,
+  details: Record<string, unknown> = {}
+): void {
+  if (!sessionDir) return;
+  const updatedAtIso = new Date().toISOString();
+  const payload = {
+    status,
+    updatedAtIso,
+    lastHeartbeatIso: status === 'recording' || status === 'processing' ? updatedAtIso : null,
+    terminal: status !== 'recording' && status !== 'processing',
+    appVersion: app.getVersion(),
+    pid: process.pid,
+    sessionName: path.basename(sessionDir),
+    sessionDir,
+    details,
+  };
+  const text = [
+    `status=${payload.status}`,
+    `updatedAtIso=${payload.updatedAtIso}`,
+    `lastHeartbeatIso=${payload.lastHeartbeatIso ?? ''}`,
+    `terminal=${payload.terminal}`,
+    `appVersion=${payload.appVersion}`,
+    `pid=${payload.pid}`,
+    `sessionName=${payload.sessionName}`,
+    details.stage ? `stage=${String(details.stage)}` : null,
+    details.mode ? `mode=${String(details.mode)}` : null,
+  ].filter(Boolean).join(os.EOL) + os.EOL;
+
+  try {
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const jsonPath = path.join(sessionDir, SESSION_STATUS_JSON);
+    const textPath = path.join(sessionDir, SESSION_STATUS_TEXT);
+    const tmpJsonPath = `${jsonPath}.tmp`;
+    const tmpTextPath = `${textPath}.tmp`;
+    fs.writeFileSync(tmpJsonPath, JSON.stringify(payload, null, 2), 'utf-8');
+    fs.writeFileSync(tmpTextPath, text, 'utf-8');
+    fs.renameSync(tmpJsonPath, jsonPath);
+    fs.renameSync(tmpTextPath, textPath);
+  } catch (err) {
+    log('session-status', 'write failed', {
+      sessionDir,
+      status,
+      err: (err as Error).message,
+    });
+  }
+}
+
+function setSessionStatus(
+  sessionDir: string | null | undefined,
+  status: SessionStatusState,
+  details: Record<string, unknown> = {},
+  keepHeartbeat = status === 'recording' || status === 'processing'
+): void {
+  if (!sessionDir) return;
+  writeSessionStatusFile(sessionDir, status, details);
+  writeSessionLog(
+    sessionDir,
+    'session-status',
+    `status ${status}`,
+    details,
+    status === 'complete' ? 'success' : status === 'failed' || status === 'stalled' ? 'error' : 'info'
+  );
+  if (keepHeartbeat) {
+    activeSessionStatusDir = sessionDir;
+    activeSessionStatus = status;
+    activeSessionStatusDetails = details;
+    if (!sessionStatusHeartbeat) {
+      sessionStatusHeartbeat = setInterval(() => {
+        if (activeSessionStatusDir && activeSessionStatus) {
+          writeSessionStatusFile(activeSessionStatusDir, activeSessionStatus, {
+            ...activeSessionStatusDetails,
+            heartbeat: true,
+          });
+        }
+      }, SESSION_STATUS_HEARTBEAT_MS);
+    }
+  } else {
+    activeSessionStatusDir = null;
+    activeSessionStatus = null;
+    activeSessionStatusDetails = {};
+    clearSessionStatusHeartbeat();
+  }
+}
+
+function updateActiveSessionStatus(
+  status: SessionStatusState,
+  details: Record<string, unknown> = {},
+  keepHeartbeat = status === 'recording' || status === 'processing'
+): void {
+  const sessionDir = activeSessionStatusDir ?? activeProcessingRun?.sessionDir ?? liveSessionDir ?? pendingProcessing?.preCreatedSessionDir;
+  if (!sessionDir) return;
+  setSessionStatus(sessionDir, status, {
+    ...activeSessionStatusDetails,
+    ...details,
+  }, keepHeartbeat);
+}
+
 // ─── window constructors ──────────────────────────────────────────────
 
 function setAppState(next: AppState, why: string): void {
@@ -473,6 +608,7 @@ function setProcessingStep(step: string): void {
   if (appState !== 'processing') return;
   processingStep = step;
   log('state', 'processing step', { step });
+  updateActiveSessionStatus('processing', { stage: step });
   broadcastStateToLauncher();
   ensureProcessingLauncherVisible(false);
 }
@@ -3777,6 +3913,11 @@ async function discardRecording(reason: string): Promise<void> {
   // mode, so there's nothing for it to consume.
   pendingProcessing = null;
   const sessionDirToDelete = liveSessionDir;
+  setSessionStatus(sessionDirToDelete, 'discarded', {
+    mode: currentSessionMode,
+    stage: 'recording discarded by user',
+    reason,
+  }, false);
   liveSessionDir = null;
 
   // Tell the recorder to finalize (so the MediaRecorder unwinds cleanly
@@ -3850,6 +3991,11 @@ function abandonProcessing(reason: string): boolean {
   pendingResponsePaste = null;
   pendingProcessing = null;
 
+  setSessionStatus(run.sessionDir, 'abandoned', {
+    mode: run.mode,
+    stage: 'processing abandoned by user',
+    reason,
+  }, false);
   cleanupSessionDir(run.sessionDir);
   activeProcessingRun = null;
   setAppState('idle', `processing abandoned: ${reason}`);
@@ -3886,6 +4032,11 @@ function stopRecording(reason: string): void {
       reason,
       appState,
     }, 'error');
+    setSessionStatus(liveSessionDir, 'failed', {
+      mode: currentSessionMode,
+      stage: 'stop requested before recorder media-ready',
+      reason,
+    }, false);
     showNotification(
       'Snipalot',
       'Recording did not start (screen/mic permission or display capture failed). Check that you allowed capture when prompted, then try again.'
@@ -3939,6 +4090,14 @@ function stopRecording(reason: string): void {
       mode: pendingProcessing.mode,
       tradeMarkers: pendingProcessing.tradeMarkers.length,
     }, 'start');
+    setSessionStatus(liveSessionDir, 'processing', {
+      mode: pendingProcessing.mode,
+      stage: 'waiting for recorder save-webm',
+      reason,
+      durationMs: pendingProcessing.durationMs,
+      chapters: pendingProcessing.chapters.length,
+      tradeMarkers: pendingProcessing.tradeMarkers.length,
+    });
 
     // For trade-mode sessions, immediately open the trade-context window
     // (parallel to the pipeline's mp4/whisper work) so the user can paste
@@ -4022,6 +4181,12 @@ function stopRecording(reason: string): void {
         hasPendingProcessing: Boolean(pendingProcessing),
         hasActiveProcessingRun: Boolean(activeProcessingRun),
       }, 'timeout');
+      updateActiveSessionStatus('stalled', {
+        stage: 'processing watchdog fired before completion',
+        watchdogMs,
+        hasPendingProcessing: Boolean(pendingProcessing),
+        hasActiveProcessingRun: Boolean(activeProcessingRun),
+      }, false);
       showNotification(
         'Snipalot',
         'Processing is taking too long or stalled. Quit from the tray and try again. Logs: %APPDATA%\\Snipalot\\logs\\snipalot.log'
@@ -4355,6 +4520,14 @@ ipcMain.handle(
         chapters: snap.chapters.length,
         tradeMarkers: snap.tradeMarkers.length,
       }, 'success');
+      setSessionStatus(snap.preCreatedSessionDir, 'processing', {
+        mode: snap.mode,
+        stage: 'save-webm received; pipeline running',
+        bytes: buf.length,
+        durationMs: snap.durationMs,
+        chapters: snap.chapters.length,
+        tradeMarkers: snap.tradeMarkers.length,
+      });
     }
 
     const fallbackStart = Date.now() - 1000; // arbitrary; used only if snap missing
@@ -4381,6 +4554,10 @@ ipcMain.handle(
     })
       .then(async (result) => {
         if (run?.abandoned) {
+          setSessionStatus(result.sessionDir, 'abandoned', {
+            mode: run.mode,
+            stage: 'pipeline completed after abandon; cleaning session folder',
+          }, false);
           writeSessionLog(result.sessionDir, 'pipeline', 'completed after abandon; cleaning session folder', undefined, 'skipped');
           cleanupSessionDir(result.sessionDir);
           return;
@@ -4411,12 +4588,23 @@ ipcMain.handle(
           frameCount: result.framePaths.length,
           transcriptWritten: Boolean(result.transcriptPath),
         }, result.warnings.length > 0 ? 'warning' : 'success');
+        setSessionStatus(result.sessionDir, 'complete', {
+          mode: run?.mode ?? snap?.mode ?? 'record',
+          stage: result.warnings.length > 0 ? 'pipeline complete with warnings' : 'pipeline complete',
+          warnings: result.warnings,
+          frameCount: result.framePaths.length,
+          transcriptWritten: Boolean(result.transcriptPath),
+        }, false);
         setAppState('idle', 'pipeline complete');
         void shell.openPath(result.sessionDir);
       })
       .catch(async (err) => {
         const msg = (err as Error).message;
         if (run?.abandoned) {
+          setSessionStatus(run.sessionDir, 'abandoned', {
+            stage: 'pipeline abandoned; cleaning session folder',
+            error: msg,
+          }, false);
           writeSessionLog(run.sessionDir, 'pipeline', 'abandoned; cleaning session folder', { error: msg }, 'skipped');
           cleanupSessionDir(run.sessionDir);
           return;
@@ -4431,6 +4619,10 @@ ipcMain.handle(
           false
         );
         activeProcessingRun = null;
+        updateActiveSessionStatus('failed', {
+          stage: 'pipeline failed',
+          error: msg,
+        }, false);
         setAppState('idle', 'pipeline failed');
       });
 
@@ -4623,6 +4815,13 @@ ipcMain.handle(
       liveSessionDir = path.join(outputRoot, `${stamp} ${suffix}`);
       if (!fs.existsSync(liveSessionDir)) fs.mkdirSync(liveSessionDir, { recursive: true });
       log('main', 'liveSessionDir created', { liveSessionDir, mode: currentSessionMode });
+      setSessionStatus(liveSessionDir, 'recording', {
+        mode: currentSessionMode,
+        stage: 'recording',
+        outputRoot,
+        displayId: activeDisplayId,
+        sourceId: activeSourceId,
+      });
       writeSessionManifestFile(liveSessionDir);
       writeSessionLog(liveSessionDir, 'recorder', 'session folder created', {
         mode: currentSessionMode,
@@ -4686,6 +4885,12 @@ ipcMain.handle(
             mode: currentSessionMode,
             tradeMarkers: [...currentTradeMarkers],
           };
+          setSessionStatus(pendingProcessing.preCreatedSessionDir, 'processing', {
+            mode: pendingProcessing.mode,
+            stage: 'recorder stopped unexpectedly; waiting for save-webm',
+            durationMs: pendingProcessing.durationMs,
+            tradeMarkers: pendingProcessing.tradeMarkers.length,
+          });
         }
         liveSessionDir = null;
         setAppState('idle', 'recorder reported stopped (unexpected)');
@@ -4709,6 +4914,11 @@ ipcMain.handle(
     } else if (state === 'error') {
       recorderMediaReady = false;
       writeSessionLog(liveSessionDir, 'recorder', 'recorder error', { detail }, 'error');
+      setSessionStatus(liveSessionDir, 'failed', {
+        mode: currentSessionMode,
+        stage: 'recorder error',
+        detail: detail ?? null,
+      }, false);
       setAppState('idle', `recorder error: ${detail ?? '?'}`);
       pendingRegion = null;
       activeDisplayId = null;

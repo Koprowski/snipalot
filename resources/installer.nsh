@@ -72,7 +72,9 @@ Var pid
   ; Also remove the old per-user shortcut from earlier current-user installs.
   ; If it remains beside the all-users shortcut, Windows can keep using stale
   ; taskbar identity/icon metadata even after the EXE resource icon is fixed.
+  SetShellVarContext current
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk"
+  SetShellVarContext all
   CreateShortCut "$SMPROGRAMS\Snipalot.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\resources\resources\icons\app.ico" 0 "" "" "${APP_DESCRIPTION}"
   ClearErrors
   WinShell::SetLnkAUMI "$SMPROGRAMS\Snipalot.lnk" "${APP_ID}"
@@ -80,6 +82,8 @@ Var pid
 !macroend
 
 !macro customUnInstall
+  SetShellVarContext current
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk"
+  SetShellVarContext all
   Delete "$SMPROGRAMS\Snipalot.lnk"
 !macroend

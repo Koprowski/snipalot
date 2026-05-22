@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.62)
+## Recent improvements (v1.0.1 onward; current release v1.0.63)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -512,6 +512,10 @@ Agent behavior:
  - Investigation found the installed `C:\Program Files\Snipalot\Snipalot.exe` had the correct red icon, but a legacy per-user `Snipalot.lnk` from May 5 still existed beside the all-users shortcut and Windows continued showing stale Electron taskbar icon metadata.
  - The installer cleanup now explicitly switches NSIS to `SetShellVarContext current` before deleting the legacy per-user shortcut, then switches back to `all` before recreating the all-users shortcut with the Snipalot `.ico` and AppUserModelID.
  - Manual remediation used: delete `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk` and `Electron.lnk`, clear `%LOCALAPPDATA%` icon caches, restart Explorer, then launch Snipalot from the all-users shortcut.
+- **Launcher idle height balance (v1.0.63 local branch):**
+ - The no-update launcher window height was reduced so the primary action buttons and shortcut row no longer sit above a large empty bottom band.
+ - The update-banner height remains larger, preserving room for the install/download message when an update is available.
+ - Validation: `npm.cmd test` passed after the launcher sizing change.
 
 ## Packaged app logs
 

@@ -100,7 +100,7 @@ const MAX_PENDING_RECORDER_LIFECYCLE_EVENTS = 250;
 let pendingRecorderLifecycleEvents: PendingRecorderLifecycleEvent[] = [];
 
 const LAUNCHER_WIDTH = 480;
-const LAUNCHER_BASE_HEIGHT = 218;
+const LAUNCHER_BASE_HEIGHT = 198;
 const LAUNCHER_UPDATE_HEIGHT = 246;
 
 function clearPendingRecorderStartTimeout(): void {

@@ -368,6 +368,7 @@ let pendingProcessing: PendingProcessing | null = null;
  * to the recorder renderer.
  */
 let pendingDiscard = false;
+let pendingDiscardSessionDir: string | null = null;
 
 interface ActiveProcessingRun {
   mode: 'record' | 'trade';
@@ -3913,6 +3914,7 @@ async function discardRecording(reason: string): Promise<void> {
   // mode, so there's nothing for it to consume.
   pendingProcessing = null;
   const sessionDirToDelete = liveSessionDir;
+  pendingDiscardSessionDir = sessionDirToDelete;
   setSessionStatus(sessionDirToDelete, 'discarded', {
     mode: currentSessionMode,
     stage: 'recording discarded by user',
@@ -3950,29 +3952,71 @@ async function discardRecording(reason: string): Promise<void> {
   broadcastOverlay('overlay:recording-stopped');
 
   // Delete the session dir + any snapshot PNGs already written into it.
-  if (sessionDirToDelete && fs.existsSync(sessionDirToDelete)) {
-    try {
-      fs.rmSync(sessionDirToDelete, { recursive: true, force: true });
-      log('main', 'discard: session dir removed', { sessionDirToDelete });
-    } catch (err) {
-      log('main', 'discard: session dir cleanup failed', { err: (err as Error).message });
-    }
-  }
+  // OneDrive can briefly hold handles on newly-created diagnostics, so
+  // cleanupSessionDir retries if the first removal leaves remnants behind.
+  cleanupSessionDir(sessionDirToDelete, 'discard recording');
 
   showNotification('Snipalot', 'Recording discarded — nothing saved.');
 }
 
-function cleanupSessionDir(sessionDir: string | null): void {
-  if (!sessionDir || !fs.existsSync(sessionDir)) return;
+const SESSION_CLEANUP_RETRY_DELAYS_MS = [1000, 5000, 15000, 60000, 180000];
+const pendingSessionCleanupTimers = new Map<string, NodeJS.Timeout>();
+
+function cleanupSessionDir(sessionDir: string | null, reason = 'cleanup'): void {
+  if (!sessionDir) return;
+  const existingTimer = pendingSessionCleanupTimers.get(sessionDir);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+    pendingSessionCleanupTimers.delete(sessionDir);
+  }
+  if (!fs.existsSync(sessionDir)) return;
   try {
     fs.rmSync(sessionDir, { recursive: true, force: true });
-    log('main', 'session dir removed', { sessionDir });
+    log('main', 'session dir removed', { sessionDir, reason });
   } catch (err) {
     log('main', 'session dir cleanup failed', {
       sessionDir,
+      reason,
       err: (err as Error).message,
     });
   }
+  if (fs.existsSync(sessionDir)) {
+    scheduleSessionDirCleanupRetry(sessionDir, reason, 0);
+  }
+}
+
+function scheduleSessionDirCleanupRetry(sessionDir: string, reason: string, attemptIndex: number): void {
+  if (attemptIndex >= SESSION_CLEANUP_RETRY_DELAYS_MS.length) {
+    log('main', 'session dir cleanup retries exhausted', { sessionDir, reason });
+    return;
+  }
+  const delayMs = SESSION_CLEANUP_RETRY_DELAYS_MS[attemptIndex];
+  const timer = setTimeout(() => {
+    pendingSessionCleanupTimers.delete(sessionDir);
+    if (!fs.existsSync(sessionDir)) {
+      log('main', 'session dir cleanup retry skipped; already gone', { sessionDir, reason, attempt: attemptIndex + 1 });
+      return;
+    }
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+      log('main', 'session dir cleanup retry removed folder', {
+        sessionDir,
+        reason,
+        attempt: attemptIndex + 1,
+      });
+    } catch (err) {
+      log('main', 'session dir cleanup retry failed', {
+        sessionDir,
+        reason,
+        attempt: attemptIndex + 1,
+        err: (err as Error).message,
+      });
+    }
+    if (fs.existsSync(sessionDir)) {
+      scheduleSessionDirCleanupRetry(sessionDir, reason, attemptIndex + 1);
+    }
+  }, delayMs);
+  pendingSessionCleanupTimers.set(sessionDir, timer);
 }
 
 function abandonProcessing(reason: string): boolean {
@@ -3990,13 +4034,14 @@ function abandonProcessing(reason: string): boolean {
   pendingTradeContext = null;
   pendingResponsePaste = null;
   pendingProcessing = null;
+  pendingDiscardSessionDir = null;
 
   setSessionStatus(run.sessionDir, 'abandoned', {
     mode: run.mode,
     stage: 'processing abandoned by user',
     reason,
   }, false);
-  cleanupSessionDir(run.sessionDir);
+  cleanupSessionDir(run.sessionDir, 'abandon processing');
   activeProcessingRun = null;
   setAppState('idle', `processing abandoned: ${reason}`);
   broadcastStateToLauncher();
@@ -4496,8 +4541,11 @@ ipcMain.handle(
     // away (no pipeline, no clipboard, no files), clear the flag, return.
     if (pendingDiscard) {
       pendingDiscard = false;
+      const discardedSessionDir = pendingDiscardSessionDir ?? liveSessionDir;
+      pendingDiscardSessionDir = null;
       log('recorder', 'save-webm discarded (user requested)', { bytes: buf.length });
-      writeSessionLog(liveSessionDir, 'recorder', 'save-webm discarded by user', { bytes: buf.length }, 'skipped');
+      writeSessionLog(discardedSessionDir, 'recorder', 'save-webm discarded by user', { bytes: buf.length }, 'skipped');
+      cleanupSessionDir(discardedSessionDir, 'discard save-webm finalized');
       return { ok: true, discarded: true, bytes: buf.length };
     }
 
@@ -4559,7 +4607,7 @@ ipcMain.handle(
             stage: 'pipeline completed after abandon; cleaning session folder',
           }, false);
           writeSessionLog(result.sessionDir, 'pipeline', 'completed after abandon; cleaning session folder', undefined, 'skipped');
-          cleanupSessionDir(result.sessionDir);
+          cleanupSessionDir(result.sessionDir, 'pipeline completed after abandon');
           return;
         }
         log('recorder', 'pipeline complete', {
@@ -4606,7 +4654,7 @@ ipcMain.handle(
             error: msg,
           }, false);
           writeSessionLog(run.sessionDir, 'pipeline', 'abandoned; cleaning session folder', { error: msg }, 'skipped');
-          cleanupSessionDir(run.sessionDir);
+          cleanupSessionDir(run.sessionDir, 'pipeline failed after abandon');
           return;
         }
         log('recorder', 'pipeline fail', { err: msg });

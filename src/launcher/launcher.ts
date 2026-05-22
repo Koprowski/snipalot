@@ -75,6 +75,36 @@ let updateStatusIsError = false;
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';
 
+type LauncherUpdateCheckResult = Awaited<ReturnType<typeof window.snipalotLauncher.checkForUpdates>>;
+
+function applyUpdateCheckResult(result: LauncherUpdateCheckResult): void {
+  if (result.ok && result.updateAvailable && result.latestVersion) {
+    availableUpdateVersion = result.latestVersion;
+    availableUpdateHasInstaller = Boolean(result.installerAssetUrl);
+    updateStatusMessage = null;
+    updateStatusIsError = false;
+    updateDownloadProgress = null;
+  } else if (result.ok && !updateInstallInProgress) {
+    availableUpdateVersion = null;
+    availableUpdateHasInstaller = false;
+    updateStatusMessage = null;
+    updateStatusIsError = false;
+    updateDownloadProgress = null;
+  }
+  renderLauncherImpl();
+}
+
+function refreshLauncherUpdateCheck(reason: string): void {
+  void window.snipalotLauncher.checkForUpdates()
+    .then(applyUpdateCheckResult)
+    .catch((err) => {
+      window.snipalotLauncher.log('update-check', 'fail', {
+        reason,
+        message: (err as Error).message,
+      });
+    });
+}
+
 function renderLauncherImpl(): void {
   // State label: hyphenated states get friendlier capitalization. While
   // recording, the label distinguishes record vs trade by sessionMode
@@ -485,6 +515,7 @@ window.snipalotLauncher.onUpdateDownloadProgress((progress) => {
   updateStatusIsError = false;
   renderLauncherUpdate();
 });
+window.snipalotLauncher.onUpdateCheckResult(applyUpdateCheckResult);
 
 renderLauncherImpl();
 window.snipalotLauncher.getCaptureMode()
@@ -493,18 +524,6 @@ window.snipalotLauncher.getCaptureMode()
     renderLauncherImpl();
   })
   .catch(() => { /* ignore */ });
-window.snipalotLauncher.checkForUpdates()
-  .then((result) => {
-    if (result.ok && result.updateAvailable && result.latestVersion) {
-      availableUpdateVersion = result.latestVersion;
-      availableUpdateHasInstaller = Boolean(result.installerAssetUrl);
-      updateStatusMessage = null;
-      updateStatusIsError = false;
-      updateDownloadProgress = null;
-      renderLauncherImpl();
-    }
-  })
-  .catch((err) => {
-    window.snipalotLauncher.log('update-check', 'fail', { message: (err as Error).message });
-  });
+refreshLauncherUpdateCheck('boot');
+setInterval(() => refreshLauncherUpdateCheck('periodic'), 60 * 1000);
 window.snipalotLauncher.log('boot', 'launcher ready');

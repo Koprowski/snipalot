@@ -37,6 +37,27 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     message: string;
     installerAssetUrl?: string | null;
   }> => ipcRenderer.invoke('launcher:check-for-updates'),
+  onUpdateCheckResult: (callback: (result: {
+    ok: boolean;
+    currentVersion: string;
+    latestVersion: string | null;
+    releaseUrl: string;
+    updateAvailable: boolean;
+    message: string;
+    installerAssetUrl?: string | null;
+  }) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: {
+      ok: boolean;
+      currentVersion: string;
+      latestVersion: string | null;
+      releaseUrl: string;
+      updateAvailable: boolean;
+      message: string;
+      installerAssetUrl?: string | null;
+    }) => callback(result);
+    ipcRenderer.on('launcher:update-check-result', listener);
+    return () => ipcRenderer.removeListener('launcher:update-check-result', listener);
+  },
   installUpdate: (): Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }> =>
     ipcRenderer.invoke('launcher:install-update'),
   onUpdateDownloadProgress: (callback: (progress: {

@@ -1934,6 +1934,7 @@ function getSnipalotUpdateCheckResult(
     .then((result) => {
       cachedUpdateCheckResult = result;
       cachedUpdateCheckResultAtMs = Date.now();
+      sendLauncherUpdateCheckResult(result);
       return result;
     })
     .finally(() => {
@@ -1944,6 +1945,11 @@ function getSnipalotUpdateCheckResult(
 
 function startBackgroundUpdateCheck(reason: string): void {
   void getSnipalotUpdateCheckResult(reason);
+}
+
+function sendLauncherUpdateCheckResult(result: SettingsUpdateCheckResult): void {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return;
+  launcherWindow.webContents.send('launcher:update-check-result', result);
 }
 
 ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {

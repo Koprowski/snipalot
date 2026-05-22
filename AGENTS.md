@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.66)
+## Recent improvements (v1.0.1 onward; current release v1.0.67)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -528,6 +528,10 @@ Agent behavior:
  - Confirmed empty trade folders with only `mic_diagnostics.json` match a user pressing Discard after recorder start but before finalization; no trade outputs are expected in that path.
  - Discard now tracks the session folder separately until the discarded `save-webm` callback arrives, so cleanup can run both immediately and after MediaRecorder unwinds.
  - Session folder deletion now retries after 1s, 5s, 15s, 60s, and 180s if OneDrive or Windows briefly keeps newly-created diagnostics locked.
+- **Launcher update banner refresh (v1.0.67 local branch):**
+ - Root cause: Settings forced a fresh update check, but the already-open launcher only checked on boot and did not receive the Settings result.
+ - Main now pushes every completed update-check result to the launcher via `launcher:update-check-result`.
+ - Launcher applies pushed results and also refreshes update status every 60 seconds; the update banner still hides and keeps compact launcher height when no update is available.
 
 ## Packaged app logs
 

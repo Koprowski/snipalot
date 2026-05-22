@@ -30,6 +30,15 @@ interface Window {
       message: string;
       installerAssetUrl?: string | null;
     }>;
+    onUpdateCheckResult: (callback: (result: {
+      ok: boolean;
+      currentVersion: string;
+      latestVersion: string | null;
+      releaseUrl: string;
+      updateAvailable: boolean;
+      message: string;
+      installerAssetUrl?: string | null;
+    }) => void) => (() => void);
     installUpdate: () => Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }>;
     onUpdateDownloadProgress: (callback: (progress: {
       version: string;

@@ -69,12 +69,16 @@ Var pid
   ; Electron-builder preserves existing shortcut state across upgrades, which can
   ; leave Start Menu search empty if the previous shortcut was missing. Repair it
   ; explicitly on every install/update.
-  ; Also remove the old per-user shortcut from earlier current-user installs.
-  ; If it remains beside the all-users shortcut, Windows can keep using stale
-  ; taskbar identity/icon metadata even after the EXE resource icon is fixed.
+  ; Also remove old per-user shortcuts from earlier current-user/dev installs.
+  ; If one remains beside the all-users shortcut with app.snipalot identity,
+  ; Windows can keep using stale taskbar icon metadata even after the EXE and
+  ; window icons are fixed.
   SetShellVarContext current
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk"
+  Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Electron.lnk"
+  Delete "$QUICKLAUNCH\User Pinned\TaskBar\Electron.lnk"
   SetShellVarContext all
+  Delete "$SMPROGRAMS\Electron.lnk"
   CreateShortCut "$SMPROGRAMS\Snipalot.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\resources\resources\icons\app.ico" 0 "" "" "${APP_DESCRIPTION}"
   ClearErrors
   WinShell::SetLnkAUMI "$SMPROGRAMS\Snipalot.lnk" "${APP_ID}"
@@ -96,7 +100,10 @@ Var pid
 !macro customUnInstall
   SetShellVarContext current
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk"
+  Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Electron.lnk"
   Delete "$QUICKLAUNCH\User Pinned\TaskBar\Snipalot.lnk"
+  Delete "$QUICKLAUNCH\User Pinned\TaskBar\Electron.lnk"
   SetShellVarContext all
+  Delete "$SMPROGRAMS\Electron.lnk"
   Delete "$SMPROGRAMS\Snipalot.lnk"
 !macroend

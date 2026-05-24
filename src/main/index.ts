@@ -42,6 +42,7 @@ import type { SessionLogStatus } from './session-log';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
+const appUserModelId = app.isPackaged ? 'app.snipalot' : 'app.snipalot.dev';
 // --debug shows the hidden recorder window AND opens DevTools on it.
 // Useful when a recording fails and you need to inspect MediaRecorder errors.
 // npm run dev stays clean; use `npm run debug` to enable.
@@ -67,10 +68,10 @@ process.on('exit', (code) => {
   log('process', 'exit', { code });
 });
 
-// Windows uses this id for taskbar grouping. Set it before windows are
-// created so dev launches do not inherit electron.exe/default artwork.
+// Windows uses this id for taskbar grouping. Keep dev and packaged identities
+// separate so a dev electron.exe shortcut cannot contaminate production.
 if (process.platform === 'win32') {
-  app.setAppUserModelId('app.snipalot');
+  app.setAppUserModelId(appUserModelId);
 }
 
 // Prevent multiple instances of Snipalot from running simultaneously.
@@ -6173,6 +6174,7 @@ app.whenReady().then(() => {
     isDev,
     isDebug,
     isSpikeM1,
+    appUserModelId,
     cwd: process.cwd(),
     platform: process.platform,
     outputDir: cfg.outputDir,

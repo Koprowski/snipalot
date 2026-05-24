@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.70)
+## Recent improvements (v1.0.1 onward; current release v1.0.71)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -579,6 +579,9 @@ Agent behavior:
 - **All-window taskbar icon hardening (v1.0.70 local branch):**
  - Follow-up live inspection showed the three visible overlay windows had no `WM_GETICON` handles and only inherited Electron's class icon, while the launcher and installed EXE already had the red-dot icon. Windows can choose a visible overlay as the taskbar group representative even though overlays are `skipTaskbar:true`, causing the group icon to show Electron.
  - Every Snipalot `BrowserWindow` now receives the app icon in constructor options where applicable and then calls `win.setIcon(appWindowIcon())` immediately after creation. This explicitly sets window-level icon handles for launcher, overlays, recorder, HUD, annotator, trade-context, response-paste, settings, and frame-picker windows.
+- **Stale Electron shortcut identity cleanup (v1.0.71 local branch):**
+ - v1.0.70 still showed the Electron taskbar icon even though logs confirmed Snipalot icons were applied to launcher/overlay/recorder windows. Shell enumeration found a legacy per-user `Electron.lnk` under `%APPDATA%\Microsoft\Windows\Start Menu\Programs` targeting the repo's dev `node_modules\electron\dist\electron.exe`, with `AppUserModelId=app.snipalot`.
+ - Installer cleanup now deletes stale `Electron.lnk` shortcuts from current-user Start Menu, current-user pinned taskbar, and all-users Start Menu before recreating the canonical all-users `Snipalot.lnk` with `app.ico` and `app.snipalot`. Dev runs now use `app.snipalot.dev` while packaged builds keep `app.snipalot`, preventing future dev `electron.exe` shortcuts from sharing the production taskbar identity. `tests/installer-shortcut-cleanup.test.mjs` guards this path.
 
 ## Packaged app logs
 

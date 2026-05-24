@@ -212,6 +212,22 @@ function appWindowIcon() {
   return image.isEmpty() ? iconPath : image;
 }
 
+function applyAppWindowIcon(win: BrowserWindow, label: string): void {
+  try {
+    const icon = appWindowIcon();
+    win.setIcon(icon);
+    log('main', 'window icon applied', {
+      label,
+      icon: typeof icon === 'string' ? icon : '[nativeImage]',
+    });
+  } catch (err) {
+    log('main', 'window icon apply failed', {
+      label,
+      err: (err as Error).message,
+    });
+  }
+}
+
 function initializeCaptureSurfaces(reason: string): void {
   if (captureSurfacesInitialized) return;
   captureSurfacesInitialized = true;
@@ -1279,6 +1295,7 @@ function updateLauncherVisibility(): void {
 
 function createOverlayWindowForDisplay(display: Display): BrowserWindow {
   const displayId = String(display.id);
+  const icon = appWindowIcon();
   log('main', 'createOverlay requested', {
     displayId,
     bounds: display.bounds,
@@ -1313,6 +1330,7 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
     resizable: false,
     movable: false,
     skipTaskbar: true,
+    icon,
     focusable: true,
     hasShadow: false,
     enableLargerThanScreen: true,
@@ -1323,6 +1341,7 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
       backgroundThrottling: false,
     },
   });
+  applyAppWindowIcon(win, `overlay:${displayId}`);
 
   // Step 2: force the full display bounds. setBounds() on Windows routes
   // through per-monitor DPI translation correctly even when the primary
@@ -1400,6 +1419,7 @@ function createRecorderWindow(): BrowserWindow {
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(win, 'recorder');
   win.loadFile(path.join(__dirname, '..', 'recorder', 'recorder.html'));
   win.webContents.on('did-finish-load', () => {
     log('recorder', 'window finished load');
@@ -1500,6 +1520,7 @@ function createLauncherWindow(): BrowserWindow {
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(win, 'launcher');
   // Launcher is hidden during Snipalot's own recording, so we don't need
   // content protection on it. Keeping it off means Print Screen / OS-level
   // screen capture still works when debugging the launcher's appearance.
@@ -1567,6 +1588,7 @@ function createHudWindow(onDisplay: Display): BrowserWindow {
   const margin = 16;
   const x = onDisplay.workArea.x + onDisplay.workArea.width - w - margin;
   const y = onDisplay.workArea.y + margin;
+  const icon = appWindowIcon();
   log('main', 'createHud', { onDisplay: String(onDisplay.id), x, y });
 
   const win = new BrowserWindow({
@@ -1584,12 +1606,14 @@ function createHudWindow(onDisplay: Display): BrowserWindow {
     maximizable: false,
     show: false,
     hasShadow: false,
+    icon,
     webPreferences: {
       preload: path.join(__dirname, '..', 'hud', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(win, 'hud');
   win.setAlwaysOnTop(true, 'screen-saver');
   // Content protection hides the HUD from screen capture (so its buttons
   // never appear inside a recording). --no-protect turns it off so the user
@@ -1722,6 +1746,7 @@ function openAnnotator(): void {
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(annotatorWindow, 'annotator');
   annotatorWindow.removeMenu();
   annotatorWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
     log('annotator', 'console-message', { level, message, line, sourceId });
@@ -1930,6 +1955,7 @@ function openTradeContextWindow(
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(tradeContextWindow, 'trade-context');
   tradeContextWindow.removeMenu();
   tradeContextWindow.loadFile(path.join(__dirname, '..', 'trade-context', 'trade-context.html'));
   const showTradeContext = () => {
@@ -2108,6 +2134,7 @@ function openResponsePasteWindow(
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(responsePasteWindow, 'response-paste');
   responsePasteWindow.removeMenu();
   responsePasteWindow.loadFile(
     path.join(__dirname, '..', 'response-paste', 'response-paste.html')
@@ -2212,6 +2239,7 @@ function openSettings(isFirstRun = false): void {
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(win, 'settings');
   win.setAlwaysOnTop(true, 'screen-saver');
   win.loadFile(path.join(__dirname, '..', 'settings', 'settings.html'));
   win.on('close', (event) => {
@@ -4005,6 +4033,7 @@ function openFramePicker(mp4Path: string, sessionDir: string): void {
       nodeIntegration: false,
     },
   });
+  applyAppWindowIcon(win, 'frame-picker');
   win.loadFile(path.join(__dirname, '..', 'framepicker', 'framepicker.html'));
   win.once('ready-to-show', () => {
     win.show();

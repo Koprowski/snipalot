@@ -45,6 +45,15 @@ export interface SnipalotConfig {
      */
     clearAnnotationsAfter: boolean;
   };
+  feedback: {
+    /**
+     * Record-mode output artifacts. These do not affect transcription.
+     * Trade-mode ignores these switches and still generates the media its
+     * reporting pipeline expects.
+     */
+    generateMp4: boolean;
+    generateGif: boolean;
+  };
   trade: {
     /**
      * After a Trade-mode recording stops, should Snipalot pop the
@@ -143,9 +152,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     // apps and the conflict was costing Jason muscle memory.
     annotate: 'Ctrl+Shift+A',
     // 'P' for "Picture" — Snipalot wins the chord at the OS level via
-    // globalShortcut.register, so the browser print-preview default
-    // never fires while a recording is active and the binding is live.
-    snapshot: 'Ctrl+Shift+P',
+    // Ctrl+Shift+P proved unreliable on Windows despite Electron reporting
+    // it as registered, so the default uses Ctrl+Alt+P.
+    snapshot: 'Ctrl+Alt+P',
     // 'T' for Trade — toggles a Trade session, equivalent to clicking
     // the violet Trade button in the launcher. Always-on global.
     startTrade: 'Ctrl+Shift+T',
@@ -155,7 +164,6 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     tradeMarker: 'Ctrl+Shift+X',
     clear: 'Ctrl+Shift+C',
     undo: 'Ctrl+Z',
-    // Pause/resume moved off Ctrl+Shift+P to make room for snapshot.
     // 'B' for Break — also free of common app conflicts.
     pauseResume: 'Ctrl+Shift+B',
     toggleOutline: 'Ctrl+Shift+H',
@@ -166,6 +174,10 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   },
   snapshot: {
     clearAnnotationsAfter: true,
+  },
+  feedback: {
+    generateMp4: false,
+    generateGif: false,
   },
   trade: {
     autoPromptForTradeData: true,
@@ -210,7 +222,10 @@ export function loadConfig(): SnipalotConfig {
         path: CONFIG_PATH,
         outputDir: _config.outputDir,
         firstRun: _config.firstRun,
+        hotkeys: _config.hotkeys,
         launcherVisibleActions: _config.launcher.visibleActions,
+        capture: _config.capture,
+        feedback: _config.feedback,
       });
     } else {
       _config = deepMerge(DEFAULT_CONFIG, {}) as SnipalotConfig;
@@ -267,6 +282,13 @@ function migrateLoadedConfig(
     log('config', 'migrated old default tradeMarker hotkey', {
       from: 'Ctrl+Shift+M',
       to: config.hotkeys.tradeMarker,
+    });
+  }
+  if (parsed.hotkeys?.snapshot === 'Ctrl+Shift+P') {
+    config.hotkeys.snapshot = DEFAULT_CONFIG.hotkeys.snapshot;
+    log('config', 'migrated old default snapshot hotkey', {
+      from: 'Ctrl+Shift+P',
+      to: config.hotkeys.snapshot,
     });
   }
   if (parsed.trade?.geminiCliModel === 'gemini-2.5-flash') {

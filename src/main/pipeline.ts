@@ -169,6 +169,20 @@ export interface PipelineInput {
   onTradePromptReady?: (sessionDir: string, responsePath: string, promptPath: string) => void;
   /** Cancellation signal for an in-flight processing run. */
   abortSignal?: AbortSignal;
+  /**
+   * Transcript work already performed while the recording was live. When this
+   * resolves cleanly, runPipeline writes transcript.txt from it instead of
+   * re-running Whisper over the final WebM after stop.
+   */
+  incrementalTranscript?: Promise<IncrementalTranscriptionResult | null>;
+  /**
+   * Record-mode media artifact switches. Trade sessions ignore these and
+   * always generate the MP4/GIF artifacts their reports expect.
+   */
+  feedbackOutputs?: {
+    generateMp4?: boolean;
+    generateGif?: boolean;
+  };
 }
 
 export interface PipelineResult {
@@ -179,6 +193,55 @@ export interface PipelineResult {
   promptPath: string;
   framePaths: string[];
   promptText: string;
+  warnings: string[];
+}
+
+export interface IncrementalTranscriptionResult {
+  segments: TranscriptSegment[];
+  diagnostics: ChunkAudioDiagnostic[];
+  chunkCount: number;
+  failedChunks: number;
+  warnings: string[];
+}
+
+export interface IncrementalTranscriptionChunkResult {
+  index: number;
+  startSec: number;
+  endSec: number;
+  segments: TranscriptSegment[];
+  diagnostic: ChunkAudioDiagnostic;
+}
+
+export type DiscardedTradeAuditStatus =
+  | 'potential_trade_activity'
+  | 'no_trade_evidence'
+  | 'review_incomplete';
+
+export interface DiscardedTradeAuditInput {
+  webmBuffer: Buffer;
+  sessionDir: string;
+  startedAtMs: number;
+  durationMs: number;
+  annotations: AnnotationRecord[];
+  chapters: ChapterRecord[];
+  tradeMarkers: TradeMarkerRecord[];
+  abortSignal?: AbortSignal;
+}
+
+export interface DiscardedTradeAuditResult {
+  sessionDir: string;
+  inputsDir: string;
+  status: DiscardedTradeAuditStatus;
+  suspected: boolean;
+  retainedWebm: boolean;
+  webmPath: string;
+  transcriptPath: string | null;
+  reviewJsonPath: string;
+  reviewMarkdownPath: string;
+  suspectedTradeTimestamps: string[];
+  comments: string;
+  markerCount: number;
+  evidenceCount: number;
   warnings: string[];
 }
 
@@ -557,7 +620,7 @@ export interface TranscriptSegment {
   endSec: number;
 }
 
-interface ChunkAudioDiagnostic {
+export interface ChunkAudioDiagnostic {
   startSec: number;
   endSec: number;
   meanVolumeDb: number | null;
@@ -657,7 +720,7 @@ function isSpeechLikeTranscriptSegment(segment: TranscriptSegment): boolean {
   return !isNonSpeechWhisperLabel(segment.text);
 }
 
-function mergeTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+export function mergeTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
   const sorted = [...segments].sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec);
   const merged: TranscriptSegment[] = [];
   for (const segment of sorted) {
@@ -896,12 +959,495 @@ async function transcribeWavInChunks(
   return { segments: mergeTranscriptSegments(allSegments), diagnostics };
 }
 
+export function buildTranscriptText(
+  recordingDurationSec: number,
+  segments: TranscriptSegment[],
+  diagnostics: ChunkAudioDiagnostic[],
+  transcriptionMode: string
+): string {
+  const lastSegEndSec = segments.length > 0 ? segments[segments.length - 1].endSec : 0;
+  const suspiciousChunks = diagnostics.filter((d) => d.suspicious);
+  const headerLines: string[] = [];
+  headerLines.push(`# Recording duration: ${formatTranscriptTime(recordingDurationSec)}`);
+  headerLines.push(`# Transcription mode: ${transcriptionMode}`);
+  if (segments.length > 0) {
+    headerLines.push(`# Last narration segment ended at ${formatTranscriptTime(lastSegEndSec)}`);
+  } else {
+    headerLines.push('# No narration detected (whisper produced no segments)');
+  }
+  if (suspiciousChunks.length > 0) {
+    headerLines.push(`# Audio review warnings: ${suspiciousChunks.length} chunk(s) had audio but no speech-like transcript after retry`);
+  }
+  headerLines.push('');
+
+  const tailGapSec = recordingDurationSec - lastSegEndSec;
+  const tailLines: string[] = [];
+  if (tailGapSec > 10) {
+    const tailHasAudio = diagnostics.some((d) => d.audioPresent && d.endSec > lastSegEndSec + 1);
+    tailLines.push(
+      tailHasAudio
+        ? `[${formatTranscriptTime(lastSegEndSec)} - ${formatTranscriptTime(recordingDurationSec)}] [AUDIO PRESENT - no speech-like transcript was produced in the remaining ${formatTranscriptTime(tailGapSec)}; review source audio if commentary is expected]`
+        : `[${formatTranscriptTime(lastSegEndSec)} - ${formatTranscriptTime(recordingDurationSec)}] [SILENT - no audible speech detected for ${formatTranscriptTime(tailGapSec)}; recording continued through this stretch]`
+    );
+  }
+
+  return [
+    ...headerLines,
+    ...segments.map((s) => s.text),
+    ...tailLines,
+  ].join('\n') + '\n';
+}
+
+export async function transcribeIncrementalAudioChunk(input: {
+  audioBuffer: Buffer;
+  sessionDir: string;
+  index: number;
+  startMs: number;
+  endMs: number;
+  mimeType?: string | null;
+  abortSignal?: AbortSignal;
+}): Promise<IncrementalTranscriptionChunkResult> {
+  const whisper = findWhisperBinary();
+  if (!whisper) {
+    throw new Error('Whisper is not installed; incremental transcription skipped');
+  }
+
+  const chunkDir = path.join(input.sessionDir, 'Inputs', 'incremental-transcript');
+  ensureDir(chunkDir);
+  const id = `chunk-${String(input.index).padStart(3, '0')}`;
+  const audioWebmPath = path.join(chunkDir, `${id}.webm`);
+  const wavPath = path.join(chunkDir, `${id}.wav`);
+  const normalizedPath = path.join(chunkDir, `${id}-normalized.wav`);
+  const outPrefix = path.join(chunkDir, id);
+  const retryOutPrefix = path.join(chunkDir, `${id}-retry`);
+  const startSec = Math.max(0, Math.round(input.startMs / 1000));
+  const endSec = Math.max(startSec + 1, Math.round(input.endMs / 1000));
+  let retried = false;
+
+  try {
+    throwIfAborted(input.abortSignal);
+    fs.writeFileSync(audioWebmPath, input.audioBuffer);
+    await webmToWav(audioWebmPath, wavPath, input.abortSignal);
+    const audio = await measureWavAudio(wavPath, input.abortSignal);
+    let chunkSegments = await runWhisperToSegments(
+      whisper.exe,
+      whisper.model,
+      wavPath,
+      outPrefix,
+      startSec,
+      input.abortSignal
+    );
+    let speechLikeCount = chunkSegments.filter(isSpeechLikeTranscriptSegment).length;
+
+    if (audio.audioPresent && speechLikeCount === 0) {
+      retried = true;
+      await normalizeWavForRetry(wavPath, normalizedPath, input.abortSignal);
+      const retrySegments = await runWhisperToSegments(
+        whisper.exe,
+        whisper.model,
+        normalizedPath,
+        retryOutPrefix,
+        startSec,
+        input.abortSignal
+      );
+      const retrySpeechLikeCount = retrySegments.filter(isSpeechLikeTranscriptSegment).length;
+      if (retrySpeechLikeCount > speechLikeCount) {
+        chunkSegments = retrySegments;
+        speechLikeCount = retrySpeechLikeCount;
+      }
+    }
+
+    const suspicious = audio.audioPresent && speechLikeCount === 0;
+    if (suspicious) {
+      chunkSegments.push({
+        startSec,
+        endSec,
+        text: `[${formatTranscriptTime(startSec)} - ${formatTranscriptTime(endSec)}] [AUDIO PRESENT - Whisper detected mostly typing/noise in this chunk; speech may need review]`,
+      });
+    }
+
+    const diagnostic: ChunkAudioDiagnostic = {
+      startSec,
+      endSec,
+      meanVolumeDb: audio.meanVolumeDb,
+      maxVolumeDb: audio.maxVolumeDb,
+      audioPresent: audio.audioPresent,
+      suspicious,
+      retried,
+      segmentCount: chunkSegments.length,
+      speechLikeCount,
+    };
+    writeSessionLog(input.sessionDir, 'whisper', 'incremental chunk transcribed', {
+      index: input.index,
+      startSec,
+      endSec,
+      audioPresent: audio.audioPresent,
+      meanVolumeDb: audio.meanVolumeDb,
+      maxVolumeDb: audio.maxVolumeDb,
+      retried,
+      suspicious,
+      segments: chunkSegments.length,
+      speechLikeCount,
+      bytes: input.audioBuffer.length,
+      mimeType: input.mimeType ?? null,
+    }, suspicious ? 'warning' : 'success');
+
+    return {
+      index: input.index,
+      startSec,
+      endSec,
+      segments: chunkSegments,
+      diagnostic,
+    };
+  } finally {
+    for (const file of [
+      audioWebmPath,
+      wavPath,
+      normalizedPath,
+      `${outPrefix}.srt`,
+      `${retryOutPrefix}.srt`,
+    ]) {
+      try { fs.unlinkSync(file); } catch { /* ignore */ }
+    }
+  }
+}
+
 // ─── prompt template ─────────────────────────────────────────────────
+
+interface DiscardedTradeEvidence {
+  kind: 'marker' | 'transcript' | 'annotation';
+  timestamp: string;
+  offsetMs: number | null;
+  confidence: 'high' | 'medium' | 'low';
+  detail: string;
+  sourcePath?: string;
+}
+
+const DIRECT_TRADE_PATTERNS: RegExp[] = [
+  /\b(i\s+)?(bought|buying|buy|aped|apeing|entered|entering|entry|filled|market\s+buy|took\s+(a\s+)?position|position\s+in)\b/i,
+  /\b(i\s+)?(sold|selling|sell|exited|exiting|exit|closed|closing|trimmed|trimming|cut|cutting|stopped\s+out|took\s+profit|taking\s+profit)\b/i,
+  /\b(partial|half|quarter|full)\s+(entry|exit|sell|sold|fill|position)\b/i,
+];
+
+const CONTEXT_TRADE_PATTERNS: RegExp[] = [
+  /\b(token|ticker|contract|ca|market\s*cap|mc|liquidity|volume|narrative|meta|setup)\b/i,
+  /\b(long|short|position|risk|stop|target|pnl|profit|loss|break\s*even)\b/i,
+];
 
 function formatMsAsMinSec(ms: number): string {
   const mm = Math.floor(ms / 60000);
   const ss = Math.floor((ms % 60000) / 1000);
   return `${mm}:${String(ss).padStart(2, '0')}`;
+}
+
+function buildDiscardedTranscriptText(
+  recordingDurationSec: number,
+  segments: TranscriptSegment[],
+  diagnostics: ChunkAudioDiagnostic[]
+): string {
+  const lastSegEndSec = segments.length > 0 ? segments[segments.length - 1].endSec : 0;
+  const suspiciousChunks = diagnostics.filter((d) => d.suspicious);
+  const headerLines = [
+    `# Recording duration: ${formatTranscriptTime(recordingDurationSec)}`,
+    `# Transcription mode: discarded trade audit (${WHISPER_CHUNK_SEC}s chunks, ${WHISPER_CHUNK_OVERLAP_SEC}s overlap, max-context 0)`,
+    segments.length > 0
+      ? `# Last narration segment ended at ${formatTranscriptTime(lastSegEndSec)}`
+      : '# No narration detected (whisper produced no segments)',
+  ];
+  if (suspiciousChunks.length > 0) {
+    headerLines.push(`# Audio review warnings: ${suspiciousChunks.length} chunk(s) had audio but no speech-like transcript after retry`);
+  }
+  const tailGapSec = recordingDurationSec - lastSegEndSec;
+  const tailLines: string[] = [];
+  if (tailGapSec > 10) {
+    const tailHasAudio = diagnostics.some((d) => d.audioPresent && d.endSec > lastSegEndSec + 1);
+    tailLines.push(
+      tailHasAudio
+        ? `[${formatTranscriptTime(lastSegEndSec)} - ${formatTranscriptTime(recordingDurationSec)}] [AUDIO PRESENT - no speech-like transcript was produced in the remaining ${formatTranscriptTime(tailGapSec)}; review source audio if commentary is expected]`
+        : `[${formatTranscriptTime(lastSegEndSec)} - ${formatTranscriptTime(recordingDurationSec)}] [SILENT - no audible speech detected for ${formatTranscriptTime(tailGapSec)}; recording continued through this stretch]`
+    );
+  }
+  return [
+    ...headerLines,
+    '',
+    ...segments.map((s) => s.text),
+    ...tailLines,
+  ].join('\n') + '\n';
+}
+
+function collectDiscardedTradeEvidence(
+  segments: TranscriptSegment[],
+  tradeMarkers: TradeMarkerRecord[],
+  annotations: AnnotationRecord[]
+): DiscardedTradeEvidence[] {
+  const evidence: DiscardedTradeEvidence[] = [];
+  for (let i = 0; i < tradeMarkers.length; i += 1) {
+    const marker = tradeMarkers[i];
+    evidence.push({
+      kind: 'marker',
+      timestamp: marker.offsetLabel || formatMsAsMinSec(marker.offsetMs),
+      offsetMs: marker.offsetMs,
+      confidence: marker.screenshotPath ? 'high' : 'medium',
+      detail: `Trade marker #${i + 1} was pressed${marker.screenshotPath ? ' and captured a marker screenshot' : ''}.`,
+      sourcePath: marker.screenshotPath,
+    });
+  }
+  for (const segment of segments) {
+    const body = stripTranscriptStamp(segment.text);
+    if (!body) continue;
+    const direct = DIRECT_TRADE_PATTERNS.some((pattern) => pattern.test(body));
+    const contextual = CONTEXT_TRADE_PATTERNS.some((pattern) => pattern.test(body));
+    if (!direct && !contextual) continue;
+    evidence.push({
+      kind: 'transcript',
+      timestamp: formatTranscriptTime(segment.startSec),
+      offsetMs: segment.startSec * 1000,
+      confidence: direct ? 'high' : 'low',
+      detail: body.length > 240 ? `${body.slice(0, 237)}...` : body,
+    });
+  }
+  for (const annotation of annotations) {
+    const text = [annotation.text, annotation.note].filter(Boolean).join(' ');
+    if (!text) continue;
+    const direct = DIRECT_TRADE_PATTERNS.some((pattern) => pattern.test(text));
+    const contextual = CONTEXT_TRADE_PATTERNS.some((pattern) => pattern.test(text));
+    if (!direct && !contextual) continue;
+    evidence.push({
+      kind: 'annotation',
+      timestamp: formatMsAsMinSec(annotation.drawnAtMs),
+      offsetMs: annotation.drawnAtMs,
+      confidence: direct ? 'medium' : 'low',
+      detail: text.length > 240 ? `${text.slice(0, 237)}...` : text,
+    });
+  }
+  return evidence.sort((a, b) => (a.offsetMs ?? Number.MAX_SAFE_INTEGER) - (b.offsetMs ?? Number.MAX_SAFE_INTEGER));
+}
+
+function writeDiscardedTradeReviewMarkdown(
+  filePath: string,
+  result: {
+    status: DiscardedTradeAuditStatus;
+    comments: string;
+    retainedWebm: boolean;
+    transcriptPath: string | null;
+    webmPath: string;
+    warnings: string[];
+    evidence: DiscardedTradeEvidence[];
+  }
+): void {
+  const lines: string[] = [
+    '# Discarded Trade Session Review',
+    '',
+    `Status: ${result.status}`,
+    `Comments: ${result.comments}`,
+    `WebM retained: ${result.retainedWebm ? 'yes' : 'no'}`,
+    `Transcript: ${result.transcriptPath ?? 'not available'}`,
+    `WebM: ${result.retainedWebm ? result.webmPath : 'deleted after no trade evidence was found'}`,
+    '',
+    '## Evidence',
+  ];
+  if (result.evidence.length === 0) {
+    lines.push('', 'No trade markers or trade-language transcript/annotation evidence was found.');
+  } else {
+    for (const item of result.evidence) {
+      lines.push(
+        '',
+        `- ${item.timestamp} (${item.kind}, ${item.confidence}): ${item.detail}${item.sourcePath ? ` [${item.sourcePath}]` : ''}`
+      );
+    }
+  }
+  if (result.warnings.length > 0) {
+    lines.push('', '## Warnings');
+    for (const warning of result.warnings) lines.push(`- ${warning}`);
+  }
+  fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8');
+}
+
+function copyDiscardedSnapshotInputs(chapters: ChapterRecord[], inputsDir: string): string[] {
+  const copied: string[] = [];
+  const snapshotDir = path.join(inputsDir, 'discarded-snapshots');
+  for (const chapter of chapters) {
+    if (!chapter.pngPath || !fs.existsSync(chapter.pngPath)) continue;
+    ensureDir(snapshotDir);
+    const targetPath = path.join(snapshotDir, `snapshot-${chapter.snapshotIndex}.png`);
+    try {
+      fs.copyFileSync(chapter.pngPath, targetPath);
+      copied.push(targetPath);
+    } catch (err) {
+      writeSessionLog(path.dirname(inputsDir), 'discard-audit', 'snapshot copy failed', {
+        sourcePath: chapter.pngPath,
+        targetPath,
+        error: (err as Error).message,
+      }, 'warning');
+    }
+  }
+  return copied;
+}
+
+export async function runDiscardedTradeAudit(input: DiscardedTradeAuditInput): Promise<DiscardedTradeAuditResult> {
+  const { sessionDir } = input;
+  const inputsDir = path.join(sessionDir, 'Inputs');
+  ensureDir(sessionDir);
+  ensureDir(inputsDir);
+
+  const webmPath = path.join(inputsDir, 'discarded_recording.webm');
+  const wavPath = path.join(inputsDir, 'discarded_recording.wav');
+  const transcriptPath = path.join(inputsDir, 'transcript.txt');
+  const markersPath = path.join(inputsDir, 'markers.json');
+  const annotationsPath = path.join(inputsDir, 'annotations.json');
+  const reviewJsonPath = path.join(inputsDir, 'discarded_trade_review.json');
+  const reviewMarkdownPath = path.join(inputsDir, 'discarded_trade_review.md');
+  const warnings: string[] = [];
+  const allAnnotations = [
+    ...input.annotations,
+    ...input.chapters.flatMap((chapter) => chapter.annotations),
+  ];
+  let retainedWebm = true;
+  let finalTranscriptPath: string | null = null;
+  let transcriptSegments: TranscriptSegment[] = [];
+  let diagnostics: ChunkAudioDiagnostic[] = [];
+  let status: DiscardedTradeAuditStatus = 'review_incomplete';
+
+  writeSessionLog(sessionDir, 'discard-audit', 'started', {
+    webmBytes: input.webmBuffer.length,
+    durationMs: input.durationMs,
+    annotations: allAnnotations.length,
+    chapters: input.chapters.length,
+    tradeMarkers: input.tradeMarkers.length,
+  }, 'start');
+
+  fs.writeFileSync(webmPath, input.webmBuffer);
+  fs.writeFileSync(markersPath, JSON.stringify({
+    discarded: true,
+    markers: input.tradeMarkers.map((marker, i) => ({
+      index: i + 1,
+      offsetMs: marker.offsetMs,
+      offsetLabel: marker.offsetLabel,
+      screenshotPath: marker.screenshotPath ?? null,
+    })),
+  }, null, 2), 'utf-8');
+  const copiedSnapshots = copyDiscardedSnapshotInputs(input.chapters, inputsDir);
+  fs.writeFileSync(annotationsPath, JSON.stringify({
+    discarded: true,
+    annotations: input.annotations,
+    chapters: input.chapters,
+    copiedSnapshots,
+  }, null, 2), 'utf-8');
+
+  const whisper = findWhisperBinary();
+  if (!whisper) {
+    warnings.push('Whisper is not installed; retained discarded_recording.webm for manual review.');
+  } else {
+    try {
+      await webmToWav(webmPath, wavPath, input.abortSignal);
+      const recordingDurationSec = Math.max(1, Math.round(input.durationMs / 1000));
+      const chunked = await transcribeWavInChunks(
+        whisper.exe,
+        whisper.model,
+        wavPath,
+        sessionDir,
+        recordingDurationSec,
+        input.abortSignal
+      );
+      transcriptSegments = chunked.segments;
+      diagnostics = chunked.diagnostics;
+      if (transcriptSegments.length > 0 || diagnostics.some((d) => d.audioPresent)) {
+        fs.writeFileSync(
+          transcriptPath,
+          buildDiscardedTranscriptText(recordingDurationSec, transcriptSegments, diagnostics),
+          'utf-8'
+        );
+        finalTranscriptPath = transcriptPath;
+      } else {
+        warnings.push('Whisper ran but produced no speech or audio diagnostics.');
+      }
+    } catch (err) {
+      warnings.push(`Discarded trade transcription failed: ${(err as Error).message}`);
+      writeSessionLog(sessionDir, 'discard-audit', 'transcription failed', {
+        error: (err as Error).message,
+      }, 'error');
+    } finally {
+      try { fs.unlinkSync(wavPath); } catch { /* ignore */ }
+    }
+  }
+
+  const evidence = collectDiscardedTradeEvidence(transcriptSegments, input.tradeMarkers, allAnnotations);
+  if (evidence.length > 0) {
+    status = 'potential_trade_activity';
+  } else if (finalTranscriptPath && warnings.length === 0) {
+    status = 'no_trade_evidence';
+  } else if (finalTranscriptPath && warnings.every((warning) => !/failed|not installed/i.test(warning))) {
+    status = 'no_trade_evidence';
+  }
+
+  if (status === 'no_trade_evidence') {
+    try {
+      fs.unlinkSync(webmPath);
+      retainedWebm = false;
+    } catch (err) {
+      retainedWebm = true;
+      warnings.push(`Could not delete discarded WebM after no-evidence review: ${(err as Error).message}`);
+      status = 'review_incomplete';
+    }
+  }
+
+  const comments = status === 'potential_trade_activity'
+    ? `Potential trade activity found at ${evidence.map((item) => item.timestamp).join(', ')}. Retained discarded_recording.webm for review.`
+    : status === 'no_trade_evidence'
+      ? 'No trade markers or trade-language evidence found in the discarded session transcript; discarded_recording.webm was deleted.'
+      : 'Discarded trade audit could not rule out trade activity; retained discarded_recording.webm for manual review.';
+
+  const reviewPayload = {
+    status,
+    comments,
+    retainedWebm,
+    webmPath: retainedWebm ? webmPath : null,
+    transcriptPath: finalTranscriptPath,
+    markersPath,
+    annotationsPath,
+    copiedSnapshots,
+    warnings,
+    evidence,
+    audioDiagnostics: diagnostics,
+    durationMs: input.durationMs,
+    startedAtIso: new Date(input.startedAtMs).toISOString(),
+    reviewedAtIso: new Date().toISOString(),
+  };
+  fs.writeFileSync(reviewJsonPath, JSON.stringify(reviewPayload, null, 2), 'utf-8');
+  writeDiscardedTradeReviewMarkdown(reviewMarkdownPath, {
+    status,
+    comments,
+    retainedWebm,
+    transcriptPath: finalTranscriptPath,
+    webmPath,
+    warnings,
+    evidence,
+  });
+
+  writeSessionLog(sessionDir, 'discard-audit', 'finished', {
+    status,
+    retainedWebm,
+    transcriptPath: finalTranscriptPath,
+    evidenceCount: evidence.length,
+    warnings: warnings.length,
+  }, status === 'potential_trade_activity' || status === 'review_incomplete' ? 'warning' : 'success');
+
+  return {
+    sessionDir,
+    inputsDir,
+    status,
+    suspected: status === 'potential_trade_activity',
+    retainedWebm,
+    webmPath,
+    transcriptPath: finalTranscriptPath,
+    reviewJsonPath,
+    reviewMarkdownPath,
+    suspectedTradeTimestamps: evidence.map((item) => item.timestamp),
+    comments,
+    markerCount: input.tradeMarkers.length,
+    evidenceCount: evidence.length,
+    warnings,
+  };
 }
 
 // ─── snapshot chapter helpers ────────────────────────────────────────
@@ -1190,7 +1736,7 @@ async function buildSnapshotChapters(
  */
 function buildCombinedSnapshotPrompt(args: {
   sessionDir: string;
-  gifPath: string;
+  gifPath: string | null;
   transcriptPath: string | null;
   chapters: ChapterArtifact[];
   durationMs: number;
@@ -1207,7 +1753,11 @@ function buildCombinedSnapshotPrompt(args: {
   lines.push(`Session folder: ${sessionDir}`);
   // MP4 intentionally omitted because LLMs usually cannot decode video.
   // Session-local recording.mp4 is retained for human troubleshooting.
-  lines.push(`GIF preview (LLMs see the FIRST FRAME only — opening shot): ${gifPath}`);
+  if (gifPath) {
+    lines.push(`GIF preview (LLMs see the FIRST FRAME only — opening shot): ${gifPath}`);
+  } else {
+    lines.push('GIF preview: not generated for this feedback session.');
+  }
   if (transcriptPath) lines.push(`Full transcript: ${transcriptPath}`);
   lines.push('');
   lines.push('Per-screen deliverables (each prompt.md has its own screenshot + transcript slice + numbered annotations):');
@@ -1236,7 +1786,7 @@ function buildPromptText(args: {
    * passed in because LLMs usually cannot decode video; the session-local
    * recording.mp4 is retained for human troubleshooting.
    */
-  gifPath: string;
+  gifPath: string | null;
 }): string {
   const { transcriptPath, annotationsPath, annotationFrames, snapFrames, annotations, gifPath } = args;
 
@@ -1245,17 +1795,19 @@ function buildPromptText(args: {
   // remains available for human troubleshooting.
   const sourceBlock = [
     'Source files (all paths absolute):',
-    `- GIF preview (12x speedup with timecode burned in): ${gifPath}`,
-    "  ↑ Multimodal LLMs (Claude, GPT-4o, Gemini) decode GIFs as still",
-    '    images and read the FIRST FRAME — i.e. T=0 of the recording.',
-    '    Useful for "what app/screen was I on" but NOT for mid-session',
-    '    moments. For specific moments, see the annotation/snapshot',
-    '    frames below (if any) — those are PNGs captured at exact times.',
+    gifPath
+      ? `- GIF preview (12x speedup with timecode burned in): ${gifPath}`
+      : '- GIF preview: not generated for this feedback session.',
+    gifPath ? "  ↑ Multimodal LLMs (Claude, GPT-4o, Gemini) decode GIFs as still" : null,
+    gifPath ? '    images and read the FIRST FRAME — i.e. T=0 of the recording.' : null,
+    gifPath ? '    Useful for "what app/screen was I on" but NOT for mid-session' : null,
+    gifPath ? '    moments. For specific moments, see the annotation/snapshot' : null,
+    gifPath ? '    frames below (if any) — those are PNGs captured at exact times.' : null,
     transcriptPath
       ? `- Transcript (timestamped): ${transcriptPath}`
       : '- Transcript unavailable (Whisper is not installed — open Settings > Trade Mode > Install Whisper)',
     `- Structured metadata (annotations, region, durations): ${annotationsPath}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   const hasAnnotations = annotations.length > 0;
   const hasSnaps = snapFrames.length > 0;
@@ -1300,7 +1852,9 @@ function buildPromptText(args: {
       ].join('\n')
     : [
         '',
-        "This was a transcript-only walkthrough — I described things verbally without drawing rectangles. The GIF (first frame) gives you the opening shot of the session for context; for mid-session moments, rely on the transcript's timestamps and the verbal cues there (the GIF's timecode is burned in, so if you need to reason about what was likely visible at minute X, mention it and I can confirm).",
+        gifPath
+          ? "This was a transcript-only walkthrough — I described things verbally without drawing rectangles. The GIF (first frame) gives you the opening shot of the session for context; for mid-session moments, rely on the transcript's timestamps and the verbal cues there (the GIF's timecode is burned in, so if you need to reason about what was likely visible at minute X, mention it and I can confirm)."
+          : "This was a transcript-only walkthrough — I described things verbally without drawing rectangles. GIF/MP4 preview generation was disabled, so rely on the transcript's timestamps and verbal cues.",
       ].join('\n');
 
   return [
@@ -1314,7 +1868,9 @@ function buildPromptText(args: {
     'Work through each observation in the transcript in order. For each item:',
     hasVisualEvidence
       ? '- Open the corresponding frame PNG (or the GIF first frame) to confirm visually what I meant'
-      : '- Open the GIF (first frame) for the opening visual context; rely on transcript timestamps for mid-session moments',
+      : gifPath
+        ? '- Open the GIF (first frame) for the opening visual context; rely on transcript timestamps for mid-session moments'
+        : '- Rely on transcript timestamps and verbal cues; no GIF/MP4 preview was generated for this session',
     '- Identify which file(s) need to change',
     '- Make the change',
     '- Note the timestamp from the transcript so I can verify',
@@ -1344,6 +1900,16 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   ensureDir(sessionDir);
   const sessionInputsDir = mode === 'trade' ? path.join(sessionDir, 'Inputs') : sessionDir;
   ensureDir(sessionInputsDir);
+  const tempInputsDir = path.join(sessionDir, 'Inputs');
+  ensureDir(tempInputsDir);
+  const chapters = input.chapters ?? [];
+  const useChapterFlow = chapters.length > 0;
+  const feedbackOutputs = input.feedbackOutputs ?? { generateMp4: true, generateGif: true };
+  const keepMp4Output = mode === 'trade' || feedbackOutputs.generateMp4 !== false;
+  const generateGifOutput = mode === 'trade' || feedbackOutputs.generateGif !== false;
+  const missingChapterPng = chapters.some((chapter) => !chapter.pngPath || !fs.existsSync(chapter.pngPath));
+  const needsMp4ForFrames = input.annotations.length > 0 || missingChapterPng;
+  const shouldTranscodeMp4 = keepMp4Output || generateGifOutput || needsMp4ForFrames;
   log('pipeline', 'session start', { sessionDir, annotations: input.annotations.length });
 
   // Session-local media is the processing source of truth. Parent-level fixed
@@ -1353,10 +1919,12 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // The GIF filename mirrors the session folder name so it's self-describing
   // if moved or referenced elsewhere.
   const webmPath = path.join(sessionDir, 'recording.webm');
-  const mp4Path = path.join(sessionDir, 'recording.mp4');
+  const mp4OutputPath = path.join(sessionDir, 'recording.mp4');
+  const mp4Path = keepMp4Output ? mp4OutputPath : path.join(tempInputsDir, 'recording.preview-source.mp4');
   const latestMp4Path = path.join(input.outputRoot, 'recording.mp4');
   const wavPath = path.join(sessionInputsDir, 'recording.wav');
   const gifPath = path.join(sessionDir, `${sessionBasename}.gif`);
+  const promptGifPath = generateGifOutput ? gifPath : null;
   const transcriptPath = path.join(sessionDir, 'transcript.txt');
   const annotationsPath = path.join(sessionInputsDir, 'annotations.json');
   const promptPath = path.join(sessionDir, 'prompt.txt');
@@ -1368,6 +1936,9 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     chapters: input.chapters?.length ?? 0,
     tradeMarkers: input.tradeMarkers?.length ?? 0,
     hasPreCreatedSessionDir: Boolean(input.preCreatedSessionDir),
+    keepMp4Output,
+    generateGifOutput,
+    shouldTranscodeMp4,
   }, 'start');
 
   // Helper: best-effort step notification. UI bookkeeping must never break
@@ -1407,6 +1978,54 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       return;
     }
     try {
+      if (input.incrementalTranscript) {
+        step('Finalizing live transcript…');
+        try {
+          const incremental = await input.incrementalTranscript;
+          if (incremental && incremental.chunkCount > 0 && incremental.failedChunks === 0) {
+            transcriptSegments = incremental.segments;
+            const recordingDurationSec = Math.round(input.durationMs / 1000);
+            const finalText = buildTranscriptText(
+              recordingDurationSec,
+              transcriptSegments,
+              incremental.diagnostics,
+              `incremental whisper during recording (${incremental.chunkCount} chunks, max-context 0)`
+            );
+            fs.writeFileSync(transcriptPath, finalText, 'utf-8');
+            log('pipeline', 'incremental transcript written', {
+              segments: transcriptSegments.length,
+              recordingDurationSec,
+              chunks: incremental.chunkCount,
+              warnings: incremental.warnings.length,
+            });
+            writeSessionLog(sessionDir, 'whisper', 'incremental transcript used', {
+              transcriptPath,
+              segments: transcriptSegments.length,
+              recordingDurationSec,
+              chunks: incremental.chunkCount,
+              warnings: incremental.warnings,
+            }, incremental.warnings.length > 0 ? 'warning' : 'success');
+            warnings.push(...incremental.warnings.map((warning) => `incremental transcription: ${warning}`));
+            finalTranscriptPath = transcriptPath;
+            return;
+          }
+          if (incremental && incremental.failedChunks > 0) {
+            warnings.push(`incremental transcription had ${incremental.failedChunks} failed chunk(s); falling back to full post-stop transcription`);
+            writeSessionLog(sessionDir, 'whisper', 'incremental transcript rejected; falling back to full transcription', {
+              chunks: incremental.chunkCount,
+              failedChunks: incremental.failedChunks,
+              warnings: incremental.warnings,
+            }, 'warning');
+          } else {
+            writeSessionLog(sessionDir, 'whisper', 'incremental transcript unavailable; falling back to full transcription', undefined, 'skipped');
+          }
+        } catch (err) {
+          warnings.push(`incremental transcription failed: ${(err as Error).message}; falling back to full post-stop transcription`);
+          writeSessionLog(sessionDir, 'whisper', 'incremental transcript promise failed; falling back to full transcription', {
+            error: (err as Error).message,
+          }, 'warning');
+        }
+      }
       step('Extracting audio…');
       await webmToWav(webmPath, wavPath, abortSignal);
       writeSessionLog(sessionDir, 'whisper', 'audio extracted for transcription', undefined, 'success');
@@ -1514,27 +2133,40 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // also gates the chapter PNG extraction below, so we expose the mp4
   // promise separately and await it before the chapters step.
   const mp4Promise = (async () => {
+    if (!shouldTranscodeMp4) {
+      writeSessionLog(sessionDir, 'video', 'mp4 conversion skipped by feedback output settings', {
+        keepMp4Output,
+        generateGifOutput,
+        needsMp4ForFrames,
+      }, 'skipped');
+      return;
+    }
     step('Converting video to MP4…');
     try {
       await webmToMp4(webmPath, mp4Path, abortSignal);
       log('pipeline', 'session mp4 written', { mp4Path });
-      writeSessionLog(sessionDir, 'video', 'session recording.mp4 written', { mp4Path }, 'success');
-      try {
-        fs.copyFileSync(mp4Path, latestMp4Path);
-        log('pipeline', 'latest parent mp4 copied', { latestMp4Path });
-        writeSessionLog(sessionDir, 'video', 'latest parent recording.mp4 copied', {
-          sourcePath: mp4Path,
-          latestMp4Path,
-        }, 'success');
-      } catch (copyErr) {
-        const message = (copyErr as Error).message;
-        warnings.push(`latest recording.mp4 copy failed: ${message}`);
-        log('pipeline', 'latest parent mp4 copy failed', { err: message, latestMp4Path });
-        writeSessionLog(sessionDir, 'video', 'latest parent recording.mp4 copy failed', {
-          sourcePath: mp4Path,
-          latestMp4Path,
-          error: message,
-        }, 'warning');
+      writeSessionLog(sessionDir, 'video', keepMp4Output ? 'session recording.mp4 written' : 'temporary mp4 written for derived artifacts', {
+        mp4Path,
+        keepMp4Output,
+      }, 'success');
+      if (keepMp4Output) {
+        try {
+          fs.copyFileSync(mp4Path, latestMp4Path);
+          log('pipeline', 'latest parent mp4 copied', { latestMp4Path });
+          writeSessionLog(sessionDir, 'video', 'latest parent recording.mp4 copied', {
+            sourcePath: mp4Path,
+            latestMp4Path,
+          }, 'success');
+        } catch (copyErr) {
+          const message = (copyErr as Error).message;
+          warnings.push(`latest recording.mp4 copy failed: ${message}`);
+          log('pipeline', 'latest parent mp4 copy failed', { err: message, latestMp4Path });
+          writeSessionLog(sessionDir, 'video', 'latest parent recording.mp4 copy failed', {
+            sourcePath: mp4Path,
+            latestMp4Path,
+            error: message,
+          }, 'warning');
+        }
       }
     } catch (err) {
       warnings.push(`mp4 conversion failed: ${(err as Error).message}`);
@@ -1543,6 +2175,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     }
   })();
   const gifPromise = mp4Promise.then(async () => {
+    if (!generateGifOutput) {
+      writeSessionLog(sessionDir, 'video', 'gif generation skipped by feedback output settings', undefined, 'skipped');
+      return;
+    }
     if (!fs.existsSync(mp4Path)) return;
     try {
       step('Generating GIF preview…');
@@ -1560,9 +2196,6 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // in the background and we'll await it at the very end.)
   await Promise.all([audioBranch, mp4Promise]);
   throwIfAborted(abortSignal);
-
-  const chapters = input.chapters ?? [];
-  const useChapterFlow = chapters.length > 0;
 
   // 6a. (legacy path only) Extract a PNG at the exact millisecond each
   //     annotation was drawn. Skipped in the snapshot-chapter flow because
@@ -1651,7 +2284,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const promptText = useChapterFlow
     ? buildCombinedSnapshotPrompt({
         sessionDir,
-        gifPath,
+        gifPath: promptGifPath,
         transcriptPath: finalTranscriptPath,
         chapters: chapterArtifacts,
         durationMs: input.durationMs,
@@ -1662,7 +2295,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         annotationFrames,
         snapFrames,
         annotations: input.annotations,
-        gifPath,
+        gifPath: promptGifPath,
       });
 
   // In trade-mode, the trade-pipeline (below) owns the clipboard — it
@@ -1716,6 +2349,18 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   // from the mp4, not the webm, but we await for log/error symmetry.)
   await gifPromise;
   throwIfAborted(abortSignal);
+
+  if (!keepMp4Output && fs.existsSync(mp4Path)) {
+    try {
+      fs.unlinkSync(mp4Path);
+      writeSessionLog(sessionDir, 'video', 'temporary mp4 deleted after derived artifacts', { mp4Path }, 'success');
+    } catch (err) {
+      writeSessionLog(sessionDir, 'video', 'temporary mp4 retained after delete failure', {
+        mp4Path,
+        error: (err as Error).message,
+      }, 'warning');
+    }
+  }
 
   // 9. cleanup intermediate webm (mp4/gif/transcript stay; this is the
   //    only intermediate). At this point the gif promise has resolved

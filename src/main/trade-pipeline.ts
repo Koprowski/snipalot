@@ -454,16 +454,25 @@ export async function runTradePipeline(
   let xlsxPath: string | null = null;
   let mdPath: string | null = null;
   let reportPath: string | null = null;
+  let completionMarkerPath: string | null = null;
   try {
     xlsxPath = await writeTradeLogXlsx(sessionDir, outputTrades, input.startedAtMs, input.durationMs);
     mdPath = writeTradeLogMd(sessionDir, outputTrades, input.startedAtMs, input.durationMs);
     reportPath = writeAdherenceReport(getTradeInputsDir(sessionDir), outputTrades);
     organizeTradeSessionRoot(sessionDir);
+    completionMarkerPath = writeSessionCompleteMarker(sessionDir, {
+      trades: outputTrades.length,
+      omittedSpokenOnly,
+      xlsxPath,
+      mdPath,
+      reportPath,
+    });
     writeSessionLog(sessionDir, 'trade-pipeline', 'trade outputs written', {
       trades: outputTrades.length,
       xlsxPath,
       mdPath,
       reportPath,
+      completionMarkerPath,
     }, 'success');
   } catch (err) {
     warnings.push(`trade output generators failed: ${(err as Error).message}`);
@@ -480,6 +489,7 @@ export async function runTradePipeline(
     xlsxPath,
     mdPath,
     reportPath,
+    completionMarkerPath,
   });
   writeSessionLog(sessionDir, 'trade-pipeline', 'finished', {
     trades: outputTrades.length,
@@ -487,6 +497,7 @@ export async function runTradePipeline(
     xlsxPath,
     mdPath,
     reportPath,
+    completionMarkerPath,
     warnings,
   }, warnings.length > 0 ? 'warning' : 'success');
   if (Notification.isSupported()) {
@@ -983,7 +994,7 @@ trade_id, token_name, mockape_trade_id, meta_name, N_score, N_why, I_score, I_wh
 
 Scoring rules:
 - N_score, I_score, C_score, and S_score are binary 0 or 1.
-- NICS_score = N_score + I_score + C_score + S_score.
+- NICS_score = N_score + I_score + max(C_score, S_score). It ranges from 0 to 3.
 - N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working.
@@ -1231,7 +1242,7 @@ Use null for any field the transcript / data genuinely doesn't speak to.
     "C_why": "<WHY_C_SCORE_WAS_OR_WAS_NOT_EARNED>",
     "S_score": <0_OR_1>,
     "S_why": "<WHY_S_SCORE_WAS_OR_WAS_NOT_EARNED>",
-    "NICS_score": <N_SCORE_PLUS_I_SCORE_PLUS_C_SCORE_PLUS_S_SCORE>,
+    "NICS_score": <N_SCORE_PLUS_I_SCORE_PLUS_MAX_OF_C_OR_S>,
     "trade_type": "<Core NICS++|Scout|Non-NICS|OTHER_SHORT_LABEL>",
     "llm_grade_notes": "<ONE_OR_TWO_SENTENCE_RECONCILIATION_NOTE>"
   }
@@ -1281,7 +1292,7 @@ Rules:
 **NICS / META CLUSTER SCORING:**
 - The NICS fields are REQUIRED on every output object: meta_name, N_score, N_why, I_score, I_why, C_score, C_why, S_score, S_why, NICS_score, trade_type, and llm_grade_notes. Do not omit them even when the score is 0.
 - Score N_score, I_score, C_score, and S_score as separate binary evidence fields.
-- NICS_score = N_score + I_score + C_score + S_score. It ranges from 0 to 4.
+- NICS_score = N_score + I_score + max(C_score, S_score). It ranges from 0 to 3.
 - N = the trader clearly names the narrative/meta/setup being traded, not just the ticker. This is required for a counted trade.
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry. This is required for a counted trade.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working. C can come from exit commentary or the immediate post-trade note. "Dead" / "unclear" can earn C if it is the trader's stated exit reason, but flag it in llm_grade_notes because it needs review.
@@ -1801,9 +1812,7 @@ function buildTradeXlsxRow(
   const nicsScore = trade.NICS_score ?? sumNicsScore(trade);
   const sizeOk = trade.size_ok ?? isHalfSol(trade.sol_invested);
   const zoneOk = trade.zone_ok ?? isNicsMarketCapZone(trade.entry_mc_actual);
-  const countsToward50 = trade.counts_toward_50 ?? (
-    hasCountedNicsEvidence(trade) === true && sizeOk === true
-  );
+  const countsToward50 = trade.counts_toward_50 ?? null;
   const bucketSource = timeline.entryInferred ?? timeline.entryCommentary ?? timeline.exitActual ?? timeline.videoStart;
   return {
     source_session: path.basename(sessionDir),
@@ -1869,8 +1878,8 @@ function sumNicsScore(trade: TradeEvent): number | null {
   const i = binaryScoreOrNull(trade.I_score);
   const c = binaryScoreOrNull(trade.C_score);
   const s = binaryScoreOrNull(trade.S_score);
-  if (n === null || i === null || c === null || s === null) return null;
-  return n + i + c + s;
+  if (n === null || i === null || (c === null && s === null)) return null;
+  return n + i + Math.max(c ?? 0, s ?? 0);
 }
 
 function hasCountedNicsEvidence(trade: TradeEvent): boolean | null {
@@ -1878,8 +1887,8 @@ function hasCountedNicsEvidence(trade: TradeEvent): boolean | null {
   const i = binaryScoreOrNull(trade.I_score);
   const c = binaryScoreOrNull(trade.C_score);
   const s = binaryScoreOrNull(trade.S_score);
-  if (n === null || i === null || c === null || s === null) return null;
-  return n === 1 && i === 1 && (c + s) >= 1;
+  if (n === null || i === null || (c === null && s === null)) return null;
+  return n === 1 && i === 1 && (c === 1 || s === 1);
 }
 
 function binaryScoreOrNull(value: number | null | undefined): number | null {
@@ -2276,6 +2285,7 @@ function organizeTradeSessionRoot(sessionDir: string): void {
     'Inputs',
     'prompt.txt',
     'recording.mp4',
+    'session_complete.json',
     'transcript.txt',
     'trade_log.xlsx',
     'trade_log.md',
@@ -2292,6 +2302,19 @@ function organizeTradeSessionRoot(sessionDir: string): void {
   } catch (err) {
     log('trade-pipeline', 'session root organization failed', { err: (err as Error).message, sessionDir });
   }
+}
+
+function writeSessionCompleteMarker(sessionDir: string, details: Record<string, unknown>): string {
+  const markerPath = path.join(sessionDir, 'session_complete.json');
+  const payload = {
+    status: 'complete',
+    completedAt: new Date().toISOString(),
+    finalDeliverable: path.join(sessionDir, 'trade_log.xlsx'),
+    ...details,
+  };
+  fs.writeFileSync(markerPath, JSON.stringify(payload, null, 2), 'utf-8');
+  log('trade-pipeline', 'session_complete.json written', { markerPath });
+  return markerPath;
 }
 
 /**

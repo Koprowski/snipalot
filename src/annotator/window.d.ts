@@ -11,5 +11,6 @@ interface Window {
       | { ok: false; error: string }
     >;
     cancel: () => Promise<void>;
+    onEscapeKey: (cb: () => void) => void;
   };
 }

@@ -78,12 +78,25 @@ Var pid
   CreateShortCut "$SMPROGRAMS\Snipalot.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\resources\resources\icons\app.ico" 0 "" "" "${APP_DESCRIPTION}"
   ClearErrors
   WinShell::SetLnkAUMI "$SMPROGRAMS\Snipalot.lnk" "${APP_ID}"
+
+  ; If Snipalot was pinned while the app still exposed Electron's default
+  ; identity/icon, Windows can keep showing that stale taskbar metadata across
+  ; upgrades. Repair the existing per-user pinned shortcut in place without
+  ; pinning Snipalot for users who have not chosen to pin it.
+  SetShellVarContext current
+  IfFileExists "$QUICKLAUNCH\User Pinned\TaskBar\Snipalot.lnk" 0 taskbar_pin_done
+  CreateShortCut "$QUICKLAUNCH\User Pinned\TaskBar\Snipalot.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\resources\resources\icons\app.ico" 0 "" "" "${APP_DESCRIPTION}"
+  ClearErrors
+  WinShell::SetLnkAUMI "$QUICKLAUNCH\User Pinned\TaskBar\Snipalot.lnk" "${APP_ID}"
+  taskbar_pin_done:
+
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 !macroend
 
 !macro customUnInstall
   SetShellVarContext current
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk"
+  Delete "$QUICKLAUNCH\User Pinned\TaskBar\Snipalot.lnk"
   SetShellVarContext all
   Delete "$SMPROGRAMS\Snipalot.lnk"
 !macroend

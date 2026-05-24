@@ -20,6 +20,14 @@ interface Window {
       filepath: string;
       bytes: number;
     }>;
+    sendAudioChunk: (payload: {
+      buffer: ArrayBuffer;
+      index: number;
+      startMs: number;
+      endMs: number;
+      mimeType?: string | null;
+      final?: boolean;
+    }) => Promise<{ ok: boolean; skipped?: boolean; reason?: string }>;
     reportState: (
       state: 'started' | 'stopped' | 'error',
       detail?: string,

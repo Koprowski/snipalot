@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.67)
+## Recent improvements (v1.0.1 onward; current release v1.0.68)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -180,8 +180,8 @@ Agent behavior:
 - **First-run dependency setup (v1.0.9 local branch):** Settings now has a Trade Mode **Setup checklist** that verifies bundled Whisper, Node/npm, and Gemini CLI. If npm is available but Gemini CLI is missing, users can install `@google/gemini-cli` from Settings, then use **Sign in with Google**. The sign-in button now preflights Gemini CLI and points users back to setup/API mode instead of failing with a raw missing-command error.
 - **v1.0.9 local installer build:** NSIS build succeeded at **`release-v1.0.9-dependency-setup/Snipalot-1.0.9-setup.exe`**, then installed locally and registry shows **Snipalot 1.0.9**. Packaged Whisper verified under installed `resources/resources/bin/whisper/whisper-cli.exe`; model verified under `resources/resources/models/ggml-base.en.bin`. SHA256: `D629042DDD4BCE07763D0DF3739CC7641E2D7C21E1E05296AD479A3C80016891`.
 - **Processing escape hatch + window show-race hardening (local branch):**
-  - Launcher now exposes **Abandon** during post-stop `processing`. It cancels the in-flight pipeline/trade pipeline, closes any trade-context / response-paste windows, deletes the current session folder, and resets Snipalot to idle.
-  - Abandon cancels the in-flight pipeline and deletes the session folder. Do not rely on Abandon preserving a recording; normal failed/incomplete processing keeps the session-local `recording.mp4` for review.
+  - Launcher now exposes **Abandon** during post-stop `processing`. For normal recordings it cancels the in-flight pipeline, deletes the current session folder, and resets Snipalot to idle. For trade sessions, newer local-branch behavior queues a discarded-session audit instead of deleting the folder.
+  - Abandon cancels the in-flight pipeline. Normal recording abandons delete the session folder; trade-mode abandons should preserve/audit the finalized WebM under `Inputs/`.
   - Main now passes an abort signal through ffmpeg / whisper / Gemini / API extraction waits so abandoned sessions do not continue recreating outputs in the background.
   - Recorder HUD visibility is more reliable: if the HUD window has already finished loading before the show hook is attached, main now shows it immediately instead of waiting forever on a missed `ready-to-show`.
   - Trade-context and response-paste windows got the same show-race hardening so they do not stay invisible when the renderer loads unusually quickly.
@@ -193,7 +193,7 @@ Agent behavior:
   - The main launcher window (Record / Screenshot / Trade) should always behave like a normal desktop window. The old launcher pin/topmost behavior is disabled and hidden, and startup forces launcher `alwaysOnTop=false` even if an older config has `launcher.pinnedOnTop=true`.
   - The recording HUD remains intentionally topmost at `screen-saver` level while recording, with the existing keep-on-top interval, because it is the user's stop/pause/snapshot/annotation control surface.
 - **HUD shortcut tooltip + one-shot annotations (local branch):**
-  - The HUD snapshot camera tooltip now uses the configured `snapshot` hotkey from main state (default `Ctrl+Shift+P`) instead of a hardcoded description, and pause/annotate tooltips also track configured hotkeys.
+  - The HUD snapshot camera tooltip now uses the configured `snapshot` hotkey from main state (default `Ctrl+Alt+P`) instead of a hardcoded description, and pause/annotate tooltips also track configured hotkeys.
   - Completed annotations are now one-shot: after a valid shape/line/text annotation is committed, the overlay exits annotation mode and becomes click-through while leaving the annotation visible until clear/snapshot behavior removes it.
 - **Trade HUD marker control (local branch):**
   - During trade-mode recordings, the HUD camera button changes to a target-style marker control bound to the configured `tradeMarker` hotkey (default `Ctrl+Shift+X`) instead of the normal `snapshot` hotkey.
@@ -306,7 +306,7 @@ Agent behavior:
  - Whisper transcript post-processing now drops repeated adjacent hallucination segments and compacts repeated phrases before writing `transcript.txt` / feeding trade extraction.
  - Trade extraction schema/export now includes `stop_loss_mc`, and `trade_log.xlsx` includes `target_exit_low_mc`, `target_exit_high_mc`, and `stop_loss_mc`; Markdown trade logs print a Plan line with targets/stops.
 - **Snapshot hotkey + trade output cleanup (v1.0.25 local branch):**
- - `Ctrl+Shift+P` / configured snapshot hotkey is now registered globally: idle state starts the normal Screenshot flow using the current capture mode/cursor display, recording state still closes a snapshot chapter through the HUD snapshot path.
+ - `Ctrl+Alt+P` / configured snapshot hotkey is now registered globally: idle state starts the normal Screenshot flow using the current capture mode/cursor display, recording state still closes a snapshot chapter through the HUD snapshot path.
  - Trade workbook/Markdown/adherence outputs now omit Gemini-extracted spoken-only musings when MockApe/Padre data is present; only rows matched to an actual trade are user-facing. Raw `Inputs/extraction_response.json` still preserves the full model response for debugging.
  - Added `docs/exit-screenshot-feature-plan.md` with a feasible design for extracting automatic exit-time screenshots from `recording.mp4` using `mockape_timestamp_ms - recordingStartedAtMs`.
 - **Invalid hotkey startup trap fix (v1.0.26 local branch):**
@@ -357,7 +357,7 @@ Agent behavior:
  - The annotator now treats **Context for Claude** text as prompt source content even when the user does not draw annotations. Context-only screenshot sessions generate/copy/save a real `prompt.md`, and the toolbar save affordance appears when a screenshot plus context exists.
 - **Screenshot hotkey / first-capture hardening (local branch):**
  - Overlay broadcasts now route through `targetOverlay()` so region-select / exit IPC is queued until a newly-created overlay finishes loading. This prevents first-capture shortcut presses from dropping the selection command while overlays are still warming up.
- - Screenshot hotkey cancel is debounced for 600 ms after entering `selecting-screenshot`, avoiding immediate toggle-off when Windows/Electron emits a repeat for `Ctrl+Shift+P`.
+ - Screenshot hotkey cancel is debounced for 600 ms after entering `selecting-screenshot`, avoiding immediate toggle-off when Windows/Electron emits a repeat for the screenshot hotkey.
  - Fullscreen screenshot capture suppresses launcher re-show during the selecting state, reducing visible show/hide blinking before the frame grab.
  - Screenshot and recording display-source lookup no longer silently falls back to `sources[0]` when the requested display id is missing; Snipalot now fails visibly instead of capturing the wrong monitor.
 - **Annotator clipboard overlay paste fallback (local branch):**
@@ -424,6 +424,11 @@ Agent behavior:
  - `tools\run-trade-sync.ps1 -TestMode` now passes `--test-mode` to the Node importer. Test mode leaves pending `* trade` folders in place instead of archiving them and removes/rebuilds matching `source_session` rows before import so repeated sync testing no longer requires manually moving folders out of `Archive` or deleting master rows.
  - `tools\run-trade-sync.ps1 -ArchiveOnly` is the cleanup step after a successful test sync. It moves completed current `* trade` folders with `trade_log.xlsx` or legacy `trade_log.csv` into `Archive` without importing, rewriting, or finalizing `master trading log.xlsx`.
  - Lower-level flags are also available: `-NoArchive` / `--no-archive` preserves source folders, and `-ReplaceSourceRows` / `--replace-source-rows` replaces rows for all source folders processed in that run. Do not use `-BackfillArchive` for the normal test loop; it means "include already archived folders as import inputs" and can disturb manual one-off workbook adjustments.
+- **Trade sync incomplete-session guard (2026-05-23):**
+ - The normal importer and `-ArchiveOnly` now classify current `* trade` folders before processing and only treat a folder as ready when `trade_log.xlsx` (or legacy `trade_log.csv`) is readable and has at least one data row. Missing, empty, unreadable, or still-being-written logs are reported in `skippedFolderDetails` and left in place.
+ - `importTradeFolder()` also has a defensive missing-log guard, so an incomplete/current recording folder cannot be archived even if a caller reaches it directly.
+ - Trade generation now writes root-level `session_complete.json` after `trade_log.xlsx`, `trade_log.md`, and `Inputs/adherence_report.md` are written. Sync still keys off the final workbook so older completed sessions remain compatible.
+ - The deployed live script at `E:\OneDrive\Snipalot Captures\Trade Sync Scripts\sync-master-trading-log.mjs` was updated to match the repo mirror. Validation: `node --check tools\sync-master-trading-log.mjs`, `node --check` on the live script, `npm test`, and a temp-root sync proving missing/unreadable folders were skipped and not archived.
 - **NICS workbook schema repair (v1.0.47 local branch):**
  - Generated session `trade_log.xlsx` now uses the same 55-column shape as `tblTrades`: source fields, workflow fields, Hour/Weekday/WeekdayNum/TimeBucket, then NICS/meta fields. The workbook no longer emits the old 47-column session-only shape.
  - Trade generation now runs a focused NICS backfill pass when the first Gemini/API extraction omits required N/I/C/S classifications. The pass writes `Inputs/nics_response.json`, merges the graded fields before output, and leaves history-dependent fields such as `meta_cluster_id`, cooldown, and running count to sync.
@@ -453,11 +458,17 @@ Agent behavior:
  - The count rule is explicit and component-based: `size_ok=true`, `N_score=1`, `I_score=1`, and `C_score + S_score >= 1`. `NICS_score` remains the four-component total, but a raw score threshold alone is not used for counting.
  - `tools\sync-master-trading-log.mjs` treats `counts_toward_50` as an integer column when writing both master and session workbooks. Generated app workbooks also emit `1`/`0` for this column before sync.
  - Validation: reran live `_test` sync with `-NoArchive -ReplaceSourceRows`. Excel COM verified `master trading log_test.xlsx` opens as `A1:BC36`, `counts_toward_50` is column 50, values are numeric `0/1`, and there were zero mismatches against the explicit count rule. Count sums were `20260519.1529 trade` 6, `20260519.1710 trade` 12, and `20260519.2002 trade` 1.
+- **Cluster-level cooldown signal (2026-05-23):**
+ - Sync cooldown is based on completed losing meta clusters within the same `source_session`, not the immediately previous losing row. A trade gets `cooldown_ok=0/false` only when it starts within five minutes after a different session-level meta cluster is fully closed and that cluster's combined P&L is negative.
+ - The importer uses `source_session + meta_cluster_id` as the cooldown/profit grouping key, completion time from the latest exit time in that group, and summed `pnl_sol` when complete for all rows, otherwise summed `pnl_percentage` as fallback.
+ - Cooldown is informational only because entry/exit times are inferred and can vary by minutes. It does not block `counts_toward_50` and does not cause `hard_reset`; oversize trades remain the hard-reset condition.
+ - `counts_toward_50` requires N+I+either C/S, exact 0.5 SOL, and `zone_ok=true`; outside-zone trades do not reset the counter, but they do not count.
+ - `NICS_score` is now the unlock score `N_score + I_score + max(C_score, S_score)` instead of requiring both C and S. Generated session workbooks leave `counts_toward_50` blank before sync because sync owns history-dependent eligibility.
 - **Session-local recording media isolation (local branch):**
  - `src/main/pipeline.ts` now writes `recording.webm` and durable `recording.mp4` inside each session folder instead of using parent-level fixed temp files as the processing source. `Inputs/recording.wav` remains an intermediate and is removed after Whisper.
  - The parent output root still receives a best-effort `recording.mp4` copy for the "latest recording" convenience, but GIF, transcript, frame extraction, and trade pipeline all use the session-local MP4. This prevents overlapping processing runs from overwriting each other's media and leaves a reviewable MP4 in failed/incomplete session folders.
  - `Inputs/processing_log.jsonl` now records session WebM write, session MP4 write, latest-copy success/failure, and WebM cleanup/retention.
- - `organizeTradeSessionRoot()` keeps root `recording.mp4` alongside GIF, `prompt.txt`, `transcript.txt`, `trade_log.xlsx`, and `trade_log.md`; Abandon still deletes the whole session folder by design and its UI copy reflects that.
+ - `organizeTradeSessionRoot()` keeps root `recording.mp4` alongside GIF, `prompt.txt`, `transcript.txt`, `trade_log.xlsx`, and `trade_log.md`; normal recording Abandon deletes the folder, while trade-mode Abandon is now handled by the discarded-session audit flow.
 - **Launcher update notice (v1.0.53 local branch):**
  - The primary launcher checks GitHub releases on startup and only shows an update row when an installer update is available.
  - The row appears under the launcher buttons/shortcut hints and reads `Snipalot <version> is available. Click here to install.`
@@ -528,10 +539,40 @@ Agent behavior:
  - Confirmed empty trade folders with only `mic_diagnostics.json` match a user pressing Discard after recorder start but before finalization; no trade outputs are expected in that path.
  - Discard now tracks the session folder separately until the discarded `save-webm` callback arrives, so cleanup can run both immediately and after MediaRecorder unwinds.
  - Session folder deletion now retries after 1s, 5s, 15s, 60s, and 180s if OneDrive or Windows briefly keeps newly-created diagnostics locked.
+- **Trade discard audit flow (local branch):**
+ - Trade-mode Discard no longer deletes the session folder immediately. When the finalized `save-webm` buffer arrives, Snipalot saves it as `Inputs/discarded_recording.webm`, transcribes directly from WebM to `Inputs/transcript.txt` without creating an MP4, writes `Inputs/markers.json`, `Inputs/annotations.json`, and `Inputs/discarded_trade_review.{json,md}`, and updates root `session_status.json` / `SESSION_STATUS.txt` with review comments.
+ - The audit uses trade markers plus trade-language transcript/annotation evidence to flag `potential_trade_activity` with estimated timestamps. If no trade evidence is found after transcription, it deletes `Inputs/discarded_recording.webm` while preserving transcript, status, markers, screenshots, and annotations. If evidence is found or transcription cannot rule activity out, it retains the WebM for review.
+ - Marker screenshots remain under `Inputs/trade-screenshots/`; regular snapshot PNGs captured during discarded trade sessions are copied into `Inputs/discarded-snapshots/` for easier review.
+ - Follow-up hardening after local test: trade-mode **Abandon** during processing now queues the same audit instead of deleting the folder, including the case where Abandon is clicked before `save-webm` arrives. App-exit requests during an active trade recording are converted into the confirmed **Discard and audit** flow instead of immediately closing windows and leaving a stale `recording` session without a finalized WebM.
+ - Follow-up after `E:\Snipalot Captures\20260524.0056 trade`: if the user stops a trade and then clicks **Abandon** after the normal pipeline has already started, the pipeline may have written root-level `recording.webm` and a partial `recording.mp4` before abort. The abandoned-trade audit path now deletes root pipeline media (`recording.mp4`, `recording.webm`, `recording.gif`, and `Inputs/recording.wav`) before/after audit while preserving `Inputs/discarded_recording.webm` when evidence requires retention.
+ - Validation: `npm run build` and `npm test`.
 - **Launcher update banner refresh (v1.0.67 local branch):**
  - Root cause: Settings forced a fresh update check, but the already-open launcher only checked on boot and did not receive the Settings result.
  - Main now pushes every completed update-check result to the launcher via `launcher:update-check-result`.
  - Launcher applies pushed results and also refreshes update status every 60 seconds; the update banner still hides and keeps compact launcher height when no update is available.
+- **Screenshot cancel + launcher hotkey fallback (local branch):**
+ - Screenshot/record/trade region selection now registers a selection-only global `Escape` handler in main, so the launcher leaves `Cancel` state even when the overlay renderer does not own keyboard focus.
+ - Launcher also handles its configured screenshot hotkey while focused and forwards it through the normal `launcher:screenshot` IPC path, giving the screenshot shortcut a focused-window fallback when Electron's global shortcut path does not fire.
+ - Recurring screenshot-start diagnostics: config load now logs current hotkeys/capture mode, global shortcut registration logs `registeredBefore`/`registeredAfter`, the snapshot registration is rechecked after 250 ms with `globalShortcut.isRegistered()`, launcher main-process `before-input-event` logs and handles the screenshot hotkey when the launcher is focused, and launcher renderer logs snapshot-like keydowns with match/failure details.
+ - Follow-up after logs showed `Ctrl+Shift+P` registered with `isRegistered:true` but produced no global or launcher keydown event: `Ctrl+Alt+P` was proven to work locally and is now the default screenshot hotkey. `src/main/config.ts` migrates existing configs still on old default `hotkeys.snapshot = Ctrl+Shift+P` to `Ctrl+Alt+P` on load; custom screenshot bindings are preserved and covered by `tests/config-persistence.test.mjs`.
+ - Follow-up hardening: main now intercepts `Escape` from both overlay and launcher `before-input-event` and routes it to `exitSelecting()` before default close/quit behavior can run. Launcher close requests, shared app-exit requests, and Electron `window-all-closed` events during active selection now cancel selection and return to idle instead of exiting the app.
+ - Annotator/editor hardening: screenshot annotator windows now intercept `Escape` in main, log `annotator` Escape/close lifecycle events, forward the key to the renderer, and prevent any close request that lands immediately after Escape unless it came from an explicit Save/Cancel/app-exit path. Renderer Escape now logs context and only cancels crop/prompt/inline edit/selection state.
+ - Follow-up after dev logs showed the process disappeared immediately after the synchronous global `Escape` callback entered `exitSelecting()`: the global `Escape` shortcut now queues selection cancel with `setTimeout(..., 0)` so Snipalot does not unregister/re-register global shortcuts from inside the active `globalShortcut` dispatch. Launcher visibility is logged/restored/focused after cancel, and process-level `uncaughtException` / `unhandledRejection` / `exit` logs were added.
+ - Validation: `npm run build` and `npm test`.
+- **Incremental feedback transcription + media-output toggles (local branch):**
+ - Hidden recorder now runs a rolling audio-only recorder in 30s chunks while the main WebM recorder continues normally. Main enqueues those chunks for local Whisper transcription during recording and writes session-local `whisper` events to `Inputs/processing_log.jsonl`.
+ - `runPipeline()` uses the incremental transcript when all live chunks finish cleanly. If no chunks arrive, Whisper is missing, or any chunk fails, it falls back to the previous full post-stop WebM -> WAV -> chunked Whisper path.
+ - Settings now has **Feedback Outputs** toggles for standard Record sessions: **Generate MP4 copy** and **Generate GIF preview**. Both default off for feedback recordings. Trade sessions ignore these toggles and still generate the MP4/GIF artifacts expected by trade reports.
+ - When feedback MP4 output is disabled but annotation/snapshot frame extraction needs video, pipeline creates a temporary `Inputs/recording.preview-source.mp4`, derives the PNG/GIF artifacts needed, then deletes the temporary MP4.
+ - Validation: `npm run build` and `npm test`.
+- **State hotkey rearm guard (local branch):**
+ - `Ctrl+Shift+S` and `Ctrl+Shift+T` now enter a short rearm window after firing so `reloadGlobalHotkeys()` does not immediately unregister/re-register the same chord while the physical keys are still down. This prevents the observed idle/selecting runaway loop where `Ctrl+Shift+S` repeatedly toggled state in milliseconds and locked the machine.
+ - Global shortcut callbacks now run through a dispatch wrapper. If a callback-triggered state transition asks for `reloadGlobalHotkeys()`, the reload is queued until the callback exits, avoiding the earlier app-close failure caused by `globalShortcut.unregisterAll()` running inside Electron's active shortcut dispatch.
+ - During the rearm window, the deferred reload skips the state-changing hotkey and registers it again after the guard expires. Snapshot, annotation, pause, clear, and outline shortcuts keep their prior behavior, but their callbacks also use the same dispatch wrapper.
+ - Validation: `npm run build` and `npm test`.
+- **Pinned taskbar icon repair (v1.0.68 local branch):**
+ - Installer `customInstall` now repairs an existing per-user pinned `Snipalot.lnk` under `$QUICKLAUNCH\User Pinned\TaskBar`, rewriting its target, red-dot icon path, and AppUserModelID. This prevents stale Electron taskbar shortcut metadata from surviving upgrades when Snipalot was pinned during an older/dev build.
+ - The installer still does not pin Snipalot for users who have not pinned it; it only repairs an existing pinned shortcut.
 
 ## Packaged app logs
 

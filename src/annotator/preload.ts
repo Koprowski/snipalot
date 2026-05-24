@@ -43,4 +43,6 @@ contextBridge.exposeInMainWorld('snipalotAnnotator', {
     ipcRenderer.invoke('annotator:save', payload),
   /** Close the annotator window (user-cancel). */
   cancel: (): Promise<void> => ipcRenderer.invoke('annotator:cancel'),
+  /** Main intercepted Escape before Electron/browser defaults could close the window. */
+  onEscapeKey: (cb: () => void) => ipcRenderer.on('annotator:escape-key', cb),
 });

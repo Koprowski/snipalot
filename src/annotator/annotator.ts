@@ -1029,16 +1029,50 @@
     }
   });
 
+  function handleEscape(source = 'renderer-keydown') {
+    const promptOpen = Boolean(document.getElementById('prompt-overlay')?.classList.contains('open'));
+    const activeTag = document.activeElement?.tagName;
+    logFocusDiag('escape key', {
+      source,
+      cropActive: Boolean(_cropState),
+      promptOpen,
+      activeTag,
+      selectedOverlayId,
+      tool,
+      isDrawing,
+      isDragging,
+      isResizing,
+    });
+    if (_cropState) { cancelCrop(); return true; }
+    if (promptOpen) { toggleOverlay(false); return true; }
+    if (_activeInlineEditor) { closeInlineTextEditor(); return true; }
+    if (selectedOverlayId !== null) {
+      deselectOverlay();
+      renderBase();
+      return true;
+    }
+    if (selectedId !== null) {
+      selectedId = null;
+      renderAnnotations();
+      renderSidePanel();
+      return true;
+    }
+    return true;
+  }
+
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && _cropState) { cancelCrop(); return; }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      handleEscape();
+      return;
+    }
     if (e.key === 'Enter' && _cropState) { applyCrop(); return; }
     // Undo / Redo — handled before textarea check so they work globally
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return; }
     // Ctrl+S — save (works even when typing in a textarea)
     if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) { e.preventDefault(); saveSession(); return; }
-    // Esc closes the prompt overlay
-    if (e.key === 'Escape' && document.getElementById('prompt-overlay')?.classList.contains('open')) { toggleOverlay(false); return; }
     const tag = document.activeElement?.tagName;
     if (tag === 'TEXTAREA' || tag === 'INPUT') return;
     if (routeTypingToActiveAnnotation(e)) return;
@@ -1046,6 +1080,10 @@
       if (selectedOverlayId !== null) { deleteOverlay(selectedOverlayId); return; }
       if (tool === 'select' && selectedId !== null) deleteAnnotation(selectedId);
     }
+  });
+
+  window.snipalotAnnotator?.onEscapeKey?.(() => {
+    handleEscape('main-before-input');
   });
 
   function hitTestText(pos, ann) {

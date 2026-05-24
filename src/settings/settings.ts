@@ -49,6 +49,8 @@ const setupCheckGemini = document.getElementById('setup-check-gemini') as HTMLIn
 const launcherShowRecordInput = document.getElementById('launcher-show-record') as HTMLInputElement;
 const launcherShowScreenshotInput = document.getElementById('launcher-show-screenshot') as HTMLInputElement;
 const launcherShowTradeInput = document.getElementById('launcher-show-trade') as HTMLInputElement;
+const feedbackGenerateMp4Input = document.getElementById('feedback-generate-mp4') as HTMLInputElement;
+const feedbackGenerateGifInput = document.getElementById('feedback-generate-gif') as HTMLInputElement;
 
 // ─── hotkey label map ──────────────────────────────────────────────────
 
@@ -73,7 +75,7 @@ const DEFAULT_HOTKEYS: Record<string, string> = {
   startTrade: 'Ctrl+Shift+T',
   tradeMarker: 'Ctrl+Shift+X',
   annotate: 'Ctrl+Shift+A',
-  snapshot: 'Ctrl+Shift+P',
+  snapshot: 'Ctrl+Alt+P',
   clear: 'Ctrl+Shift+C',
   undo: 'Ctrl+Z',
   pauseResume: 'Ctrl+Shift+B',
@@ -100,6 +102,10 @@ let fetchedGeminiCliModels: Array<{ id: string; createdAtMs: number }> = [];
 let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostPer1M: number }> = [];
 // Working copy of the countdown duration.
 let editedCountdownSec = 3;
+let editedFeedbackOutputs = {
+  generateMp4: false,
+  generateGif: false,
+};
 let editedVisibleActions = {
   record: true,
   screenshot: true,
@@ -118,6 +124,7 @@ async function init(): Promise<void> {
     geminiCliModel: config.trade?.geminiCliModel,
     hasOpenAiApiKey: Boolean(config.trade?.openaiApiKey),
     captureMode: config.capture?.mode,
+    feedback: config.feedback,
     firstRun: config.firstRun,
   });
   await refreshVersionAndUpdateStatus();
@@ -175,6 +182,25 @@ async function init(): Promise<void> {
   if (editedSnapClearAfter) radioClear.checked = true; else radioKeep.checked = true;
   radioClear.addEventListener('change', () => { if (radioClear.checked) editedSnapClearAfter = true; });
   radioKeep.addEventListener('change', () => { if (radioKeep.checked) editedSnapClearAfter = false; });
+
+  const cfgFeedback = (config as unknown as {
+    feedback?: {
+      generateMp4?: boolean;
+      generateGif?: boolean;
+    };
+  }).feedback;
+  editedFeedbackOutputs = {
+    generateMp4: cfgFeedback?.generateMp4 ?? false,
+    generateGif: cfgFeedback?.generateGif ?? false,
+  };
+  feedbackGenerateMp4Input.checked = editedFeedbackOutputs.generateMp4;
+  feedbackGenerateGifInput.checked = editedFeedbackOutputs.generateGif;
+  feedbackGenerateMp4Input.addEventListener('change', () => {
+    editedFeedbackOutputs.generateMp4 = feedbackGenerateMp4Input.checked;
+  });
+  feedbackGenerateGifInput.addEventListener('change', () => {
+    editedFeedbackOutputs.generateGif = feedbackGenerateGifInput.checked;
+  });
 
   // Recording countdown. Capture mode is controlled from the launcher.
   const cfgCap = (config as unknown as { capture?: { countdownSec?: number } }).capture;
@@ -963,6 +989,7 @@ btnSave.addEventListener('click', async () => {
       hotkeys: editedHotkeys as never,
       launcher: { visibleActions: editedVisibleActions } as never,
       snapshot: { clearAnnotationsAfter: editedSnapClearAfter } as never,
+      feedback: editedFeedbackOutputs as never,
       capture: { countdownSec: editedCountdownSec } as never,
       trade: {
         llmMode: editedLlmMode,

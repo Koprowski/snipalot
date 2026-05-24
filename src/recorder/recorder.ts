@@ -46,6 +46,20 @@ let pendingFilepath: string | null = null;
 let chunkCount = 0;
 let chunkBytes = 0;
 let lastChunkLifecycleAtMs = 0;
+let audioChunkStream: MediaStream | null = null;
+let audioChunkRecorder: MediaRecorder | null = null;
+let audioChunkBlobs: Blob[] = [];
+let audioChunkIndex = 0;
+let audioChunkStartMs = 0;
+let audioChunkTimer: number | null = null;
+let audioChunkStopResolve: (() => void) | null = null;
+let audioChunkStopFinal = false;
+let rollingAudioActive = false;
+let recordingClockStartMs = 0;
+let recordingClockPausedAtMs: number | null = null;
+let recordingClockPausedTotalMs = 0;
+
+const INCREMENTAL_AUDIO_CHUNK_MS = 30_000;
 
 function log(line: string): void {
   const ts = new Date().toLocaleTimeString();
@@ -117,6 +131,167 @@ async function collectMicDiagnostics(
     activeAudioTrack,
     audioInputDevices,
   };
+}
+
+function resetRecordingClock(): void {
+  recordingClockStartMs = performance.now();
+  recordingClockPausedAtMs = null;
+  recordingClockPausedTotalMs = 0;
+}
+
+function currentRecordingOffsetMs(): number {
+  if (!recordingClockStartMs) return 0;
+  const now = recordingClockPausedAtMs ?? performance.now();
+  return Math.max(0, Math.round(now - recordingClockStartMs - recordingClockPausedTotalMs));
+}
+
+function clearAudioChunkTimer(): void {
+  if (audioChunkTimer !== null) {
+    window.clearTimeout(audioChunkTimer);
+    audioChunkTimer = null;
+  }
+}
+
+function startRollingAudioTranscription(): void {
+  if (!micStream || micStream.getAudioTracks().length === 0) {
+    lifecycle('incremental audio skipped; no mic stream', undefined, 'skipped');
+    return;
+  }
+  stopRollingAudioTranscriptionSync('restart');
+  const audioTrack = micStream.getAudioTracks()[0];
+  audioChunkStream = new MediaStream([audioTrack.clone()]);
+  rollingAudioActive = true;
+  audioChunkIndex = 0;
+  lifecycle('incremental audio started', {
+    chunkMs: INCREMENTAL_AUDIO_CHUNK_MS,
+    trackLabel: audioTrack.label,
+  }, 'start');
+  startNextAudioChunk();
+}
+
+function startNextAudioChunk(): void {
+  if (!rollingAudioActive || !audioChunkStream) return;
+  audioChunkBlobs = [];
+  audioChunkIndex += 1;
+  audioChunkStartMs = currentRecordingOffsetMs();
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : 'audio/webm';
+  try {
+    audioChunkRecorder = new MediaRecorder(audioChunkStream, { mimeType });
+  } catch (err) {
+    lifecycle('incremental audio recorder construction failed', {
+      error: (err as Error).message,
+      mimeType,
+    }, 'warning');
+    rollingAudioActive = false;
+    return;
+  }
+
+  const index = audioChunkIndex;
+  audioChunkRecorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) audioChunkBlobs.push(event.data);
+  };
+  audioChunkRecorder.onstop = async () => {
+    const final = audioChunkStopFinal;
+    const resolve = audioChunkStopResolve;
+    audioChunkStopFinal = false;
+    audioChunkStopResolve = null;
+    clearAudioChunkTimer();
+    const endMs = Math.max(audioChunkStartMs + 1, currentRecordingOffsetMs());
+    const blob = new Blob(audioChunkBlobs, { type: mimeType });
+    audioChunkBlobs = [];
+    if (blob.size > 0) {
+      try {
+        const buffer = await blob.arrayBuffer();
+        await window.snipalotRecorder.sendAudioChunk({
+          buffer,
+          index,
+          startMs: audioChunkStartMs,
+          endMs,
+          mimeType,
+          final,
+        });
+        lifecycle('incremental audio chunk sent', {
+          index,
+          startMs: audioChunkStartMs,
+          endMs,
+          bytes: buffer.byteLength,
+          final,
+        }, 'success');
+      } catch (err) {
+        lifecycle('incremental audio chunk send failed', {
+          index,
+          error: (err as Error).message,
+        }, 'warning');
+      }
+    }
+    audioChunkRecorder = null;
+    if (!final && rollingAudioActive && mediaRecorder && mediaRecorder.state !== 'inactive') {
+      startNextAudioChunk();
+    }
+    resolve?.();
+  };
+  audioChunkRecorder.onerror = (event) => {
+    lifecycle('incremental audio recorder error', {
+      index,
+      error: String((event as ErrorEvent).message ?? event.type),
+    }, 'warning');
+  };
+  audioChunkRecorder.start();
+  audioChunkTimer = window.setTimeout(() => {
+    void stopCurrentAudioChunk(false);
+  }, INCREMENTAL_AUDIO_CHUNK_MS);
+}
+
+function stopCurrentAudioChunk(final: boolean): Promise<void> {
+  clearAudioChunkTimer();
+  if (audioChunkStopResolve) {
+    if (final) audioChunkStopFinal = true;
+    return new Promise((resolve) => {
+      const previousResolve = audioChunkStopResolve;
+      audioChunkStopResolve = () => {
+        previousResolve?.();
+        resolve();
+      };
+    });
+  }
+  const recorder = audioChunkRecorder;
+  if (!recorder || recorder.state === 'inactive') return Promise.resolve();
+  return new Promise((resolve) => {
+    audioChunkStopResolve = resolve;
+    audioChunkStopFinal = final;
+    try {
+      recorder.stop();
+    } catch {
+      audioChunkStopResolve = null;
+      audioChunkStopFinal = false;
+      resolve();
+    }
+  });
+}
+
+async function stopRollingAudioTranscription(final: boolean): Promise<void> {
+  rollingAudioActive = false;
+  await stopCurrentAudioChunk(final);
+  stopRollingAudioTranscriptionSync('stop');
+}
+
+function stopRollingAudioTranscriptionSync(reason: string): void {
+  clearAudioChunkTimer();
+  rollingAudioActive = false;
+  if (audioChunkRecorder && audioChunkRecorder.state !== 'inactive') {
+    try { audioChunkRecorder.stop(); } catch { /* ignore */ }
+  }
+  audioChunkRecorder = null;
+  audioChunkBlobs = [];
+  if (audioChunkStream) {
+    for (const track of audioChunkStream.getTracks()) track.stop();
+    audioChunkStream = null;
+  }
+  audioChunkStopResolve = null;
+  audioChunkStopFinal = false;
+  lifecycle('incremental audio stopped', { reason }, 'info');
 }
 
 async function startRecording(region: RecorderRegion): Promise<void> {
@@ -301,6 +476,7 @@ async function startRecording(region: RecorderRegion): Promise<void> {
         chunkCount,
         chunkBytes,
       }, 'start');
+      await stopRollingAudioTranscription(true);
       const blob = new Blob(chunks, { type: 'video/webm' });
       const buffer = await blob.arrayBuffer();
       lifecycle('webm blob assembled', {
@@ -328,7 +504,9 @@ async function startRecording(region: RecorderRegion): Promise<void> {
 
     pendingFilepath = await window.snipalotRecorder.getOutputPath();
     lifecycle('temp output path assigned', { pendingFilepath });
+    resetRecordingClock();
     mediaRecorder.start(250);
+    startRollingAudioTranscription();
     lifecycle('MediaRecorder started', {
       pendingFilepath,
       state: mediaRecorder.state,
@@ -366,13 +544,26 @@ function stopRecording(): void {
 function pauseRecording(): void {
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     mediaRecorder.pause();
+    if (audioChunkRecorder && audioChunkRecorder.state === 'recording') {
+      audioChunkRecorder.pause();
+    }
+    if (recordingClockPausedAtMs === null) {
+      recordingClockPausedAtMs = performance.now();
+    }
     log('paused');
   }
 }
 
 function resumeRecording(): void {
   if (mediaRecorder && mediaRecorder.state === 'paused') {
+    if (recordingClockPausedAtMs !== null) {
+      recordingClockPausedTotalMs += performance.now() - recordingClockPausedAtMs;
+      recordingClockPausedAtMs = null;
+    }
     mediaRecorder.resume();
+    if (audioChunkRecorder && audioChunkRecorder.state === 'paused') {
+      audioChunkRecorder.resume();
+    }
     log('resumed');
   }
 }
@@ -389,6 +580,7 @@ function cleanup(): void {
     cancelAnimationFrame(rafHandle);
     rafHandle = null;
   }
+  stopRollingAudioTranscriptionSync('cleanup');
   if (canvasStream) {
     for (const t of canvasStream.getTracks()) t.stop();
     canvasStream = null;

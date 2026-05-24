@@ -77,7 +77,7 @@ During recording, a compact HUD overlays your screen with:
 
 - Live recording timer
 - Pause / Resume
-- Snapshot (saves an annotated still mid-recording; `Ctrl+Shift+P`)
+- Snapshot (saves an annotated still mid-recording; `Ctrl+Alt+P`)
 - Annotate (draws annotation overlays directly on the live recording)
 - Stop
 - Discard (cancels and deletes the recording)
@@ -92,7 +92,7 @@ During recording, a compact HUD overlays your screen with:
 | Start/stop recording | `Ctrl+Shift+S` |
 | Start / stop trade session | `Ctrl+Shift+T` (toggle from idle or while trading) |
 | Mark trade event | `Ctrl+Shift+X` (only while a trade recording is active) |
-| Mid-session snapshot | `Ctrl+Shift+P` |
+| Mid-session snapshot | `Ctrl+Alt+P` |
 | Annotate (during recording) | `Ctrl+Shift+A` |
 | Pause / resume | `Ctrl+Shift+B` |
 | Annotator save | `Ctrl+S` |

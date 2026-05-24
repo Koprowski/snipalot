@@ -73,6 +73,44 @@
 - **Next action**
   - Restart Snipalot from the rebuilt app, try Record and Trade again, and confirm logs show `renderer signaled ready`, `recorder ready`, `recording started`, then `recorder state started`.
 
+### Pass 5 - State Hotkey Re-registration Loop (2026-05-24)
+
+- **What was tested**
+  - Reviewed a runtime log where pressing `Ctrl+Shift+S` caused rapid idle/selecting toggles.
+- **Observed log lines**
+  - `startStop fired {"appState":"selecting"}`
+  - `selecting -> idle exitSelecting: Ctrl+Shift+S during selecting`
+  - `register {"name":"startStop","combo":"Ctrl+Shift+S",...,"appState":"idle"}`
+  - `startStop fired {"appState":"idle"}`
+  - `idle -> selecting user toggle from idle`
+  - The same pattern repeated in milliseconds.
+- **Result**
+  - Root cause: the state-changing global shortcut handler called into a state transition, and the state transition immediately ran `reloadGlobalHotkeys()`. That unregister/re-register cycle re-armed the same chord while the physical keys were still down, causing Electron to fire the shortcut again.
+  - Fix applied: `Ctrl+Shift+S` (`startStop`) and `Ctrl+Shift+T` (`startTrade`) now enter a short rearm window after firing. During that window, `reloadGlobalHotkeys()` skips those state-changing shortcuts and registers them again after the guard expires.
+- **Validation**
+  - `npm run build`
+  - `npm test`
+- **Next action**
+  - Hands-on runtime validation is still needed on Windows: press and release `Ctrl+Shift+S` once from idle, confirm exactly one `startStop fired` followed by a `skip register` with reason `state transition rearm window`, then confirm no repeated idle/selecting loop.
+
+### Pass 6 - App Close After Loop Guard (2026-05-24)
+
+- **What was tested**
+  - Reviewed the `Ctrl+Shift+S` path after Pass 5 stopped the repeat loop but the app still closed instead of starting selection.
+- **Result**
+  - The repeat-loop guard was necessary but incomplete. `startStop` still called `handleToggleHotkey()` synchronously from inside Electron's `globalShortcut` callback. That path enters selection, and `setAppState()` calls `reloadGlobalHotkeys()`, which previously ran `globalShortcut.unregisterAll()` before Electron had returned from the active shortcut callback.
+  - Fix applied: all registered global shortcut callbacks now run through a dispatch wrapper. If `reloadGlobalHotkeys()` is requested while a global shortcut callback is active, Snipalot queues the reload and runs it on the next event-loop tick after the callback exits.
+  - The Pass 5 rearm guard remains in place, so the deferred reload skips `Ctrl+Shift+S` / `Ctrl+Shift+T` until the short rearm window expires.
+- **Validation**
+  - `npm run build`
+  - `npm test`
+- **Expected runtime evidence**
+  - `startStop fired`
+  - `reload queued until global shortcut callback exits`
+  - `deferred reload running after global shortcut dispatch`
+  - `skip register` with reason `state transition rearm window`
+  - Region selection remains open; no `before-quit`, `will-quit`, or repeated idle/selecting loop follows.
+
 ## Open Checks
 
 - Verify hotkey path in runtime:

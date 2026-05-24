@@ -492,14 +492,9 @@ async function main() {
   const manifest = await loadManifest();
 
   if (ARCHIVE_ONLY) {
-    const dirs = await listCurrentTradeDirs();
+    const currentReadiness = await collectReadyTradeDirs((await listCurrentTradeDirs()).filter(isIncludedSession));
     const results = [];
-    const skippedFolders = [];
-    for (const dir of dirs) {
-      if (!hasImportableTradeLog(dir)) {
-        skippedFolders.push(path.basename(dir));
-        continue;
-      }
+    for (const { dir } of currentReadiness.ready) {
       const archiveTarget = await archiveFolder(dir);
       const result = {
         sessionName: path.basename(dir),
@@ -519,7 +514,8 @@ async function main() {
       archive: ARCHIVE,
       archiveOnly: true,
       processedFolders: results.length,
-      skippedFolders,
+      skippedFolders: currentReadiness.skipped.map((entry) => entry.sessionName),
+      skippedFolderDetails: currentReadiness.skipped,
       results,
     }, null, 2));
     return;
@@ -547,23 +543,25 @@ async function main() {
     return;
   }
 
-  const dirs = (await listCurrentTradeDirs()).filter(isIncludedSession);
+  const currentReadiness = await collectReadyTradeDirs((await listCurrentTradeDirs()).filter(isIncludedSession));
+  const readyCurrentDirs = currentReadiness.ready;
 
-  const archivedDirs = ENABLE_ARCHIVE_BACKFILL && fss.existsSync(ARCHIVE)
+  const archivedCandidates = ENABLE_ARCHIVE_BACKFILL && fss.existsSync(ARCHIVE)
     ? (await fs.readdir(ARCHIVE, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory() && entry.name.endsWith(" trade"))
       .map((entry) => path.join(ARCHIVE, entry.name))
       .filter(isIncludedSession)
       .sort()
     : [];
+  const archivedReadiness = await collectReadyTradeDirs(archivedCandidates);
+  const readyArchivedDirs = archivedReadiness.ready;
 
   let allRows = [...existing];
   let rowsRemovedBeforeImport = 0;
   if (REPLACE_SOURCE_ROWS) {
     const sessionsToReplace = new Set(
-      [...dirs, ...archivedDirs]
-        .filter(hasImportableTradeLog)
-        .map((dir) => path.basename(dir))
+      [...readyCurrentDirs, ...readyArchivedDirs]
+        .map(({ dir }) => path.basename(dir))
     );
     if (sessionsToReplace.size > 0) {
       const before = allRows.length;
@@ -576,22 +574,24 @@ async function main() {
   const seen = new Set(allRows.map(rowKey));
 
   const results = [];
-  for (const dir of dirs) {
+  for (const { dir, tradeLog } of readyCurrentDirs) {
     const result = await importTradeFolder(dir, {
       allRows,
       seen,
       archiveAfterImport: !NO_ARCHIVE,
+      tradeLog,
     });
     manifest.push(result);
     results.push(result);
   }
 
   const backfillResults = [];
-  for (const dir of archivedDirs) {
+  for (const { dir, tradeLog } of readyArchivedDirs) {
     const result = await importTradeFolder(dir, {
       allRows,
       seen,
       archiveAfterImport: false,
+      tradeLog,
     });
     if (result.rowsAdded > 0) backfillResults.push(result);
   }
@@ -621,6 +621,10 @@ async function main() {
     includedSessions: [...INCLUDED_SESSIONS],
     processedFolders: results.length,
     backfilledArchivedFolders: backfillResults.length,
+    skippedFolders: currentReadiness.skipped.map((entry) => entry.sessionName),
+    skippedFolderDetails: currentReadiness.skipped,
+    skippedArchivedFolders: archivedReadiness.skipped.map((entry) => entry.sessionName),
+    skippedArchivedFolderDetails: archivedReadiness.skipped,
     rowsRemovedBeforeImport,
     rowsInMaster: allRows.length,
     rowsAppended: rowsToAppend.length,
@@ -641,23 +645,81 @@ async function listCurrentTradeDirs() {
     .sort();
 }
 
-function hasImportableTradeLog(dir) {
-  return fss.existsSync(path.join(dir, "trade_log.xlsx")) || fss.existsSync(path.join(dir, "trade_log.csv"));
+async function collectReadyTradeDirs(dirs) {
+  const ready = [];
+  const skipped = [];
+  for (const dir of dirs) {
+    const tradeLog = await readImportableTradeLog(dir);
+    if (tradeLog.ready) {
+      ready.push({ dir, tradeLog });
+    } else {
+      skipped.push({
+        sessionName: path.basename(dir),
+        reason: tradeLog.reason,
+      });
+    }
+  }
+  return { ready, skipped };
 }
 
-async function importTradeFolder(dir, { allRows, seen, archiveAfterImport }) {
-  const sessionName = path.basename(dir);
+async function readImportableTradeLog(dir) {
   const xlsx = path.join(dir, "trade_log.xlsx");
   const csv = path.join(dir, "trade_log.csv");
-  let rawRows = [];
-  let sourceType = "missing-log";
   if (fss.existsSync(xlsx)) {
-    rawRows = await readXlsxRows(xlsx);
-    sourceType = "workflow-xlsx";
-  } else if (fss.existsSync(csv)) {
-    rawRows = await readCsvRows(csv);
-    sourceType = "legacy-csv";
+    return readReadyTradeLog(xlsx, "workflow-xlsx", readXlsxRows);
   }
+  if (fss.existsSync(csv)) {
+    return readReadyTradeLog(csv, "legacy-csv", readCsvRows);
+  }
+  return { ready: false, reason: "missing trade_log.xlsx or legacy trade_log.csv" };
+}
+
+async function readReadyTradeLog(filePath, sourceType, reader) {
+  try {
+    const rawRows = await reader(filePath);
+    if (rawRows.length === 0) {
+      return {
+        ready: false,
+        reason: `${path.basename(filePath)} has no data rows`,
+      };
+    }
+    return {
+      ready: true,
+      filePath,
+      sourceType,
+      rawRows,
+    };
+  } catch (err) {
+    return {
+      ready: false,
+      reason: `${path.basename(filePath)} is not readable: ${errorMessage(err)}`,
+    };
+  }
+}
+
+function errorMessage(err) {
+  return err && typeof err.message === "string" ? err.message : String(err);
+}
+
+async function importTradeFolder(dir, { allRows, seen, archiveAfterImport, tradeLog = null }) {
+  const sessionName = path.basename(dir);
+  const xlsx = path.join(dir, "trade_log.xlsx");
+  const resolvedTradeLog = tradeLog ?? await readImportableTradeLog(dir);
+  if (!resolvedTradeLog.ready) {
+    return {
+      sessionName,
+      sourceType: "missing-log",
+      rowsFound: 0,
+      rowsAdded: 0,
+      rowsBackfilled: 0,
+      archivedTo: null,
+      skipped: true,
+      skipReason: resolvedTradeLog.reason,
+      processedAt: new Date().toISOString(),
+    };
+  }
+  let rawRows = resolvedTradeLog.rawRows;
+  const sourceType = resolvedTradeLog.sourceType;
   rawRows = await mergeExtractionResponseRows(dir, rawRows);
   rawRows = await mergeMockApeRows(dir, rawRows);
   rawRows = await ensureNicsResponseRows(dir, rawRows);
@@ -667,7 +729,7 @@ async function importTradeFolder(dir, { allRows, seen, archiveAfterImport }) {
   let archiveTarget = archiveAfterImport ? path.join(ARCHIVE, sessionName) : dir;
   if (rawRows.length > 0) {
     rawRows = reconcileNicsFields(rawRows, allRows, sessionName);
-    if (fss.existsSync(xlsx)) {
+    if (sourceType === "workflow-xlsx" && fss.existsSync(xlsx)) {
       const sessionRows = rawRows.map((row) => normalizeWorkflowRow(row, sessionName, sourceType, archiveTarget));
       await writeTradeLogRowsXlsx(xlsx, sessionRows);
     }
@@ -988,8 +1050,8 @@ Use the saved evidence from the session folder to fill only missing NICS/meta cl
 
 Scoring rules:
 - N_score, I_score, C_score, and S_score are binary 0 or 1.
-- NICS_score = N_score + I_score + C_score + S_score. It ranges from 0 to 4.
-- A trade counts toward the 50-trade target when size_ok is true, N_score = 1, I_score = 1, and at least one of C_score or S_score is 1. Zone and cooldown are tracked separately by the sync script.
+- NICS_score = N_score + I_score + max(C_score, S_score). It ranges from 0 to 3.
+- A trade counts toward the 50-trade target when size_ok is true, zone_ok is true, N_score = 1, I_score = 1, and at least one of C_score or S_score is 1. Cooldown is tracked as an informational process signal because entry/exit times are inferred.
 - N = the trader clearly names the narrative/meta/setup being traded, not just the ticker.
 - I = the trader states why this specific token is the selected ticket for that meta or what immediate evidence supports entry.
 - C = the trader gives the actual cut/close reason: why they got out, what failed, what changed, or what stopped working.
@@ -1268,6 +1330,7 @@ function reconcileNicsFields(rawRows, existingRows, sessionName) {
   const completed = [];
 
   for (const row of rows) {
+    if (isBlank(row.source_session)) row.source_session = sessionName;
     if (isBlank(row.meta_name)) row.meta_name = row.token_name ?? "";
 
     const metaKey = metaKeyFor(row);
@@ -1286,13 +1349,14 @@ function reconcileNicsFields(rawRows, existingRows, sessionName) {
     fillNicsScore(row);
     fillSetupFlags(row);
     fillTradeType(row);
-    fillCooldownFlag(row, state.history);
-    fillCountFields(row, state.history);
     completed.push(row);
     state.history.push(row);
   }
 
-  fillClusterPnl(rows, [...existingRows, ...completed]);
+  const allRows = [...existingRows, ...completed];
+  fillClusterPnl(rows, allRows);
+  fillCooldownFlags(rows, allRows);
+  fillCountFieldsForRows(rows, existingRows);
   return rows;
 }
 
@@ -1382,9 +1446,9 @@ function fillNicsScore(row) {
 
 function fillSetupFlags(row) {
   const sol = parseNumber(row.sol_invested);
-  if (sol !== null) row.size_ok = Math.abs(sol - 0.5) < 0.0001 ? "true" : "false";
+  row.size_ok = sol !== null && Math.abs(sol - 0.5) < 0.0001 ? "true" : "false";
   const entryMc = parseNumber(row.entry_mc_actual);
-  if (entryMc !== null) row.zone_ok = entryMc >= 2000 && entryMc <= 20000 ? "true" : "false";
+  row.zone_ok = entryMc !== null && entryMc >= 2000 && entryMc <= 20000 ? "true" : "false";
 }
 
 function fillTradeType(row) {
@@ -1394,27 +1458,99 @@ function fillTradeType(row) {
   row.trade_type = evidenceOk ? "Core NICS++" : "Non-NICS";
 }
 
-function fillCooldownFlag(row, history) {
-  const currentTime = rowDateTimeMs(row);
-  if (currentTime === null) return;
-  const previousLoss = [...history]
-    .map((candidate) => ({ row: candidate, time: rowDateTimeMs(candidate) }))
-    .filter((candidate) => candidate.time !== null && candidate.time < currentTime && parseNumber(candidate.row.pnl_percentage) !== null)
-    .sort((a, b) => b.time - a.time)
-    .find((candidate) => (parseNumber(candidate.row.pnl_percentage) ?? 0) < 0);
-  if (!previousLoss) {
-    row.cooldown_ok = "true";
-    return;
+function fillCooldownFlags(rowsToFill, allRows) {
+  const losingClusters = completedLosingSessionClusters(allRows);
+  for (const row of rowsToFill) {
+    const currentTime = rowEntryDateTimeMs(row);
+    if (currentTime === null) {
+      row.cooldown_ok = "";
+      continue;
+    }
+    const session = sessionKeyFor(row);
+    const currentClusterId = String(row.meta_cluster_id ?? "").trim();
+    const violatesCooldown = losingClusters.some((cluster) => {
+      if (cluster.session !== session) return false;
+      if (cluster.clusterId === currentClusterId) return false;
+      if (currentTime < cluster.completedAtMs) return false;
+      return currentTime - cluster.completedAtMs < 5 * 60 * 1000;
+    });
+    row.cooldown_ok = violatesCooldown ? "false" : "true";
   }
-  const minutesSinceLoss = (currentTime - previousLoss.time) / 60000;
-  row.cooldown_ok = minutesSinceLoss >= 5 ? "true" : "false";
+}
+
+function completedLosingSessionClusters(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const session = sessionKeyFor(row);
+    const clusterId = String(row.meta_cluster_id ?? "").trim();
+    if (!session || !clusterId) continue;
+    const key = `${session}::${clusterId}`;
+    const group = groups.get(key) ?? {
+      session,
+      clusterId,
+      rowCount: 0,
+      completedAtMs: null,
+      missingExit: false,
+      pnlSolSum: 0,
+      pnlSolCount: 0,
+      pnlPctSum: 0,
+      pnlPctCount: 0,
+    };
+    group.rowCount++;
+    const exitTime = rowExitDateTimeMs(row);
+    if (exitTime === null) {
+      group.missingExit = true;
+    } else {
+      group.completedAtMs = Math.max(group.completedAtMs ?? exitTime, exitTime);
+    }
+    const pnlSol = parseNumber(row.pnl_sol);
+    if (pnlSol !== null) {
+      group.pnlSolSum += pnlSol;
+      group.pnlSolCount++;
+    }
+    const pnlPct = parseNumber(row.pnl_percentage);
+    if (pnlPct !== null) {
+      group.pnlPctSum += pnlPct;
+      group.pnlPctCount++;
+    }
+    groups.set(key, group);
+  }
+
+  return [...groups.values()].filter((group) => {
+    if (group.completedAtMs === null || group.missingExit) return false;
+    if (group.pnlSolCount === group.rowCount) return group.pnlSolSum < 0;
+    if (group.pnlPctCount > 0) return group.pnlPctSum < 0;
+    return false;
+  });
+}
+
+function sessionKeyFor(row) {
+  return String(row.source_session ?? "").trim();
+}
+
+function rowEntryDateTimeMs(row) {
+  return rowDateTimeFromTimeValue(row, firstNonBlank(row.entry_time_inferred, row.entry_commentary_time, row.video_start_time));
+}
+
+function rowExitDateTimeMs(row) {
+  return rowDateTimeFromTimeValue(row, firstNonBlank(row.exit_time_actual, row.exit_commentary_time));
+}
+
+function fillCountFieldsForRows(rowsToFill, existingRows) {
+  const history = [...existingRows];
+  const sortedRows = [...rowsToFill].sort((a, b) => (rowDateTimeMs(a) ?? Number.MAX_SAFE_INTEGER) - (rowDateTimeMs(b) ?? Number.MAX_SAFE_INTEGER));
+  for (const row of sortedRows) {
+    fillCountFields(row, history);
+    history.push(row);
+  }
 }
 
 function fillCountFields(row, history) {
   const evidenceOk = hasCountedNicsEvidence(row);
   const sizeOk = parseBoolean(row.size_ok);
+  const zoneOk = parseBoolean(row.zone_ok);
   const hardReset = isAboveHalfSol(row) === true;
-  const counts = evidenceOk === true && sizeOk === true && hardReset === false;
+  const counts = evidenceOk === true && sizeOk === true && zoneOk === true && hardReset === false;
   row.counts_toward_50 = counts ? "1" : "0";
   row.hard_reset = hardReset ? "true" : "false";
 
@@ -1429,8 +1565,8 @@ function nicsUnlockScore(row) {
   const i = binaryScoreOrNull(row.I_score);
   const c = binaryScoreOrNull(row.C_score);
   const s = binaryScoreOrNull(row.S_score);
-  if (n === null || i === null || c === null || s === null) return null;
-  return n + i + c + s;
+  if (n === null || i === null || (c === null && s === null)) return null;
+  return n + i + Math.max(c ?? 0, s ?? 0);
 }
 
 function hasCountedNicsEvidence(row) {
@@ -1438,8 +1574,8 @@ function hasCountedNicsEvidence(row) {
   const i = binaryScoreOrNull(row.I_score);
   const c = binaryScoreOrNull(row.C_score);
   const s = binaryScoreOrNull(row.S_score);
-  if (n === null || i === null || c === null || s === null) return null;
-  return n === 1 && i === 1 && (c + s) >= 1;
+  if (n === null || i === null || (c === null && s === null)) return null;
+  return n === 1 && i === 1 && (c === 1 || s === 1);
 }
 
 function binaryScoreOrNull(value) {
@@ -1465,7 +1601,7 @@ function latestRunningCount(history) {
 function fillClusterPnl(rowsToFill, allRows) {
   const pnlByCluster = new Map();
   for (const row of allRows) {
-    const clusterId = String(row.meta_cluster_id ?? "").trim();
+    const clusterId = sessionClusterKeyFor(row);
     const pnl = parseNumber(row.pnl_percentage);
     if (!clusterId || pnl === null) continue;
     const list = pnlByCluster.get(clusterId) ?? [];
@@ -1473,8 +1609,7 @@ function fillClusterPnl(rowsToFill, allRows) {
     pnlByCluster.set(clusterId, list);
   }
   for (const row of rowsToFill) {
-    if (!isBlank(row.cluster_pnl_pct)) continue;
-    const clusterId = String(row.meta_cluster_id ?? "").trim();
+    const clusterId = sessionClusterKeyFor(row);
     const values = pnlByCluster.get(clusterId) ?? [];
     if (values.length === 0) continue;
     const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -1482,10 +1617,20 @@ function fillClusterPnl(rowsToFill, allRows) {
   }
 }
 
+function sessionClusterKeyFor(row) {
+  const session = sessionKeyFor(row);
+  const clusterId = String(row.meta_cluster_id ?? "").trim();
+  return session && clusterId ? `${session}::${clusterId}` : "";
+}
+
 function rowDateTimeMs(row) {
+  return rowDateTimeFromTimeValue(row, firstNonBlank(row.entry_time_inferred, row.exit_time_actual, row.video_start_time));
+}
+
+function rowDateTimeFromTimeValue(row, value) {
   const serial = parseDateSerial(row.trade_date);
   if (serial === null) return null;
-  const time = parseTimeParts(firstNonBlank(row.entry_time_inferred, row.exit_time_actual, row.video_start_time));
+  const time = parseTimeParts(value);
   if (!time) return null;
   const date = dateFromExcelSerial(serial);
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), time.hour, time.minute, time.second);

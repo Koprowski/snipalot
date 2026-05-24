@@ -48,7 +48,7 @@ let currentCanAbandonProcessing = false;
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
 // idle hint always reflects the current binding (default: Ctrl+Shift+S).
 let currentStartStopHotkey = 'Ctrl+Shift+S';
-let currentSnapshotHotkey = 'Ctrl+Shift+P';
+let currentSnapshotHotkey = 'Ctrl+Alt+P';
 let currentStartTradeHotkey = 'Ctrl+Shift+T';
 // Mirrors config.hotkeys.tradeMarker. Used in the trade-recording hint only.
 let currentTradeMarkerHotkey = 'Ctrl+Shift+X';
@@ -76,6 +76,41 @@ let updateStatusIsError = false;
 let currentSessionMode: 'record' | 'trade' = 'record';
 
 type LauncherUpdateCheckResult = Awaited<ReturnType<typeof window.snipalotLauncher.checkForUpdates>>;
+
+function normalizeHotkey(combo: string): string[] {
+  return combo
+    .split('+')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .map((part) => (part === 'ctrl' ? 'control' : part));
+}
+
+function keyboardEventMatchesHotkey(event: KeyboardEvent, combo: string): boolean {
+  const parts = normalizeHotkey(combo);
+  const key = event.key.trim().toLowerCase();
+  const codeKey = event.code.toLowerCase().replace(/^key/, '');
+  const wantedKey = parts.find((part) => !['control', 'shift', 'alt', 'meta', 'cmd', 'command'].includes(part));
+  if (!wantedKey) return false;
+
+  const wantsCtrl = parts.includes('control');
+  const wantsShift = parts.includes('shift');
+  const wantsAlt = parts.includes('alt');
+  const wantsMeta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
+
+  return (
+    event.ctrlKey === wantsCtrl &&
+    event.shiftKey === wantsShift &&
+    event.altKey === wantsAlt &&
+    event.metaKey === wantsMeta &&
+    (key === wantedKey || codeKey === wantedKey)
+  );
+}
+
+function isSnapshotLikeKeydown(event: KeyboardEvent): boolean {
+  return event.ctrlKey &&
+    (event.shiftKey || event.altKey) &&
+    (event.key.trim().toLowerCase() === 'p' || event.code.toLowerCase() === 'keyp');
+}
 
 function applyUpdateCheckResult(result: LauncherUpdateCheckResult): void {
   if (result.ok && result.updateAvailable && result.latestVersion) {
@@ -516,6 +551,51 @@ window.snipalotLauncher.onUpdateDownloadProgress((progress) => {
   renderLauncherUpdate();
 });
 window.snipalotLauncher.onUpdateCheckResult(applyUpdateCheckResult);
+
+window.addEventListener('keydown', (event) => {
+  if (event.repeat) return;
+
+  if (event.key === 'Escape') {
+    if (
+      currentState === 'selecting' ||
+      currentState === 'selecting-screenshot' ||
+      currentState === 'selecting-trade'
+    ) {
+      event.preventDefault();
+      void window.snipalotLauncher.cancel();
+    }
+    return;
+  }
+
+  if (isSnapshotLikeKeydown(event)) {
+    const matches = keyboardEventMatchesHotkey(event, currentSnapshotHotkey);
+    window.snipalotLauncher.log('shortcut-fallback', 'snapshot-like launcher keydown', {
+      key: event.key,
+      code: event.code,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
+      currentState,
+      currentSnapshotHotkey,
+      screenshotVisible: currentVisibleActions.screenshot,
+      matches,
+    });
+  }
+
+  if (
+    currentVisibleActions.screenshot &&
+    (currentState === 'idle' || currentState === 'selecting-screenshot') &&
+    keyboardEventMatchesHotkey(event, currentSnapshotHotkey)
+  ) {
+    event.preventDefault();
+    window.snipalotLauncher.log('shortcut-fallback', 'snapshot from launcher keydown', {
+      currentState,
+      currentSnapshotHotkey,
+    });
+    void window.snipalotLauncher.screenshot();
+  }
+});
 
 renderLauncherImpl();
 window.snipalotLauncher.getCaptureMode()

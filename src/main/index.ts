@@ -20,7 +20,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { execSync, spawn } from 'node:child_process';
 import { getLogPath, log } from './logger';
-import { runPipeline, AnnotationRecord, ChapterRecord, TradeMarkerRecord, formatSessionStamp } from './pipeline';
+import {
+  runPipeline,
+  runDiscardedTradeAudit,
+  AnnotationRecord,
+  ChapterRecord,
+  TradeMarkerRecord,
+  DiscardedTradeAuditResult,
+  formatSessionStamp,
+  transcribeIncrementalAudioChunk,
+  mergeTranscriptSegments,
+  IncrementalTranscriptionResult,
+  IncrementalTranscriptionChunkResult,
+} from './pipeline';
 import { loadConfig, saveConfig, getConfig, SnipalotConfig, CONFIG_PATH } from './config';
 import { createTray, updateTrayMenu, destroyTray } from './tray';
 import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
@@ -37,6 +49,23 @@ const isDebug = process.argv.includes('--debug');
 // --no-protect disables setContentProtection on the HUD so the user can
 // screenshot it for debugging. Don't use in normal recording runs.
 const disableContentProtection = process.argv.includes('--no-protect');
+
+process.on('uncaughtException', (err) => {
+  log('process', 'uncaughtException', {
+    message: err.message,
+    stack: err.stack,
+  });
+});
+
+process.on('unhandledRejection', (reason) => {
+  log('process', 'unhandledRejection', {
+    reason: reason instanceof Error ? { message: reason.message, stack: reason.stack } : String(reason),
+  });
+});
+
+process.on('exit', (code) => {
+  log('process', 'exit', { code });
+});
 
 // Windows uses this id for taskbar grouping. Set it before windows are
 // created so dev launches do not inherit electron.exe/default artwork.
@@ -221,8 +250,28 @@ function requestAppExit(reason: string): boolean {
     log('main', 'app exit already in progress', { reason });
     return true;
   }
+  if (isSelectingState()) {
+    log('main', 'app exit converted to selection cancel', { reason, appState });
+    exitSelecting(`app exit requested during selection: ${reason}`);
+    return false;
+  }
+  if (appState === 'recording' && currentSessionMode === 'trade') {
+    log('main', 'app exit converted to trade discard audit', { reason });
+    void discardRecording(`app exit requested: ${reason}`);
+    return false;
+  }
   appExitRequested = true;
-  log('main', 'app exit requested', { reason });
+  log('main', 'app exit requested', {
+    reason,
+    appState,
+    windowCount: BrowserWindow.getAllWindows().length,
+    windows: BrowserWindow.getAllWindows().map((win) => ({
+      title: win.getTitle(),
+      visible: win.isVisible(),
+      focused: win.isFocused(),
+      destroyed: win.isDestroyed(),
+    })),
+  });
   if (appState === 'recording') {
     updateActiveSessionStatus('failed', {
       stage: 'app exited while recording before finalization',
@@ -301,6 +350,13 @@ let activeDisplayId: string | null = null;
 let activeSourceId: string | null = null;
 let activeScreenshotCaptureId = 0;
 const SCREENSHOT_HOTKEY_CANCEL_DEBOUNCE_MS = 600;
+const STATE_HOTKEY_REARM_DELAY_MS = 2000;
+type StateHotkeyName = 'startStop' | 'startTrade';
+const stateHotkeySuppressedUntil = new Map<StateHotkeyName, number>();
+const stateHotkeyRearmTimers = new Map<StateHotkeyName, NodeJS.Timeout>();
+let globalShortcutDispatchDepth = 0;
+let globalHotkeyReloadQueued = false;
+let globalHotkeyReloadTimer: NodeJS.Timeout | null = null;
 let selectingScreenshotEnteredAtMs = 0;
 let suppressLauncherDuringScreenshotCapture = false;
 
@@ -357,6 +413,17 @@ interface PendingProcessing {
   mode: 'record' | 'trade';
   tradeMarkers: TradeMarkerRecord[];
 }
+
+interface PendingDiscardAudit {
+  annotations: AnnotationRecord[];
+  startedAtMs: number;
+  durationMs: number;
+  preCreatedSessionDir: string;
+  chapters: ChapterRecord[];
+  mode: 'trade';
+  tradeMarkers: TradeMarkerRecord[];
+}
+
 // Snapshot of the stopping recording's metadata. The webm buffer arrives
 // async via recorder:save-webm and the pipeline picks up from here.
 let pendingProcessing: PendingProcessing | null = null;
@@ -369,6 +436,7 @@ let pendingProcessing: PendingProcessing | null = null;
  */
 let pendingDiscard = false;
 let pendingDiscardSessionDir: string | null = null;
+let pendingDiscardAudit: PendingDiscardAudit | null = null;
 
 interface ActiveProcessingRun {
   mode: 'record' | 'trade';
@@ -378,6 +446,131 @@ interface ActiveProcessingRun {
 }
 
 let activeProcessingRun: ActiveProcessingRun | null = null;
+
+interface IncrementalAudioChunkPayload {
+  buffer: ArrayBuffer;
+  index: number;
+  startMs: number;
+  endMs: number;
+  mimeType?: string | null;
+  final?: boolean;
+}
+
+interface IncrementalTranscriptionRun {
+  sessionDir: string;
+  mode: 'record' | 'trade';
+  abortController: AbortController;
+  queue: Promise<void>;
+  chunksReceived: number;
+  failedChunks: number;
+  warnings: string[];
+  results: IncrementalTranscriptionChunkResult[];
+}
+
+let activeIncrementalTranscription: IncrementalTranscriptionRun | null = null;
+
+function startIncrementalTranscriptionSession(sessionDir: string, mode: 'record' | 'trade'): void {
+  cancelIncrementalTranscription('starting new incremental transcription session');
+  activeIncrementalTranscription = {
+    sessionDir,
+    mode,
+    abortController: new AbortController(),
+    queue: Promise.resolve(),
+    chunksReceived: 0,
+    failedChunks: 0,
+    warnings: [],
+    results: [],
+  };
+  writeSessionLog(sessionDir, 'whisper', 'incremental transcription session started', {
+    mode,
+  }, 'start');
+}
+
+function cancelIncrementalTranscription(reason: string): void {
+  const run = activeIncrementalTranscription;
+  if (!run) return;
+  try {
+    run.abortController.abort();
+  } catch {
+    /* ignore */
+  }
+  writeSessionLog(run.sessionDir, 'whisper', 'incremental transcription session canceled', {
+    reason,
+    chunksReceived: run.chunksReceived,
+    failedChunks: run.failedChunks,
+  }, 'skipped');
+  activeIncrementalTranscription = null;
+}
+
+function enqueueIncrementalAudioChunk(payload: IncrementalAudioChunkPayload): { ok: boolean; skipped?: boolean; reason?: string } {
+  const run = activeIncrementalTranscription;
+  if (!run) {
+    return { ok: true, skipped: true, reason: 'no active incremental transcription session' };
+  }
+  const buffer = Buffer.from(payload.buffer);
+  if (buffer.length === 0) {
+    return { ok: true, skipped: true, reason: 'empty audio chunk' };
+  }
+  run.chunksReceived += 1;
+  const chunkInfo = {
+    index: payload.index,
+    startMs: payload.startMs,
+    endMs: payload.endMs,
+    bytes: buffer.length,
+    final: Boolean(payload.final),
+    mimeType: payload.mimeType ?? null,
+  };
+  writeSessionLog(run.sessionDir, 'whisper', 'incremental audio chunk received', chunkInfo, 'info');
+  run.queue = run.queue
+    .then(async () => {
+      const result = await transcribeIncrementalAudioChunk({
+        audioBuffer: buffer,
+        sessionDir: run.sessionDir,
+        index: payload.index,
+        startMs: payload.startMs,
+        endMs: payload.endMs,
+        mimeType: payload.mimeType,
+        abortSignal: run.abortController.signal,
+      });
+      run.results.push(result);
+    })
+    .catch((err) => {
+      const message = (err as Error).message;
+      if (run.abortController.signal.aborted) return;
+      run.failedChunks += 1;
+      run.warnings.push(`chunk ${payload.index}: ${message}`);
+      writeSessionLog(run.sessionDir, 'whisper', 'incremental chunk failed', {
+        ...chunkInfo,
+        error: message,
+      }, 'warning');
+    });
+  return { ok: true };
+}
+
+function finalizeIncrementalTranscription(sessionDir: string | null | undefined): Promise<IncrementalTranscriptionResult | null> | undefined {
+  const run = activeIncrementalTranscription;
+  if (!run || (sessionDir && run.sessionDir !== sessionDir)) return undefined;
+  activeIncrementalTranscription = null;
+  return run.queue.then(() => {
+    const ordered = [...run.results].sort((a, b) => a.index - b.index);
+    const segments = mergeTranscriptSegments(ordered.flatMap((result) => result.segments));
+    const diagnostics = ordered.map((result) => result.diagnostic);
+    const result: IncrementalTranscriptionResult = {
+      segments,
+      diagnostics,
+      chunkCount: run.chunksReceived,
+      failedChunks: run.failedChunks,
+      warnings: run.warnings,
+    };
+    writeSessionLog(run.sessionDir, 'whisper', 'incremental transcription session finalized', {
+      chunksReceived: result.chunkCount,
+      failedChunks: result.failedChunks,
+      segments: result.segments.length,
+      warnings: result.warnings,
+    }, result.failedChunks > 0 ? 'warning' : 'success');
+    return result;
+  });
+}
 
 type SessionStatusState =
   | 'recording'
@@ -422,6 +615,24 @@ function writeSessionStatusFile(
     sessionDir,
     details,
   };
+  const detailTextValue = (value: unknown): string | null => {
+    if (value === undefined || value === null) return null;
+    if (Array.isArray(value)) return value.length > 0 ? value.join(', ') : null;
+    return String(value);
+  };
+  const optionalDetailLines = [
+    ['reviewStatus', details.reviewStatus],
+    ['comments', details.comments],
+    ['suspectedTradeTimestamps', details.suspectedTradeTimestamps],
+    ['retainedRecording', details.retainedRecording],
+    ['reviewPath', details.reviewPath],
+    ['transcriptPath', details.transcriptPath],
+  ]
+    .map(([key, value]) => {
+      const formatted = detailTextValue(value);
+      return formatted ? `${key}=${formatted}` : null;
+    })
+    .filter(Boolean);
   const text = [
     `status=${payload.status}`,
     `updatedAtIso=${payload.updatedAtIso}`,
@@ -432,6 +643,7 @@ function writeSessionStatusFile(
     `sessionName=${payload.sessionName}`,
     details.stage ? `stage=${String(details.stage)}` : null,
     details.mode ? `mode=${String(details.mode)}` : null,
+    ...optionalDetailLines,
   ].filter(Boolean).join(os.EOL) + os.EOL;
 
   try {
@@ -537,12 +749,9 @@ function setAppState(next: AppState, why: string): void {
 /**
  * Estimate total post-recording processing wall-clock seconds.
  *
- * The pipeline runs audio (whisper, the long pole) and video (mp4
- * transcode + gif) in parallel after a brief sequential setup. Whisper
- * is ~25% of recording duration on the bundled base.en model + this
- * machine's CPU; mp4 transcode at ultrafast preset is ~10%. Plus a
- * ~5s overhead for save/chapters/prompt write/etc. Trade mode adds a
- * small baseline for the trade-context window setup.
+ * Incremental transcription means post-stop audio work is usually only
+ * waiting for the final rolling chunk. Video work depends on feedback output
+ * settings; trade mode still generates its media artifacts.
  *
  * These coefficients are approximate; a real run can land within ±25%.
  * The progress bar caps at 95% until the pipeline actually completes,
@@ -550,10 +759,12 @@ function setAppState(next: AppState, why: string): void {
  */
 function estimateProcessingSec(recordingDurationMs: number, mode: 'record' | 'trade'): number {
   const recordingSec = Math.max(1, recordingDurationMs / 1000);
+  const feedback = getConfig().feedback;
+  const mediaEnabled = mode === 'trade' || feedback.generateMp4 || feedback.generateGif;
   // Audio + video branches run in parallel; max() reflects wall clock.
-  const audioBranchSec = 1 + 0.25 * recordingSec;   // wav extract + whisper
-  const videoBranchSec = 0.10 * recordingSec;       // ultrafast libx264
-  const gifTailSec = 0.05 * recordingSec;           // sequential after mp4
+  const audioBranchSec = Math.min(18, 2 + 0.06 * recordingSec); // live chunks + final chunk settle
+  const videoBranchSec = mediaEnabled ? 0.10 * recordingSec : 0; // ultrafast libx264
+  const gifTailSec = mode === 'trade' || feedback.generateGif ? 0.05 * recordingSec : 0;
   const overheadSec = 5;                            // save webm + chapters + prompt + cleanup
   // Trade sessions include an additional LLM extraction leg after the
   // local media/transcript work. That step is bursty and backend-dependent,
@@ -624,19 +835,114 @@ function toAccelerator(combo: string): string {
   return combo.replace(/\bCtrl\b/gi, 'Control');
 }
 
-function isLocalOnlyUndoHotkey(combo: string): boolean {
-  const parts = combo
+function hotkeyParts(combo: string): string[] {
+  return combo
     .split('+')
     .map((part) => part.trim().toLowerCase())
     .filter(Boolean)
     .map((part) => (part === 'ctrl' ? 'control' : part));
+}
+
+function inputMatchesHotkey(
+  input: { key?: string; code?: string; control?: boolean; shift?: boolean; alt?: boolean; meta?: boolean },
+  combo: string
+): boolean {
+  const parts = hotkeyParts(combo);
+  const wantedKey = parts.find((part) => !['control', 'shift', 'alt', 'meta', 'cmd', 'command'].includes(part));
+  if (!wantedKey) return false;
+  const inputKey = String(input.key ?? '').trim().toLowerCase();
+  const inputCode = String(input.code ?? '').trim().toLowerCase().replace(/^key/, '');
+  const wantsCtrl = parts.includes('control');
+  const wantsShift = parts.includes('shift');
+  const wantsAlt = parts.includes('alt');
+  const wantsMeta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command');
+  return (
+    Boolean(input.control) === wantsCtrl &&
+    Boolean(input.shift) === wantsShift &&
+    Boolean(input.alt) === wantsAlt &&
+    Boolean(input.meta) === wantsMeta &&
+    (inputKey === wantedKey || inputCode === wantedKey)
+  );
+}
+
+function isSnapshotLikeInput(input: { key?: string; code?: string; control?: boolean; shift?: boolean; alt?: boolean }): boolean {
+  const inputKey = String(input.key ?? '').trim().toLowerCase();
+  const inputCode = String(input.code ?? '').trim().toLowerCase();
+  const isP = inputKey === 'p' || inputCode === 'keyp';
+  return Boolean(input.control) && isP && (Boolean(input.shift) || Boolean(input.alt));
+}
+
+function isLocalOnlyUndoHotkey(combo: string): boolean {
+  const parts = hotkeyParts(combo);
   return parts.length === 2 && parts.includes('control') && parts.includes('z');
+}
+
+function isStateHotkeySuppressed(name: StateHotkeyName): boolean {
+  const until = stateHotkeySuppressedUntil.get(name) ?? 0;
+  return Date.now() < until;
+}
+
+function suppressStateHotkey(name: StateHotkeyName): void {
+  const until = Date.now() + STATE_HOTKEY_REARM_DELAY_MS;
+  stateHotkeySuppressedUntil.set(name, until);
+  const existingTimer = stateHotkeyRearmTimers.get(name);
+  if (existingTimer) clearTimeout(existingTimer);
+  const timer = setTimeout(() => {
+    stateHotkeyRearmTimers.delete(name);
+    if ((stateHotkeySuppressedUntil.get(name) ?? 0) <= Date.now()) {
+      stateHotkeySuppressedUntil.delete(name);
+      log('hotkey', 'state hotkey rearm window ended', { name, appState });
+      reloadGlobalHotkeys();
+    }
+  }, STATE_HOTKEY_REARM_DELAY_MS);
+  stateHotkeyRearmTimers.set(name, timer);
+}
+
+function consumeStateHotkey(name: StateHotkeyName): boolean {
+  if (isStateHotkeySuppressed(name)) {
+    log('hotkey', 'state hotkey repeat ignored during rearm window', {
+      name,
+      appState,
+      remainingMs: (stateHotkeySuppressedUntil.get(name) ?? 0) - Date.now(),
+    });
+    return false;
+  }
+  suppressStateHotkey(name);
+  return true;
+}
+
+function flushDeferredGlobalHotkeyReload(): void {
+  if (globalShortcutDispatchDepth > 0 || !globalHotkeyReloadQueued || globalHotkeyReloadTimer) return;
+  globalHotkeyReloadTimer = setTimeout(() => {
+    globalHotkeyReloadTimer = null;
+    if (globalShortcutDispatchDepth > 0 || !globalHotkeyReloadQueued) return;
+    globalHotkeyReloadQueued = false;
+    log('hotkey', 'deferred reload running after global shortcut dispatch', { appState });
+    reloadGlobalHotkeys();
+  }, 0);
+}
+
+function runGlobalShortcutHandler(name: string, handler: () => void): void {
+  globalShortcutDispatchDepth += 1;
+  try {
+    handler();
+  } catch (err) {
+    log('hotkey', 'handler failed', {
+      name,
+      err: (err as Error).message,
+      stack: (err as Error).stack,
+      appState,
+    });
+  } finally {
+    globalShortcutDispatchDepth = Math.max(0, globalShortcutDispatchDepth - 1);
+    flushDeferredGlobalHotkeyReload();
+  }
 }
 
 function registerAnnotationHotkey(): void {
   const accel = toAccelerator(getConfig().hotkeys.annotate);
   if (globalShortcut.isRegistered(accel)) return;
-  const ok = globalShortcut.register(accel, handleAnnotationHotkey);
+  const ok = globalShortcut.register(accel, () => runGlobalShortcutHandler('annotate', handleAnnotationHotkey));
   log('hotkey', `${accel} registered (recording started)`, { ok });
 }
 
@@ -657,10 +963,10 @@ function unregisterAnnotationHotkey(): void {
 function registerTradeMarkerHotkey(): void {
   const accel = toAccelerator(getConfig().hotkeys.tradeMarker);
   if (globalShortcut.isRegistered(accel)) return;
-  const ok = globalShortcut.register(accel, () => {
+  const ok = globalShortcut.register(accel, () => runGlobalShortcutHandler('tradeMarker', () => {
     log('hotkey', `${accel} fired (trade marker)`, { appState, currentSessionMode });
     void doTradeMarker();
-  });
+  }));
   log('hotkey', `${accel} registered (trade-recording started)`, { ok });
 }
 
@@ -689,6 +995,16 @@ function formatMs(ms: number): string {
  * hotkey at the (potentially new) combo.
  */
 function reloadGlobalHotkeys(): void {
+  if (globalShortcutDispatchDepth > 0) {
+    if (!globalHotkeyReloadQueued) {
+      log('hotkey', 'reload queued until global shortcut callback exits', {
+        appState,
+        dispatchDepth: globalShortcutDispatchDepth,
+      });
+    }
+    globalHotkeyReloadQueued = true;
+    return;
+  }
   globalShortcut.unregisterAll();
   const cfg = getConfig();
   const hk = cfg.hotkeys;
@@ -697,10 +1013,35 @@ function reloadGlobalHotkeys(): void {
   const reg = (name: string, combo: string, handler: () => void): void => {
     const accel = toAccelerator(combo);
     try {
-      const ok = globalShortcut.register(accel, handler);
-      log('hotkey', 'register', { name, combo: accel, ok, visibleActions, appState, currentSessionMode });
+      const registeredBefore = globalShortcut.isRegistered(accel);
+      const ok = globalShortcut.register(accel, () => runGlobalShortcutHandler(name, handler));
+      const registeredAfter = globalShortcut.isRegistered(accel);
+      log('hotkey', 'register', {
+        name,
+        combo,
+        accel,
+        ok,
+        registeredBefore,
+        registeredAfter,
+        visibleActions,
+        appState,
+        currentSessionMode,
+      });
       if (!ok) {
         showNotification('Snipalot', `Could not register hotkey: ${accel} (another app owns it)`);
+      }
+      if (name === 'snapshot') {
+        setTimeout(() => {
+          log('hotkey', 'snapshot registration verify', {
+            name,
+            combo,
+            accel,
+            isRegistered: globalShortcut.isRegistered(accel),
+            appState,
+            visibleActions: getConfig().launcher.visibleActions,
+            snapshotConfig: getConfig().hotkeys.snapshot,
+          });
+        }, 250);
       }
     } catch (err) {
       log('hotkey', 'register failed', { combo: accel, err: (err as Error).message });
@@ -720,17 +1061,28 @@ function reloadGlobalHotkeys(): void {
   };
 
   if (visibleActions.record) {
-    reg('startStop', hk.startStop, () => {
-      log('hotkey', 'startStop fired', { appState, activeDisplayId });
-      handleToggleHotkey();
-    });
+    if (isStateHotkeySuppressed('startStop')) {
+      skip('startStop', hk.startStop, 'state transition rearm window');
+    } else {
+      reg('startStop', hk.startStop, () => {
+        log('hotkey', 'startStop fired', { appState, activeDisplayId });
+        if (consumeStateHotkey('startStop')) handleToggleHotkey();
+      });
+    }
   } else {
     skip('startStop', hk.startStop, 'record action hidden');
   }
 
   if (visibleActions.screenshot || appState === 'recording') {
-    reg('snapshot', hk.snapshot, () => {
-      log('hotkey', 'snapshot fired', { appState, activeDisplayId });
+    const handleSnapshotShortcut = (combo: string): void => {
+      log('hotkey', 'snapshot fired', {
+        appState,
+        activeDisplayId,
+        combo,
+        configuredCombo: hk.snapshot,
+        visibleActions,
+        focusedWindow: BrowserWindow.getFocusedWindow()?.getTitle() ?? null,
+      });
       if (appState === 'idle') {
         enterSelectingScreenshot();
       } else if (appState === 'recording') {
@@ -743,9 +1095,29 @@ function reloadGlobalHotkeys(): void {
         }
         exitSelecting('snapshot hotkey toggle');
       }
+    };
+
+    reg('snapshot', hk.snapshot, () => {
+      handleSnapshotShortcut(hk.snapshot);
     });
   } else {
     skip('snapshot', hk.snapshot, 'screenshot action hidden');
+  }
+
+  if (
+    appState === 'selecting' ||
+    appState === 'selecting-screenshot' ||
+    appState === 'selecting-trade'
+  ) {
+    reg('cancelSelection', 'Escape', () => {
+      log('hotkey', 'Escape fired (selection cancel queued)', { appState });
+      setTimeout(() => {
+        log('hotkey', 'Escape selection cancel running deferred', { appState });
+        exitSelecting('escape hotkey');
+      }, 0);
+    });
+  } else {
+    skip('cancelSelection', 'Escape', 'not selecting');
   }
 
   reg('toggleOutline', hk.toggleOutline, () => {
@@ -771,16 +1143,21 @@ function reloadGlobalHotkeys(): void {
   // stopRecording. Available globally so the user can start a session
   // without finding the launcher first.
   if (visibleActions.trade || appState === 'selecting-trade' || (appState === 'recording' && currentSessionMode === 'trade')) {
-    reg('startTrade', hk.startTrade, () => {
-      log('hotkey', 'startTrade fired', { appState, currentSessionMode });
-      if (appState === 'idle') {
-        enterSelectingTrade();
-      } else if (appState === 'recording' && currentSessionMode === 'trade') {
-        stopRecording('trade hotkey');
-      } else if (appState === 'selecting-trade') {
-        exitSelecting('trade hotkey toggle');
-      }
-    });
+    if (isStateHotkeySuppressed('startTrade')) {
+      skip('startTrade', hk.startTrade, 'state transition rearm window');
+    } else {
+      reg('startTrade', hk.startTrade, () => {
+        log('hotkey', 'startTrade fired', { appState, currentSessionMode });
+        if (!consumeStateHotkey('startTrade')) return;
+        if (appState === 'idle') {
+          enterSelectingTrade();
+        } else if (appState === 'recording' && currentSessionMode === 'trade') {
+          stopRecording('trade hotkey');
+        } else if (appState === 'selecting-trade') {
+          exitSelecting('trade hotkey toggle');
+        }
+      });
+    }
   } else {
     skip('startTrade', hk.startTrade, 'trade action hidden');
   }
@@ -847,8 +1224,27 @@ function ensureProcessingLauncherVisible(focus = false): void {
   if (focus) launcherWindow.focus();
 }
 
+function isSelectingState(): boolean {
+  return appState === 'selecting' ||
+    appState === 'selecting-screenshot' ||
+    appState === 'selecting-trade';
+}
+
+function cancelSelectionFromEscape(source: string): boolean {
+  if (!isSelectingState()) return false;
+  log('hotkey', 'Escape cancelled selection', { source, appState });
+  exitSelecting(`escape from ${source}`);
+  return true;
+}
+
 function updateLauncherVisibility(): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
+  const before = {
+    visible: launcherWindow.isVisible(),
+    minimized: launcherWindow.isMinimized(),
+    focused: launcherWindow.isFocused(),
+    alwaysOnTop: launcherWindow.isAlwaysOnTop(),
+  };
   // Hide the launcher during active recording - the HUD owns that state.
   // During 'processing' it stays visible so the user can watch progress.
   if (appState === 'recording') {
@@ -862,7 +1258,23 @@ function updateLauncherVisibility(): void {
   } else {
     launcherWindow.setAlwaysOnTop(false);
     if (!launcherWindow.isVisible()) launcherWindow.show();
+    if (launcherWindow.isMinimized()) launcherWindow.restore();
+    if (appState === 'idle') {
+      launcherWindow.moveTop();
+      launcherWindow.focus();
+    }
   }
+  log('launcher', 'visibility updated', {
+    appState,
+    before,
+    after: {
+      visible: launcherWindow.isVisible(),
+      minimized: launcherWindow.isMinimized(),
+      focused: launcherWindow.isFocused(),
+      alwaysOnTop: launcherWindow.isAlwaysOnTop(),
+      bounds: launcherWindow.getBounds(),
+    },
+  });
 }
 
 function createOverlayWindowForDisplay(display: Display): BrowserWindow {
@@ -929,6 +1341,11 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
   win.loadFile(path.join(__dirname, '..', 'overlay', 'overlay.html'), {
     query: { displayId },
   });
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape' && cancelSelectionFromEscape(`overlay ${displayId}`)) {
+      event.preventDefault();
+    }
+  });
   win.once('ready-to-show', () => {
     // Re-assert bounds once the renderer is ready, in case Chromium resized
     // during load.
@@ -938,6 +1355,20 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
       displayId,
       finalBounds: win.getBounds(),
     });
+  });
+
+  win.on('close', (event) => {
+    log('main', 'overlay close requested', {
+      displayId,
+      appState,
+      appExitRequested,
+      focused: win.isFocused(),
+    });
+    if (!appExitRequested && isSelectingState()) {
+      event.preventDefault();
+      log('main', 'overlay close prevented during selection', { displayId, appState });
+      exitSelecting(`overlay close requested during selection (${displayId})`);
+    }
   });
 
   win.on('closed', () => {
@@ -1070,9 +1501,45 @@ function createLauncherWindow(): BrowserWindow {
   // content protection on it. Keeping it off means Print Screen / OS-level
   // screen capture still works when debugging the launcher's appearance.
   win.loadFile(path.join(__dirname, '..', 'launcher', 'launcher.html'));
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && isSnapshotLikeInput(input)) {
+      const cfg = getConfig();
+      const matchesConfiguredSnapshot = inputMatchesHotkey(input, cfg.hotkeys.snapshot);
+      log('hotkey', 'launcher before-input snapshot chord', {
+        key: input.key,
+        code: input.code,
+        control: input.control,
+        shift: input.shift,
+        alt: input.alt,
+        meta: input.meta,
+        appState,
+        snapshotHotkey: cfg.hotkeys.snapshot,
+        matchesConfiguredSnapshot,
+        screenshotVisible: cfg.launcher.visibleActions.screenshot,
+        globalRegistered: globalShortcut.isRegistered(toAccelerator(cfg.hotkeys.snapshot)),
+      });
+      if (
+        matchesConfiguredSnapshot &&
+        cfg.launcher.visibleActions.screenshot &&
+        (appState === 'idle' || appState === 'selecting-screenshot')
+      ) {
+        event.preventDefault();
+        if (appState === 'idle') enterSelectingScreenshot();
+        else exitSelecting('launcher before-input snapshot toggle');
+        return;
+      }
+    }
+    if (input.type === 'keyDown' && input.key === 'Escape' && cancelSelectionFromEscape('launcher')) {
+      event.preventDefault();
+    }
+  });
   win.on('close', (event) => {
     if (appExitRequested) return;
     event.preventDefault();
+    if (isSelectingState()) {
+      exitSelecting('launcher window close during selection');
+      return;
+    }
     requestAppExit('launcher window close');
   });
   win.once('ready-to-show', () => {
@@ -1196,6 +1663,8 @@ let annotatorWindow: BrowserWindow | null = null;
  * standalone (e.g. via the tray dev-preview entry).
  */
 let pendingAnnotatorImage: { dataUrl: string; sessionStamp: string } | null = null;
+let lastAnnotatorEscapeAtMs = 0;
+let annotatorCloseIntent: string | null = null;
 
 // ─── trade-context window (TradeCall trade-data input) ───────────────
 //
@@ -1260,10 +1729,37 @@ function openAnnotator(): void {
   annotatorWindow.webContents.on('render-process-gone', (_event, details) => {
     log('annotator', 'render-process-gone', details);
   });
+  annotatorWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'Escape') return;
+    lastAnnotatorEscapeAtMs = Date.now();
+    log('annotator', 'Escape before-input intercepted', {
+      appState,
+      focused: annotatorWindow?.isFocused() ?? false,
+      closeIntent: annotatorCloseIntent,
+    });
+    event.preventDefault();
+    annotatorWindow?.webContents.send('annotator:escape-key');
+  });
   annotatorWindow.loadFile(path.join(__dirname, '..', 'annotator', 'annotator.html'));
   annotatorWindow.once('ready-to-show', () => annotatorWindow?.show());
+  annotatorWindow.on('close', (event) => {
+    const msSinceEscape = lastAnnotatorEscapeAtMs ? Date.now() - lastAnnotatorEscapeAtMs : null;
+    log('annotator', 'window close requested', {
+      appState,
+      appExitRequested,
+      closeIntent: annotatorCloseIntent,
+      msSinceEscape,
+    });
+    if (!appExitRequested && annotatorCloseIntent === null && msSinceEscape !== null && msSinceEscape < 1000) {
+      event.preventDefault();
+      log('annotator', 'window close prevented after Escape', { msSinceEscape });
+      annotatorWindow?.show();
+      annotatorWindow?.focus();
+    }
+  });
   annotatorWindow.on('closed', () => {
     annotatorWindow = null;
+    annotatorCloseIntent = null;
     log('main', 'annotator closed');
   });
   log('main', 'annotator opened', { hasPreloadedImage: pendingAnnotatorImage !== null });
@@ -1359,7 +1855,10 @@ ipcMain.handle(
 
       // Close the annotator window — the user's task is done. Launcher is
       // already at idle (set during the screenshot capture path).
-      if (annotatorWindow && !annotatorWindow.isDestroyed()) annotatorWindow.close();
+      if (annotatorWindow && !annotatorWindow.isDestroyed()) {
+        annotatorCloseIntent = 'save';
+        annotatorWindow.close();
+      }
 
       return {
         ok: true as const,
@@ -1377,7 +1876,10 @@ ipcMain.handle(
 
 // IPC: renderer asks main to close the annotator (e.g. user hits Cancel).
 ipcMain.handle('annotator:cancel', () => {
-  if (annotatorWindow && !annotatorWindow.isDestroyed()) annotatorWindow.close();
+  if (annotatorWindow && !annotatorWindow.isDestroyed()) {
+    annotatorCloseIntent = 'cancel';
+    annotatorWindow.close();
+  }
 });
 
 /**
@@ -3835,7 +4337,11 @@ function exitSelecting(reason: string): void {
     appState !== 'selecting' &&
     appState !== 'selecting-screenshot' &&
     appState !== 'selecting-trade'
-  ) return;
+  ) {
+    log('state', 'exitSelecting ignored', { reason, appState });
+    return;
+  }
+  log('state', 'exitSelecting start', { reason, appState });
   if (appState === 'selecting-screenshot') {
     activeScreenshotCaptureId++;
     suppressLauncherDuringScreenshotCapture = false;
@@ -3845,6 +4351,21 @@ function exitSelecting(reason: string): void {
   pendingRegion = null;
   activeDisplayId = null;
   activeSourceId = null;
+  setTimeout(() => {
+    if (appState !== 'idle') return;
+    updateLauncherVisibility();
+    log('state', 'exitSelecting complete', {
+      reason,
+      launcher: launcherWindow && !launcherWindow.isDestroyed()
+        ? {
+            visible: launcherWindow.isVisible(),
+            minimized: launcherWindow.isMinimized(),
+            focused: launcherWindow.isFocused(),
+            bounds: launcherWindow.getBounds(),
+          }
+        : null,
+    });
+  }, 50);
 }
 
 function failSelectionStart(reason: string, userMessage: string, details?: unknown): void {
@@ -3877,11 +4398,9 @@ function resetFailedRecordingStart(reason: string, userMessage: string): void {
 }
 
 /**
- * Discard a recording in progress: stop the MediaRecorder, throw away
- * the captured webm buffer when it arrives, delete the live session
- * directory (and any snapshot PNGs already written into it), and skip
- * the pipeline entirely. Returns the user to idle without producing
- * any output files or clipboard content.
+ * Discard a recording in progress. Normal recordings are still destructive.
+ * Trade recordings keep the session folder long enough to audit the finalized
+ * WebM under Inputs, transcribe it, and write status evidence.
  *
  * Destructive so we always confirm. Confirmation dialog is anchored to
  * the launcher (or any focused window) so it can't be missed.
@@ -3892,17 +4411,19 @@ async function discardRecording(reason: string): Promise<void> {
     return;
   }
   const parent = launcherWindow && !launcherWindow.isDestroyed() ? launcherWindow : undefined;
+  const isTradeDiscard = currentSessionMode === 'trade';
   const result = await dialog.showMessageBox(parent!, {
     type: 'warning',
-    buttons: ['Discard recording', 'Keep recording'],
+    buttons: [isTradeDiscard ? 'Discard and audit' : 'Discard recording', 'Keep recording'],
     defaultId: 1,
     cancelId: 1,
     title: 'Discard this recording?',
     message: 'Discard this recording?',
-    detail:
-      'The video, any annotations, and all snapshot PNGs taken during ' +
-      'this session will be permanently deleted. Nothing will be saved ' +
-      'to disk and nothing will land on the clipboard.\n\nThis cannot be undone.',
+    detail: isTradeDiscard
+      ? 'Snipalot will stop the recording, save the raw WebM under Inputs, transcribe it, and write a discarded-session review. If no trade evidence is found, the raw WebM will be deleted after transcription. Markers, screenshots, annotations, transcript, and status files will remain.'
+      : 'The video, any annotations, and all snapshot PNGs taken during ' +
+        'this session will be permanently deleted. Nothing will be saved ' +
+        'to disk and nothing will land on the clipboard.\n\nThis cannot be undone.',
     noLink: true,
   });
   if (result.response !== 0) {
@@ -3919,13 +4440,29 @@ async function discardRecording(reason: string): Promise<void> {
   // Skip the pendingProcessing snapshot — pipeline never runs in discard
   // mode, so there's nothing for it to consume.
   pendingProcessing = null;
-  const sessionDirToDelete = liveSessionDir;
-  pendingDiscardSessionDir = sessionDirToDelete;
-  setSessionStatus(sessionDirToDelete, 'discarded', {
+  cancelIncrementalTranscription(`discard: ${reason}`);
+  const sessionDirToDiscard = liveSessionDir;
+  pendingDiscardSessionDir = sessionDirToDiscard;
+  pendingDiscardAudit = isTradeDiscard && recordingStartedAt !== null && sessionDirToDiscard !== null
+    ? {
+        annotations: [...currentAnnotations],
+        startedAtMs: recordingStartedAt,
+        durationMs: Math.max(0, Date.now() - recordingStartedAt - totalPausedMs),
+        preCreatedSessionDir: sessionDirToDiscard,
+        chapters: [...currentChapters],
+        mode: 'trade',
+        tradeMarkers: [...currentTradeMarkers],
+      }
+    : null;
+  setSessionStatus(sessionDirToDiscard, 'discarded', {
     mode: currentSessionMode,
-    stage: 'recording discarded by user',
+    stage: pendingDiscardAudit
+      ? 'recording discarded by user; waiting for WebM audit'
+      : 'recording discarded by user',
     reason,
+    auditPending: Boolean(pendingDiscardAudit),
   }, false);
+  const tradeDiscardAuditQueued = Boolean(pendingDiscardAudit);
   liveSessionDir = null;
 
   // Tell the recorder to finalize (so the MediaRecorder unwinds cleanly
@@ -3957,12 +4494,18 @@ async function discardRecording(reason: string): Promise<void> {
   if (hudWindow && !hudWindow.isDestroyed()) hudWindow.close();
   broadcastOverlay('overlay:recording-stopped');
 
-  // Delete the session dir + any snapshot PNGs already written into it.
-  // OneDrive can briefly hold handles on newly-created diagnostics, so
-  // cleanupSessionDir retries if the first removal leaves remnants behind.
-  cleanupSessionDir(sessionDirToDelete, 'discard recording');
+  // Non-trade discards remain destructive. Trade discards are audited when
+  // recorder:save-webm arrives.
+  if (!tradeDiscardAuditQueued) {
+    cleanupSessionDir(sessionDirToDiscard, 'discard recording');
+  }
 
-  showNotification('Snipalot', 'Recording discarded — nothing saved.');
+  showNotification(
+    'Snipalot',
+    tradeDiscardAuditQueued
+      ? 'Trade recording discarded. Snipalot will audit the finalized recording.'
+      : 'Recording discarded - nothing saved.'
+  );
 }
 
 const SESSION_CLEANUP_RETRY_DELAYS_MS = [1000, 5000, 15000, 60000, 180000];
@@ -4025,6 +4568,115 @@ function scheduleSessionDirCleanupRetry(sessionDir: string, reason: string, atte
   pendingSessionCleanupTimers.set(sessionDir, timer);
 }
 
+function applyDiscardedTradeAuditStatus(result: DiscardedTradeAuditResult): void {
+  setSessionStatus(result.sessionDir, 'discarded', {
+    mode: 'trade',
+    stage: result.suspected
+      ? 'discard audit complete: potential trade activity found'
+      : result.status === 'no_trade_evidence'
+        ? 'discard audit complete: no trade evidence found'
+        : 'discard audit incomplete',
+    reviewStatus: result.status,
+    comments: result.comments,
+    suspectedTradeTimestamps: result.suspectedTradeTimestamps,
+    retainedRecording: result.retainedWebm,
+    reviewPath: result.reviewJsonPath,
+    transcriptPath: result.transcriptPath,
+    markerCount: result.markerCount,
+    evidenceCount: result.evidenceCount,
+    warnings: result.warnings,
+  }, false);
+  showNotification(
+    'Snipalot Trade',
+    result.suspected
+      ? `Discard audit found possible trade activity at ${result.suspectedTradeTimestamps.join(', ')}.`
+      : result.status === 'no_trade_evidence'
+        ? 'Discard audit found no trade evidence; raw WebM was deleted.'
+        : 'Discard audit could not rule out trade activity; raw WebM was retained.'
+  );
+}
+
+function cleanupAbandonedTradePipelineMedia(sessionDir: string, reason: string): void {
+  const pathsToDelete = [
+    path.join(sessionDir, 'recording.mp4'),
+    path.join(sessionDir, 'recording.webm'),
+    path.join(sessionDir, 'recording.gif'),
+    path.join(sessionDir, 'Inputs', 'recording.wav'),
+  ];
+  for (const targetPath of pathsToDelete) {
+    if (!fs.existsSync(targetPath)) continue;
+    try {
+      fs.rmSync(targetPath, { force: true });
+      log('discard-audit', 'removed abandoned pipeline media', { sessionDir, targetPath, reason });
+      writeSessionLog(sessionDir, 'discard-audit', 'removed abandoned pipeline media', {
+        path: targetPath,
+        reason,
+      }, 'success');
+    } catch (err) {
+      const message = (err as Error).message;
+      log('discard-audit', 'failed to remove abandoned pipeline media', {
+        sessionDir,
+        targetPath,
+        reason,
+        err: message,
+      });
+      writeSessionLog(sessionDir, 'discard-audit', 'failed to remove abandoned pipeline media', {
+        path: targetPath,
+        reason,
+        error: message,
+      }, 'warning');
+    }
+  }
+}
+
+function queueAbandonedTradeAudit(
+  webmBuffer: Buffer,
+  sessionDir: string,
+  snap: PendingProcessing | null,
+  run: ActiveProcessingRun | null,
+  errorMessage?: string
+): void {
+  if (run?.mode !== 'trade') return;
+  const startedAtMs = snap?.startedAtMs ?? Date.now() - Math.max(1000, snap?.durationMs ?? 1000);
+  const durationMs = snap?.durationMs ?? Math.max(1000, Date.now() - startedAtMs);
+  writeSessionLog(sessionDir, 'discard-audit', 'queued after processing abandon', {
+    bytes: webmBuffer.length,
+    durationMs,
+    tradeMarkers: snap?.tradeMarkers.length ?? 0,
+    pipelineError: errorMessage ?? null,
+  }, 'start');
+  cleanupAbandonedTradePipelineMedia(sessionDir, 'before abandoned trade audit');
+  void runDiscardedTradeAudit({
+    webmBuffer,
+    sessionDir,
+    startedAtMs,
+    durationMs,
+    annotations: snap?.annotations ?? [],
+    chapters: snap?.chapters ?? [],
+    tradeMarkers: snap?.tradeMarkers ?? [],
+  })
+    .then((result) => {
+      cleanupAbandonedTradePipelineMedia(result.sessionDir, 'after abandoned trade audit');
+      applyDiscardedTradeAuditStatus(result);
+      activeProcessingRun = null;
+    })
+    .catch((err) => {
+      const message = (err as Error).message;
+      cleanupAbandonedTradePipelineMedia(sessionDir, 'after failed abandoned trade audit');
+      log('discard-audit', 'abandoned processing audit failed', { sessionDir, err: message });
+      writeSessionLog(sessionDir, 'discard-audit', 'failed after processing abandon', { error: message }, 'error');
+      setSessionStatus(sessionDir, 'abandoned', {
+        mode: 'trade',
+        stage: 'abandon audit failed',
+        reviewStatus: 'review_incomplete',
+        comments: `Abandon audit failed: ${message}. Review any retained Inputs artifacts manually.`,
+        retainedRecording: true,
+        pipelineError: errorMessage ?? null,
+      }, false);
+      activeProcessingRun = null;
+    });
+}
+
 function abandonProcessing(reason: string): boolean {
   if (appState !== 'processing' || !activeProcessingRun) {
     log('state', 'abandonProcessing ignored', { appState, reason });
@@ -4039,21 +4691,27 @@ function abandonProcessing(reason: string): boolean {
   if (responsePasteWindow && !responsePasteWindow.isDestroyed()) responsePasteWindow.close();
   pendingTradeContext = null;
   pendingResponsePaste = null;
-  pendingProcessing = null;
   pendingDiscardSessionDir = null;
 
   setSessionStatus(run.sessionDir, 'abandoned', {
     mode: run.mode,
-    stage: 'processing abandoned by user',
+    stage: run.mode === 'trade'
+      ? 'processing abandoned by user; waiting for audit'
+      : 'processing abandoned by user',
     reason,
   }, false);
-  cleanupSessionDir(run.sessionDir, 'abandon processing');
-  activeProcessingRun = null;
+  if (run.mode !== 'trade') {
+    pendingProcessing = null;
+    cleanupSessionDir(run.sessionDir, 'abandon processing');
+    activeProcessingRun = null;
+  }
   setAppState('idle', `processing abandoned: ${reason}`);
   broadcastStateToLauncher();
   showNotification(
     'Snipalot',
-    'Processing abandoned. The session folder was deleted.'
+    run.mode === 'trade'
+      ? 'Processing abandoned. Snipalot will audit the finalized trade recording.'
+      : 'Processing abandoned. The session folder was deleted.'
   );
   log('main', 'processing abandoned', {
     reason,
@@ -4532,6 +5190,11 @@ ipcMain.handle('recorder:restore-display-capture', () => {
 });
 
 ipcMain.handle(
+  'recorder:audio-chunk',
+  (_evt, payload: IncrementalAudioChunkPayload) => enqueueIncrementalAudioChunk(payload)
+);
+
+ipcMain.handle(
   'recorder:save-webm',
   (_evt, payload: { buffer: ArrayBuffer; filepath: string }) => {
     const buf = Buffer.from(payload.buffer);
@@ -4543,16 +5206,49 @@ ipcMain.handle(
       pendingDiscard,
     }, buf.length > 0 ? 'success' : 'error');
 
-    // Discard path: user pressed Discard mid-recording. Throw the buffer
-    // away (no pipeline, no clipboard, no files), clear the flag, return.
+    // Discard path: user pressed Discard mid-recording. Normal recordings
+    // still throw the buffer away. Trade recordings run a salvage audit
+    // against the finalized WebM under Inputs.
     if (pendingDiscard) {
       pendingDiscard = false;
       const discardedSessionDir = pendingDiscardSessionDir ?? liveSessionDir;
+      const discardAudit = pendingDiscardAudit;
       pendingDiscardSessionDir = null;
+      pendingDiscardAudit = null;
       log('recorder', 'save-webm discarded (user requested)', { bytes: buf.length });
       writeSessionLog(discardedSessionDir, 'recorder', 'save-webm discarded by user', { bytes: buf.length }, 'skipped');
+      if (discardAudit && discardedSessionDir) {
+        writeSessionLog(discardedSessionDir, 'discard-audit', 'queued after save-webm', {
+          bytes: buf.length,
+          durationMs: discardAudit.durationMs,
+          tradeMarkers: discardAudit.tradeMarkers.length,
+        }, 'start');
+        void runDiscardedTradeAudit({
+          webmBuffer: buf,
+          sessionDir: discardedSessionDir,
+          startedAtMs: discardAudit.startedAtMs,
+          durationMs: discardAudit.durationMs,
+          annotations: discardAudit.annotations,
+          chapters: discardAudit.chapters,
+          tradeMarkers: discardAudit.tradeMarkers,
+        })
+          .then((result) => applyDiscardedTradeAuditStatus(result))
+          .catch((err) => {
+            const message = (err as Error).message;
+            log('discard-audit', 'failed', { sessionDir: discardedSessionDir, err: message });
+            writeSessionLog(discardedSessionDir, 'discard-audit', 'failed', { error: message }, 'error');
+            setSessionStatus(discardedSessionDir, 'discarded', {
+              mode: 'trade',
+              stage: 'discard audit failed',
+              reviewStatus: 'review_incomplete',
+              comments: `Discard audit failed: ${message}. Review any retained Inputs artifacts manually.`,
+              retainedRecording: true,
+            }, false);
+          });
+        return { ok: true, discarded: true, audit: true, bytes: buf.length };
+      }
       cleanupSessionDir(discardedSessionDir, 'discard save-webm finalized');
-      return { ok: true, discarded: true, bytes: buf.length };
+      return { ok: true, discarded: true, audit: false, bytes: buf.length };
     }
 
     const snap = pendingProcessing;
@@ -4587,6 +5283,9 @@ ipcMain.handle(
     const fallbackStart = Date.now() - 1000; // arbitrary; used only if snap missing
     const outputRoot = getConfig().outputDir;
     const run = activeProcessingRun;
+    const incrementalTranscript = finalizeIncrementalTranscription(
+      snap?.preCreatedSessionDir ?? run?.sessionDir
+    );
 
     // FIRE AND FORGET: pipeline runs in the background. The UI is in
     // 'processing' state from stopRecording(); the .then/.catch below
@@ -4605,9 +5304,16 @@ ipcMain.handle(
       onStep: (step) => setProcessingStep(step),
       onTradePromptReady: (sDir, rPath, pPath) => openResponsePasteWindow(sDir, rPath, pPath),
       abortSignal: run?.abortController.signal,
+      incrementalTranscript,
+      feedbackOutputs: getConfig().feedback,
     })
       .then(async (result) => {
         if (run?.abandoned) {
+          if (run.mode === 'trade') {
+            writeSessionLog(result.sessionDir, 'pipeline', 'completed after trade abandon; running audit', undefined, 'skipped');
+            queueAbandonedTradeAudit(buf, result.sessionDir, snap, run);
+            return;
+          }
           setSessionStatus(result.sessionDir, 'abandoned', {
             mode: run.mode,
             stage: 'pipeline completed after abandon; cleaning session folder',
@@ -4655,6 +5361,16 @@ ipcMain.handle(
       .catch(async (err) => {
         const msg = (err as Error).message;
         if (run?.abandoned) {
+          if (run.mode === 'trade' && run.sessionDir) {
+            setSessionStatus(run.sessionDir, 'abandoned', {
+              mode: 'trade',
+              stage: 'pipeline abandoned; running audit',
+              error: msg,
+            }, false);
+            writeSessionLog(run.sessionDir, 'pipeline', 'abandoned; running trade audit', { error: msg }, 'skipped');
+            queueAbandonedTradeAudit(buf, run.sessionDir, snap, run, msg);
+            return;
+          }
           setSessionStatus(run.sessionDir, 'abandoned', {
             stage: 'pipeline abandoned; cleaning session folder',
             error: msg,
@@ -4752,6 +5468,10 @@ function sanitizedConfigSummaryForSessionManifest(config: SnipalotConfig): Recor
     },
     snapshot: {
       clearAnnotationsAfter: config.snapshot.clearAnnotationsAfter,
+    },
+    feedback: {
+      generateMp4: config.feedback.generateMp4,
+      generateGif: config.feedback.generateGif,
     },
     trade: {
       autoPromptForTradeData: config.trade.autoPromptForTradeData,
@@ -4884,6 +5604,7 @@ ipcMain.handle(
         sourceId: activeSourceId,
       }, 'start');
       flushPendingRecorderLifecycle(liveSessionDir);
+      startIncrementalTranscriptionSession(liveSessionDir, currentSessionMode);
 
       if (isMicDiagnosticsPayload(micDiagnostics)) {
         const d = micDiagnostics;
@@ -4967,6 +5688,7 @@ ipcMain.handle(
       }
     } else if (state === 'error') {
       recorderMediaReady = false;
+      cancelIncrementalTranscription(`recorder error: ${detail ?? '?'}`);
       writeSessionLog(liveSessionDir, 'recorder', 'recorder error', { detail }, 'error');
       setSessionStatus(liveSessionDir, 'failed', {
         mode: currentSessionMode,
@@ -5514,6 +6236,10 @@ app.whenReady().then(() => {
   }
 });
 
+app.on('before-quit', () => {
+  log('main', 'before-quit', { appState, appExitRequested });
+});
+
 app.on('will-quit', () => {
   if (!quitCleanupRan) {
     quitCleanupRan = true;
@@ -5521,9 +6247,23 @@ app.on('will-quit', () => {
   }
   globalShortcut.unregisterAll();
   destroyTray();
-  log('main', 'will-quit');
+  log('main', 'will-quit', { appState, appExitRequested });
+});
+
+app.on('quit', (_event, exitCode) => {
+  log('main', 'quit', { exitCode, appState, appExitRequested });
 });
 
 app.on('window-all-closed', () => {
+  log('main', 'window-all-closed', {
+    appState,
+    appExitRequested,
+    windowCount: BrowserWindow.getAllWindows().length,
+  });
+  if (isSelectingState()) {
+    log('main', 'window-all-closed converted to selection cancel', { appState });
+    exitSelecting('window-all-closed during selection');
+    return;
+  }
   if (process.platform !== 'darwin') app.quit();
 });

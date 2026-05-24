@@ -21,6 +21,14 @@ contextBridge.exposeInMainWorld('snipalotRecorder', {
   getOutputPath: () => ipcRenderer.invoke('recorder:get-output-path'),
   saveWebm: (payload: { buffer: ArrayBuffer; filepath: string }) =>
     ipcRenderer.invoke('recorder:save-webm', payload),
+  sendAudioChunk: (payload: {
+    buffer: ArrayBuffer;
+    index: number;
+    startMs: number;
+    endMs: number;
+    mimeType?: string | null;
+    final?: boolean;
+  }) => ipcRenderer.invoke('recorder:audio-chunk', payload),
   reportState: (
     state: 'started' | 'stopped' | 'error',
     detail?: string,

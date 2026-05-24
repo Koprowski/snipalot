@@ -74,6 +74,42 @@ test('loadConfig preserves custom trade marker hotkey', () => {
   runConfigChild(home, code);
 });
 
+test('loadConfig migrates old default snapshot hotkey', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-migrate-snapshot-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ hotkeys: { snapshot: 'Ctrl+Shift+P' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.hotkeys.snapshot, 'Ctrl+Alt+P');
+  `;
+  runConfigChild(home, code);
+});
+
+test('loadConfig preserves custom snapshot hotkey', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-custom-snapshot-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ hotkeys: { snapshot: 'Ctrl+Alt+S' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.hotkeys.snapshot, 'Ctrl+Alt+S');
+  `;
+  runConfigChild(home, code);
+});
+
 test('loadConfig resets malformed hotkeys to defaults', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-bad-hotkey-'));
   const configDir = path.join(home, '.snipalot');
@@ -161,6 +197,36 @@ test('loadConfig migrates legacy screenshot-plus-trade launcher default', () => 
     const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
     const loaded = config.loadConfig();
     assert.deepEqual(loaded.launcher.visibleActions, { record: true, screenshot: true, trade: false });
+  `;
+  runConfigChild(home, code);
+});
+
+test('loadConfig defaults feedback media outputs off', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-feedback-defaults-'));
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.deepEqual(loaded.feedback, { generateMp4: false, generateGif: false });
+  `;
+  runConfigChild(home, code);
+});
+
+test('loadConfig preserves feedback media output choices', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-feedback-custom-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ feedback: { generateMp4: true, generateGif: true } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.feedback.generateMp4, true);
+    assert.equal(loaded.feedback.generateGif, true);
   `;
   runConfigChild(home, code);
 });

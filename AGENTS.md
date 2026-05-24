@@ -118,7 +118,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.68)
+## Recent improvements (v1.0.1 onward; current release v1.0.69)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -573,6 +573,9 @@ Agent behavior:
 - **Pinned taskbar icon repair (v1.0.68 local branch):**
  - Installer `customInstall` now repairs an existing per-user pinned `Snipalot.lnk` under `$QUICKLAUNCH\User Pinned\TaskBar`, rewriting its target, red-dot icon path, and AppUserModelID. This prevents stale Electron taskbar shortcut metadata from surviving upgrades when Snipalot was pinned during an older/dev build.
  - The installer still does not pin Snipalot for users who have not pinned it; it only repairs an existing pinned shortcut.
+- **Recorder/frame-picker taskbar icon fix (v1.0.69 local branch):**
+ - Root cause of the recurring Electron taskbar icon after v1.0.68: the installed EXE, Start Menu shortcut, and AppUserModelID were already correct, but the hidden recorder `BrowserWindow` was created without `skipTaskbar` and without the Snipalot icon. Windows could surface that auxiliary window as a separate Electron-icon taskbar button when recording/capture surfaces initialized.
+ - The recorder window now uses the Snipalot icon and stays out of the taskbar in normal runs (`skipTaskbar: !isDebug`). The frame picker window now also gets the Snipalot icon.
 
 ## Packaged app logs
 

@@ -1387,10 +1387,13 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
 
 function createRecorderWindow(): BrowserWindow {
   recorderRendererReady = false;
+  const icon = appWindowIcon();
   const win = new BrowserWindow({
     width: 420,
     height: 300,
     show: isDebug,
+    skipTaskbar: !isDebug,
+    icon,
     webPreferences: {
       preload: path.join(__dirname, '..', 'recorder', 'preload.js'),
       contextIsolation: true,
@@ -3987,6 +3990,7 @@ function openFramePicker(mp4Path: string, sessionDir: string): void {
   const primary = screen.getPrimaryDisplay();
   const w = Math.min(960, primary.workArea.width - 80);
   const h = Math.min(620, primary.workArea.height - 80);
+  const icon = appWindowIcon();
   const win = new BrowserWindow({
     width: w,
     height: h,
@@ -3994,6 +3998,7 @@ function openFramePicker(mp4Path: string, sessionDir: string): void {
     y: primary.workArea.y + Math.floor((primary.workArea.height - h) / 2),
     title: 'Snipalot · Frame Picker',
     show: false,
+    icon,
     webPreferences: {
       preload: path.join(__dirname, '..', 'framepicker', 'preload.js'),
       contextIsolation: true,

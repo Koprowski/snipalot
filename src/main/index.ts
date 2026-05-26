@@ -235,7 +235,7 @@ function initializeCaptureSurfaces(reason: string): void {
   if (captureSurfacesInitialized) return;
   captureSurfacesInitialized = true;
   log('main', 'initialize capture surfaces', { reason });
-  rebuildOverlays();
+  rebuildOverlays(reason);
   if (!recorderWindow || recorderWindow.isDestroyed()) {
     recorderWindow = createRecorderWindow();
   }
@@ -320,6 +320,9 @@ type AppState =
   | 'recording'   // active capture (BOTH record-mode and trade-mode use this)
   | 'processing';
 let appState: AppState = 'idle';
+const OVERLAY_REBUILD_DEBOUNCE_MS = 600;
+let overlayRebuildTimer: NodeJS.Timeout | null = null;
+let pendingOverlayRebuildReason: string | null = null;
 /**
  * When appState === 'processing', this carries the current pipeline step
  * (e.g. "Converting video", "Transcribing audio") so the launcher can show
@@ -758,6 +761,9 @@ function setAppState(next: AppState, why: string): void {
   broadcastStateToLauncher();
   updateLauncherVisibility();
   updateTrayMenu(next);
+  if (next === 'idle') {
+    runDeferredOverlayRebuildIfIdle('app returned to idle');
+  }
 }
 
 /**
@@ -1367,6 +1373,27 @@ function createOverlayWindowForDisplay(display: Display): BrowserWindow {
     if (input.type === 'keyDown' && input.key === 'Escape' && cancelSelectionFromEscape(`overlay ${displayId}`)) {
       event.preventDefault();
     }
+  });
+  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    log('overlay', 'console-message', { displayId, level, message, line, sourceId });
+  });
+  win.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      log('overlay', 'window failed load', {
+        displayId,
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      });
+    }
+  );
+  win.webContents.on('preload-error', (_event, preloadPath, error) => {
+    log('overlay', 'preload error', { displayId, preloadPath, err: error.message });
+  });
+  win.webContents.on('render-process-gone', (_event, details) => {
+    log('overlay', 'renderer process gone', { displayId, ...details });
   });
   win.once('ready-to-show', () => {
     // Re-assert bounds once the renderer is ready, in case Chromium resized
@@ -4090,9 +4117,61 @@ ipcMain.handle(
   }
 );
 
-function rebuildOverlays(): void {
+function shouldDeferOverlayRebuild(): boolean {
+  return appState === 'recording' || appState === 'processing';
+}
+
+function runDeferredOverlayRebuildIfIdle(trigger: string): void {
+  if (!pendingOverlayRebuildReason || appState !== 'idle') return;
+  const reason = `${pendingOverlayRebuildReason}; ${trigger}`;
+  pendingOverlayRebuildReason = null;
+  rebuildOverlays(reason);
+}
+
+function scheduleOverlayRebuild(reason: string): void {
+  pendingOverlayRebuildReason = pendingOverlayRebuildReason
+    ? `${pendingOverlayRebuildReason}; ${reason}`
+    : reason;
+  if (overlayRebuildTimer) clearTimeout(overlayRebuildTimer);
+  overlayRebuildTimer = setTimeout(() => {
+    overlayRebuildTimer = null;
+    if (isSelectingState()) {
+      log('main', 'display change cancelled active selection before overlay rebuild', {
+        reason: pendingOverlayRebuildReason,
+        appState,
+      });
+      exitSelecting('display changed');
+    }
+    if (shouldDeferOverlayRebuild()) {
+      log('main', 'overlay rebuild deferred until idle', {
+        reason: pendingOverlayRebuildReason,
+        appState,
+      });
+      return;
+    }
+    runDeferredOverlayRebuildIfIdle('debounced display change');
+  }, OVERLAY_REBUILD_DEBOUNCE_MS);
+  log('main', 'overlay rebuild scheduled', { reason, appState });
+}
+
+function rebuildOverlays(reason = 'manual'): void {
+  if (overlayWindows.size > 0 && isSelectingState()) {
+    log('main', 'overlay rebuild requested during selection; scheduling clean rebuild', { reason, appState });
+    scheduleOverlayRebuild(reason);
+    return;
+  }
+  if (overlayWindows.size > 0 && shouldDeferOverlayRebuild()) {
+    pendingOverlayRebuildReason = pendingOverlayRebuildReason
+      ? `${pendingOverlayRebuildReason}; ${reason}`
+      : reason;
+    log('main', 'overlay rebuild requested during active session; deferred until idle', {
+      reason: pendingOverlayRebuildReason,
+      appState,
+    });
+    return;
+  }
   captureSurfacesInitialized = true;
-  log('main', 'rebuildOverlays');
+  log('main', 'rebuildOverlays', { reason });
   for (const [id, win] of overlayWindows) {
     log('main', 'closing existing overlay', { id });
     if (!win.isDestroyed()) win.close();
@@ -6366,16 +6445,13 @@ app.whenReady().then(() => {
   }
 
   screen.on('display-added', () => {
-    log('main', 'display-added; rebuilding overlays');
-    rebuildOverlays();
+    scheduleOverlayRebuild('display-added');
   });
   screen.on('display-removed', () => {
-    log('main', 'display-removed; rebuilding overlays');
-    rebuildOverlays();
+    scheduleOverlayRebuild('display-removed');
   });
   screen.on('display-metrics-changed', () => {
-    log('main', 'display-metrics-changed; rebuilding overlays');
-    rebuildOverlays();
+    scheduleOverlayRebuild('display-metrics-changed');
   });
 
   // Initial registration. Kept inside whenReady so app.isReady() is true

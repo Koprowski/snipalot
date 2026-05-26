@@ -111,6 +111,26 @@
   - `skip register` with reason `state transition rearm window`
   - Region selection remains open; no `before-quit`, `will-quit`, or repeated idle/selecting loop follows.
 
+### Pass 7 - Overlay Rebuild Race During Drawing (2026-05-26)
+
+- **What was investigated**
+  - User reported intermittent crashes/buggy behavior while dragging a recording region and while using the screenshot annotator.
+  - Reviewed `%APPDATA%\Snipalot\logs\snipalot.log` and the main/overlay/annotator lifecycle code.
+- **Observed evidence**
+  - Current `1.1.0` region-selection attempt reached `region-confirmed`, `recording region confirmed`, `getDisplayMedia resolved`, and `MediaRecorder started`, so the latest recording path did not fail in the recorder backend.
+  - The code rebuilt overlay windows immediately on every `display-added`, `display-removed`, and `display-metrics-changed` event. Windows can emit these in bursts during monitor wake/reconnect/DPI changes.
+  - `rebuildOverlays()` cleared `overlayWindows` even when an overlay `close` event was prevented during selection, which could orphan transparent interactive overlay windows and make drag/select/annotation feel like it crashed or stopped responding.
+- **Fix applied**
+  - Display-change rebuilds are now debounced.
+  - If a display change arrives during region selection, Snipalot cleanly cancels selection before rebuilding overlays.
+  - Overlay rebuilds are deferred during recording/processing so the active drawing surface is not torn down mid-session.
+  - Overlay renderer `console-message`, `did-fail-load`, `preload-error`, and `render-process-gone` events now log to `snipalot.log`.
+- **Validation**
+  - `npm run build`
+  - `npm test`
+- **Next action**
+  - Runtime validation on Windows: start Record/Screenshot region selection, drag regions on each display, trigger monitor wake/reconnect if possible, and confirm either stable selection or a clean `display change cancelled active selection before overlay rebuild` log line with no orphan overlays.
+
 ## Open Checks
 
 - Verify hotkey path in runtime:

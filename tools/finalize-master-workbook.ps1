@@ -35,8 +35,10 @@ if (-not (Test-Path -LiteralPath $masterPath)) {
 }
 
 $xlUp = -4162
+$xlToLeft = -4159
 $excel = $null
 $workbook = $null
+$script:finalizerWarnings = New-Object System.Collections.Generic.List[string]
 
 function Release-ComObjectQuietly($object) {
   if ($null -ne $object) {
@@ -57,6 +59,22 @@ function Set-FormulaDown($sheet, [string]$column, [int]$firstRow, [int]$lastRow,
   }
 }
 
+function Set-FormulaR1C1Down($sheet, [int]$column, [int]$firstRow, [int]$lastRow, [string]$formulaR1C1) {
+  if ($lastRow -lt $firstRow) { return }
+  if (-not $formulaR1C1 -or -not $formulaR1C1.StartsWith("=")) { return }
+  Invoke-ExcelRetry {
+    $sheet.Range($sheet.Cells($firstRow, $column), $sheet.Cells($lastRow, $column)).FormulaR1C1 = $formulaR1C1
+  } | Out-Null
+}
+
+function Fill-MasterCalculatedColumns($masterSheet, [int]$firstCalculatedColumn, [int]$lastCalculatedColumn, [int]$lastRow) {
+  if ($lastRow -lt 2 -or $lastCalculatedColumn -lt $firstCalculatedColumn) { return }
+  for ($column = $firstCalculatedColumn; $column -le $lastCalculatedColumn; $column++) {
+    $formulaR1C1 = Invoke-ExcelRetry { [string]$masterSheet.Cells(2, $column).FormulaR1C1 }
+    Set-FormulaR1C1Down $masterSheet $column 2 $lastRow $formulaR1C1
+  }
+}
+
 function Invoke-ExcelRetry([scriptblock]$Action) {
   $lastError = $null
   for ($attempt = 1; $attempt -le 20; $attempt++) {
@@ -70,6 +88,21 @@ function Invoke-ExcelRetry([scriptblock]$Action) {
   throw $lastError
 }
 
+function Add-FinalizerWarning([string]$Message) {
+  $script:finalizerWarnings.Add($Message) | Out-Null
+  Write-Warning $Message
+}
+
+function Invoke-ExcelOptional([scriptblock]$Action, [string]$Description) {
+  try {
+    & $Action
+    return $true
+  } catch {
+    Add-FinalizerWarning "$Description failed: $($_.Exception.Message)"
+    return $false
+  }
+}
+
 function Get-LastNonBlankRow($sheet, [string]$column, [int]$firstRow, [int]$lastRow) {
   for ($row = $lastRow; $row -ge $firstRow; $row--) {
     $value = Invoke-ExcelRetry { $sheet.Range("${column}${row}").Value2 }
@@ -78,6 +111,25 @@ function Get-LastNonBlankRow($sheet, [string]$column, [int]$firstRow, [int]$last
     }
   }
   return $firstRow
+}
+
+function Get-DailyLastRowFromMasterDates($masterSheet, [int]$lastMasterRow, [int]$helperLastRow) {
+  if ($lastMasterRow -lt 2) { return 2 }
+  $dates = New-Object 'System.Collections.Generic.HashSet[string]'
+  $values = Invoke-ExcelRetry { $masterSheet.Range("G2:G$lastMasterRow").Value2 }
+  if ($lastMasterRow -eq 2) {
+    if ($null -ne $values -and "$values" -ne "") {
+      [void]$dates.Add([string]$values)
+    }
+  } else {
+    for ($row = 1; $row -le $values.GetLength(0); $row++) {
+      $value = $values[$row, 1]
+      if ($null -ne $value -and "$value" -ne "") {
+        [void]$dates.Add([string]$value)
+      }
+    }
+  }
+  return [Math]::Max(2, [Math]::Min($helperLastRow, $dates.Count + 1))
 }
 
 function Set-CategoryAxis($chart) {
@@ -181,7 +233,10 @@ function Refresh-DailyCharts($workbook, $analysisSheet, [int]$dailyLastRow) {
 }
 
 try {
-  $excel = New-Object -ComObject Excel.Application
+  $excel = Invoke-ExcelRetry { New-Object -ComObject Excel.Application }
+  if ($null -eq $excel) {
+    throw "Excel COM automation did not return an application instance."
+  }
   $excel.Visible = $false
   $excel.DisplayAlerts = $false
   $excel.EnableEvents = $false
@@ -202,7 +257,11 @@ try {
   $helperLastRow = [Math]::Max($lastMasterRow, 500)
 
   $tblTrades = $master.ListObjects.Item("tblTrades")
-  Invoke-ExcelRetry { $tblTrades.Resize($master.Range("A1:BC$lastMasterRow")) } | Out-Null
+  $currentTradeColumnCount = Invoke-ExcelRetry { $tblTrades.Range.Columns.Count }
+  $headerLastColumn = Invoke-ExcelRetry { $master.Cells(1, $master.Columns.Count).End($xlToLeft).Column }
+  $lastTradeColumn = [Math]::Max([int]$currentTradeColumnCount, [int]$headerLastColumn)
+  Invoke-ExcelRetry { $tblTrades.Resize($master.Range($master.Cells(1, 1), $master.Cells($lastMasterRow, $lastTradeColumn))) } | Out-Null
+  Fill-MasterCalculatedColumns $master 56 $lastTradeColumn $lastMasterRow
 
   $tblAnalysis = $analysis.ListObjects.Item("tblAnalysis")
   Invoke-ExcelRetry { $tblAnalysis.Resize($analysis.Range("A1:O$lastMasterRow")) } | Out-Null
@@ -273,23 +332,27 @@ try {
   $analysis.Range("AC2:AC$helperLastRow").NumberFormat = "m/d/yy"
   $analysis.Range("BG2:BG$helperLastRow").NumberFormat = "m/d/yy"
 
-  Invoke-ExcelRetry { $excel.Calculation = -4105 } | Out-Null
-  Invoke-ExcelRetry { $master.Calculate() } | Out-Null
-  Invoke-ExcelRetry { $analysis.Calculate() } | Out-Null
-  Start-Sleep -Milliseconds 500
-  $dailyLastRow = Get-LastNonBlankRow $analysis "Q" 2 $helperLastRow
+  $dailyLastRow = Get-DailyLastRowFromMasterDates $master $lastMasterRow $helperLastRow
   Refresh-TradeCharts $workbook $analysis $lastMasterRow
   Refresh-DailyCharts $workbook $analysis $dailyLastRow
-  Invoke-ExcelRetry { $master.Calculate() } | Out-Null
-  Invoke-ExcelRetry { $analysis.Calculate() } | Out-Null
-  Start-Sleep -Milliseconds 500
+  Invoke-ExcelOptional { $excel.Calculation = -4105 } "Setting Excel calculation to automatic" | Out-Null
+  Invoke-ExcelOptional { $workbook.ForceFullCalculation = $true } "Enabling full workbook recalculation" | Out-Null
+
+  # Persist table, helper formulas, and chart range updates before optional
+  # calculation. Excel COM calculation can disconnect on some machines; it
+  # must not discard formula propagation.
   Invoke-ExcelRetry { $workbook.Save() } | Out-Null
+  if (Invoke-ExcelOptional { $excel.CalculateFullRebuild() } "Excel full calculation") {
+    Start-Sleep -Milliseconds 500
+    Invoke-ExcelOptional { $workbook.Save() } "Saving recalculated workbook" | Out-Null
+  }
 
   Write-Host (@{
     master = $masterPath
     lastMasterRow = $lastMasterRow
     helperLastRow = $helperLastRow
     dailyLastRow = $dailyLastRow
+    warnings = @($script:finalizerWarnings)
     finalized = $true
   } | ConvertTo-Json -Compress)
 } finally {

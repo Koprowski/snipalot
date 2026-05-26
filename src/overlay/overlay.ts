@@ -341,14 +341,7 @@ function redraw(): void {
   }
 
   if (recordingRegion && !regionSelectMode && outlineVisible) {
-    const o = STYLE.outlineOutsideOffset;
-    const r = recordingRegion;
-    ctx.save();
-    ctx.strokeStyle = STYLE.regionStroke;
-    ctx.lineWidth = STYLE.regionStrokeWidth;
-    ctx.setLineDash([8, 6]);
-    ctx.strokeRect(r.x - o, r.y - o, r.w + 2 * o, r.h + 2 * o);
-    ctx.restore();
+    drawRecordingOutline(recordingRegion);
   }
 
   for (let i = 0; i < annotations.length; i++) {
@@ -394,6 +387,27 @@ function redraw(): void {
       );
     }
   }
+}
+
+function drawRecordingOutline(r: Rect): void {
+  const o = STYLE.outlineOutsideOffset;
+  // Edge-aligned regions would clip an outside-only outline off-screen. Clamp
+  // to the visible overlay so fullscreen/trade captures still show a border.
+  const minX = 1;
+  const minY = 1;
+  const maxX = Math.max(minX + 2, window.innerWidth - 1);
+  const maxY = Math.max(minY + 2, window.innerHeight - 1);
+  const left = Math.max(minX, r.x - o);
+  const top = Math.max(minY, r.y - o);
+  const right = Math.min(maxX, r.x + r.w + o);
+  const bottom = Math.min(maxY, r.y + r.h + o);
+
+  ctx.save();
+  ctx.strokeStyle = STYLE.regionStroke;
+  ctx.lineWidth = STYLE.regionStrokeWidth;
+  ctx.setLineDash([8, 6]);
+  ctx.strokeRect(left, top, Math.max(2, right - left), Math.max(2, bottom - top));
+  ctx.restore();
 }
 
 function drawAnnotation(a: Annotation, selected = false): void {

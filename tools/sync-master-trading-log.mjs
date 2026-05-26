@@ -108,6 +108,12 @@ const MASTER_COLUMNS = [
 ];
 
 const TRADE_LOG_COLUMNS = MASTER_COLUMNS;
+const TRADE_LOG_HEADER_ALIASES = new Map([
+  ["entry_time_actual", "entry_time_inferred"],
+]);
+const TRADE_LOG_HEADER_LABELS = new Map([
+  ["entry_time_inferred", "entry_time_actual"],
+]);
 
 function resolveCapturesRoot() {
   const rootArgIndex = process.argv.indexOf("--root");
@@ -256,14 +262,20 @@ function csvParse(text) {
 
 function rowsFromMatrix(matrix) {
   if (matrix.length === 0) return [];
-  const headers = matrix[0].map((h) => String(h ?? "").trim());
+  const headers = matrix[0].map((h) => canonicalTradeLogHeader(String(h ?? "").trim()));
   return matrix.slice(1).map((line) => {
     const row = {};
     headers.forEach((h, i) => {
-      row[h] = String(line[i] ?? "");
+      if (!h) return;
+      const value = String(line[i] ?? "");
+      if (row[h] === undefined || row[h] === "") row[h] = value;
     });
     return row;
   }).filter((row) => Object.values(row).some((value) => String(value).trim() !== ""));
+}
+
+function canonicalTradeLogHeader(header) {
+  return TRADE_LOG_HEADER_ALIASES.get(header) ?? header;
 }
 
 function xmlDecode(value) {
@@ -462,15 +474,32 @@ async function saveMaster(allRows, rowsToAppend, forceRewrite = false) {
   return true;
 }
 
-async function archiveFolder(folderPath) {
-  await fs.mkdir(ARCHIVE, { recursive: true });
+function plannedArchiveTarget(folderPath) {
   const name = path.basename(folderPath);
   let target = path.join(ARCHIVE, name);
   if (fss.existsSync(target)) {
     target = path.join(ARCHIVE, `${name} archived ${new Date().toISOString().replace(/[:.]/g, "-")}`);
   }
+  return target;
+}
+
+async function archiveFolder(folderPath, targetPath = null) {
+  await fs.mkdir(ARCHIVE, { recursive: true });
+  const target = targetPath ?? plannedArchiveTarget(folderPath);
+  if (fss.existsSync(target)) {
+    throw new Error(`Archive target already exists: ${target}`);
+  }
   await fs.rename(folderPath, target);
   return target;
+}
+
+async function archiveImportedFolders(results) {
+  for (const result of results) {
+    if (!result.pendingArchive || result.rowsAdded <= 0) continue;
+    result.archivedTo = await archiveFolder(result.sourcePath, result.archivedTo);
+    result.pendingArchive = false;
+    delete result.sourcePath;
+  }
 }
 
 async function loadManifest() {
@@ -522,6 +551,7 @@ async function main() {
   }
 
   const existing = await loadExistingMaster();
+  if (fss.existsSync(MASTER)) await assertWorkbookWritable(MASTER);
 
   if (REPAIR_ONLY) {
     const workbookUpdated = fss.existsSync(MASTER) && await canUpdateExistingWorkbook(MASTER)
@@ -575,10 +605,12 @@ async function main() {
 
   const results = [];
   for (const { dir, tradeLog } of readyCurrentDirs) {
+    const archiveTarget = !NO_ARCHIVE ? plannedArchiveTarget(dir) : null;
     const result = await importTradeFolder(dir, {
       allRows,
       seen,
       archiveAfterImport: !NO_ARCHIVE,
+      archiveTarget,
       tradeLog,
     });
     manifest.push(result);
@@ -610,6 +642,9 @@ async function main() {
     ? [...allRows.slice(0, existingRowCount), ...rowsToAppend]
     : allRows;
   const workbookUpdated = await saveMaster(rowsForSave, rowsToAppend, forceRewrite);
+  if (workbookUpdated && !NO_ARCHIVE) {
+    await archiveImportedFolders(results);
+  }
   await saveManifest(manifest);
 
   console.log(JSON.stringify({
@@ -634,6 +669,26 @@ async function main() {
     backfillResults,
     supplementalResults,
   }, null, 2));
+}
+
+async function assertWorkbookWritable(filePath) {
+  try {
+    const handle = await fs.open(filePath, "r+");
+    await handle.close();
+  } catch (err) {
+    if (isTransientFileLock(err)) {
+      throw new Error(`Master workbook is locked and cannot be updated: ${filePath}. Close it in Excel and wait for OneDrive to finish syncing, then rerun sync.`);
+    }
+    throw err;
+  }
+}
+
+function isTransientFileLock(err) {
+  return ["EBUSY", "EPERM", "EACCES"].includes(String(err?.code ?? ""));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 await main();
@@ -701,7 +756,7 @@ function errorMessage(err) {
   return err && typeof err.message === "string" ? err.message : String(err);
 }
 
-async function importTradeFolder(dir, { allRows, seen, archiveAfterImport, tradeLog = null }) {
+async function importTradeFolder(dir, { allRows, seen, archiveAfterImport, archiveTarget = null, tradeLog = null }) {
   const sessionName = path.basename(dir);
   const xlsx = path.join(dir, "trade_log.xlsx");
   const resolvedTradeLog = tradeLog ?? await readImportableTradeLog(dir);
@@ -726,15 +781,15 @@ async function importTradeFolder(dir, { allRows, seen, archiveAfterImport, trade
 
   let added = 0;
   let backfilled = 0;
-  let archiveTarget = archiveAfterImport ? path.join(ARCHIVE, sessionName) : dir;
+  const finalArchiveTarget = archiveAfterImport ? (archiveTarget ?? plannedArchiveTarget(dir)) : dir;
   if (rawRows.length > 0) {
     rawRows = reconcileNicsFields(rawRows, allRows, sessionName);
     if (sourceType === "workflow-xlsx" && fss.existsSync(xlsx)) {
-      const sessionRows = rawRows.map((row) => normalizeWorkflowRow(row, sessionName, sourceType, archiveTarget));
+      const sessionRows = rawRows.map((row) => normalizeWorkflowRow(row, sessionName, sourceType, finalArchiveTarget));
       await writeTradeLogRowsXlsx(xlsx, sessionRows);
     }
     for (const raw of rawRows) {
-      const row = normalizeWorkflowRow(raw, sessionName, sourceType, archiveTarget);
+      const row = normalizeWorkflowRow(raw, sessionName, sourceType, finalArchiveTarget);
       const key = rowKey(row);
       if (!seen.has(key)) {
         seen.add(key);
@@ -746,20 +801,15 @@ async function importTradeFolder(dir, { allRows, seen, archiveAfterImport, trade
     }
   }
 
-  if (archiveAfterImport) {
-    archiveTarget = await archiveFolder(dir);
-    for (const row of allRows) {
-      if (row.source_session === sessionName) row.source_folder_archived_path = archiveTarget;
-    }
-  }
-
   return {
     sessionName,
     sourceType,
     rowsFound: rawRows.length,
     rowsAdded: added,
     rowsBackfilled: backfilled,
-    archivedTo: archiveTarget,
+    archivedTo: finalArchiveTarget,
+    pendingArchive: archiveAfterImport && added > 0,
+    sourcePath: archiveAfterImport && added > 0 ? dir : undefined,
     processedAt: new Date().toISOString(),
   };
 }
@@ -1709,12 +1759,13 @@ async function updateExistingWorkbook(filePath, rows) {
     return Math.max(8, Math.min(40, max));
   });
   const lastRow = rows.length + 1;
+  const lastColumn = columnName(MASTER_COLUMNS.length - 1);
   zip.file(masterPath, worksheetXml(rows, widths, styles));
 
-  await updateWorkbookMetadata(zip, lastRow);
+  await updateWorkbookMetadata(zip, lastRow, lastColumn);
   await removeCalcChain(zip);
 
-  await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  await writeZipWorkbook(filePath, zip);
 }
 
 async function appendRowsToExistingWorkbook(filePath, rowsToAppend) {
@@ -1735,23 +1786,28 @@ async function appendRowsToExistingWorkbook(filePath, rowsToAppend) {
   const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
   const currentLastRow = worksheetLastRow(masterXml);
   const targetLastRow = currentLastRow + rowsToAppend.length;
-  const lastColumn = maxColumnName(worksheetLastColumn(masterXml), columnName(MASTER_COLUMNS.length - 1));
+  const tableInfo = await masterTableInfoForSheet(zip, masterPath);
+  const lastColumn = maxColumnName(
+    maxColumnName(worksheetLastColumn(masterXml), columnName(MASTER_COLUMNS.length - 1)),
+    columnName(tableInfo.columnCount - 1)
+  );
   masterXml = ensureMasterHeaderColumns(masterXml, styles);
   const appendedRows = rowsToAppend.map((row, index) =>
     masterDataRowXml(row, currentLastRow + index + 1, styles)
   ).join("");
 
   masterXml = masterXml.replace("</sheetData>", `${appendedRows}</sheetData>`);
+  masterXml = fillMasterCalculatedTableColumns(masterXml, tableInfo.columns, 1, targetLastRow);
   masterXml = await normalizeMasterTradeDates(zip, masterXml, styles.date);
   masterXml = updateWorksheetDimension(masterXml, lastColumn, targetLastRow);
   masterXml = removeWorksheetAutoFilter(masterXml);
   zip.file(masterPath, masterXml);
 
   await updateMasterTable(zip, masterPath, lastColumn, targetLastRow);
-  await updateWorkbookMetadata(zip, targetLastRow);
+  await updateWorkbookMetadata(zip, targetLastRow, lastColumn);
   await removeCalcChain(zip);
 
-  await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  await writeZipWorkbook(filePath, zip);
 }
 
 function ensureMasterHeaderColumns(sheetXml, styles) {
@@ -1794,22 +1850,27 @@ async function rewriteExistingMasterWorkbook(filePath, rows) {
   const workbookStylesXml = await zip.file("xl/styles.xml")?.async("string") ?? "";
   const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
   const lastRow = rows.length + 1;
-  const lastColumn = maxColumnName(worksheetLastColumn(masterXml), columnName(MASTER_COLUMNS.length - 1));
+  const tableInfo = await masterTableInfoForSheet(zip, masterPath);
+  const lastColumn = maxColumnName(
+    maxColumnName(worksheetLastColumn(masterXml), columnName(MASTER_COLUMNS.length - 1)),
+    columnName(tableInfo.columnCount - 1)
+  );
   masterXml = ensureMasterHeaderColumns(masterXml, styles);
   const headerRow = masterXml.match(/<row\b[^>]*\br="1"[^>]*>[\s\S]*?<\/row>/)?.[0];
   if (!headerRow) throw new Error("Master sheet is missing header row; refusing to rewrite.");
 
   const bodyRows = rows.map((row, index) => masterDataRowXml(row, index + 2, styles)).join("");
   masterXml = masterXml.replace(/<sheetData>[\s\S]*?<\/sheetData>/, `<sheetData>${headerRow}${bodyRows}</sheetData>`);
+  masterXml = fillMasterCalculatedTableColumns(masterXml, tableInfo.columns, 1, lastRow);
   masterXml = await normalizeMasterTradeDates(zip, masterXml, styles.date);
   masterXml = updateWorksheetDimension(masterXml, lastColumn, lastRow);
   masterXml = removeWorksheetAutoFilter(masterXml);
   zip.file(masterPath, masterXml);
 
   await updateMasterTable(zip, masterPath, lastColumn, lastRow);
-  await updateWorkbookMetadata(zip, lastRow);
+  await updateWorkbookMetadata(zip, lastRow, lastColumn);
   await removeCalcChain(zip);
-  await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  await writeZipWorkbook(filePath, zip);
 }
 
 async function repairExistingWorkbook(filePath) {
@@ -1823,20 +1884,24 @@ async function repairExistingWorkbook(filePath) {
   if (masterXml) {
     const workbookStylesXml = await zip.file("xl/styles.xml")?.async("string") ?? "";
     const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
-    const repairedMasterXml = await normalizeMasterTradeDates(zip, masterXml, styles.date);
-    const repairedXml = removeWorksheetAutoFilter(repairedMasterXml);
+    const tableInfo = await masterTableInfoForSheet(zip, masterPath);
+    const lastRow = worksheetLastRow(masterXml);
+    let repairedXml = fillMasterCalculatedTableColumns(masterXml, tableInfo.columns, 1, lastRow);
+    repairedXml = await normalizeMasterTradeDates(zip, repairedXml, styles.date);
+    repairedXml = removeWorksheetAutoFilter(repairedXml);
     if (repairedXml !== masterXml) {
       masterXml = repairedXml;
       zip.file(masterPath, masterXml);
+      await updateMasterTable(zip, masterPath, maxColumnName(worksheetLastColumn(masterXml), columnName(tableInfo.columnCount - 1)), lastRow);
       changed = true;
     }
   }
 
   if (!changed) return false;
   await backupMasterWorkbook(filePath);
-  await updateWorkbookMetadata(zip, worksheetLastRow(masterXml ?? ""));
+  await updateWorkbookMetadata(zip, worksheetLastRow(masterXml ?? ""), worksheetLastColumn(masterXml ?? ""));
   await removeCalcChain(zip);
-  await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  await writeZipWorkbook(filePath, zip);
   return true;
 }
 
@@ -1865,6 +1930,27 @@ async function backupMasterWorkbook(filePath) {
   await fs.mkdir(backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   await fs.copyFile(filePath, path.join(backupDir, `master trading log before sync ${stamp}.xlsx`));
+}
+
+async function writeZipWorkbook(filePath, zip) {
+  const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  const attempts = 6;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await fs.writeFile(filePath, buffer);
+      return;
+    } catch (err) {
+      if (!isTransientFileLock(err) || attempt === attempts) {
+        if (isTransientFileLock(err)) {
+          throw new Error(`Workbook is locked and could not be written after ${attempts} attempts: ${filePath}. Close it in Excel and wait for OneDrive to finish syncing, then rerun sync.`);
+        }
+        throw err;
+      }
+      const delayMs = attempt * 1500;
+      console.warn(`[sync] master workbook locked while writing (${err.code}); retrying in ${delayMs}ms...`);
+      await sleep(delayMs);
+    }
+  }
 }
 
 function extractWorksheetStyles(sheetXml, workbookStylesXml = "") {
@@ -2026,6 +2112,23 @@ function removeWorksheetAutoFilter(sheetXml) {
 }
 
 async function updateMasterTable(zip, masterPath, lastColumn, lastRow) {
+  const tableInfo = await masterTableInfoForSheet(zip, masterPath);
+  let tableXml = tableInfo.xml;
+  let columnCount = tableInfo.columnCount;
+  if (columnCount < MASTER_COLUMNS.length) {
+    tableXml = extendMasterTableColumns(tableXml, columnCount);
+    columnCount = MASTER_COLUMNS.length;
+  }
+
+  const tableLastColumn = columnName(columnCount - 1);
+  const tableRef = `A1:${maxColumnName(lastColumn, tableLastColumn)}${lastRow}`;
+  tableXml = tableXml
+    .replace(/\bref="[^"]+"/, `ref="${tableRef}"`)
+    .replace(/<autoFilter\b([^>]*)\bref="[^"]+"/, `<autoFilter$1ref="${tableRef}"`);
+  zip.file(tableInfo.path, tableXml);
+}
+
+async function masterTableInfoForSheet(zip, masterPath) {
   const relsPath = worksheetRelsPath(masterPath);
   const relsFile = zip.file(relsPath);
   if (!relsFile) {
@@ -2053,25 +2156,56 @@ async function updateMasterTable(zip, masterPath, lastColumn, lastRow) {
     throw new Error(`Master table part ${tablePath} is missing. Refusing to write.`);
   }
 
-  let tableXml = await tableFile.async("string");
+  const tableXml = await tableFile.async("string");
   const displayName = tableXml.match(/\bdisplayName="([^"]+)"/)?.[1] ?? "";
   if (displayName !== "tblTrades") {
     throw new Error(`Expected master table displayName="tblTrades"; found "${displayName}". Refusing to write.`);
   }
 
-  const columnCount = Number(tableXml.match(/<tableColumns\b[^>]*\bcount="(\d+)"/)?.[1] ?? 0);
-  if (columnCount > MASTER_COLUMNS.length) {
-    throw new Error(`tblTrades has ${columnCount} columns, but importer expects ${MASTER_COLUMNS.length}. Refusing to write.`);
-  }
+  const columns = parseTableColumns(tableXml);
+  const declaredCount = Number(tableXml.match(/<tableColumns\b[^>]*\bcount="(\d+)"/)?.[1] ?? 0);
+  const columnCount = Math.max(declaredCount, columns.length);
+  validateMasterTableColumns(columns, columnCount);
+  return { path: tablePath, xml: tableXml, columns, columnCount };
+}
+
+function parseTableColumns(tableXml) {
+  return [...tableXml.matchAll(/<tableColumn\b([^>]*?)(?:\/>|>([\s\S]*?)<\/tableColumn>)/g)]
+    .map((match, index) => {
+      const attrs = match[1];
+      const body = match[2] ?? "";
+      return {
+        index,
+        id: Number(attrs.match(/\bid="([^"]*)"/)?.[1] ?? index + 1),
+        name: xmlDecode(attrs.match(/\bname="([^"]*)"/)?.[1] ?? ""),
+        formula: xmlDecode(body.match(/<calculatedColumnFormula(?:\s[^>]*)?>([\s\S]*?)<\/calculatedColumnFormula>/)?.[1] ?? ""),
+      };
+    });
+}
+
+function validateMasterTableColumns(columns, columnCount) {
   if (columnCount < MASTER_COLUMNS.length) {
-    tableXml = extendMasterTableColumns(tableXml, columnCount);
+    for (let i = 0; i < columnCount; i++) {
+      if (columns[i]?.name !== MASTER_COLUMNS[i]) {
+        throw new Error(`tblTrades column ${i + 1} is "${columns[i]?.name ?? ""}", expected "${MASTER_COLUMNS[i]}". Refusing to extend schema.`);
+      }
+    }
+    return;
   }
 
-  const tableRef = `A1:${lastColumn}${lastRow}`;
-  tableXml = tableXml
-    .replace(/\bref="[^"]+"/, `ref="${tableRef}"`)
-    .replace(/<autoFilter\b([^>]*)\bref="[^"]+"/, `<autoFilter$1ref="${tableRef}"`);
-  zip.file(tablePath, tableXml);
+  for (let i = 0; i < MASTER_COLUMNS.length; i++) {
+    if (columns[i]?.name !== MASTER_COLUMNS[i]) {
+      throw new Error(`tblTrades column ${i + 1} is "${columns[i]?.name ?? ""}", expected "${MASTER_COLUMNS[i]}". Refusing to write.`);
+    }
+  }
+
+  const nonCalculatedExtra = columns
+    .slice(MASTER_COLUMNS.length, columnCount)
+    .filter((column) => !column.formula)
+    .map((column) => column.name);
+  if (nonCalculatedExtra.length > 0) {
+    throw new Error(`tblTrades has extra non-calculated column(s): ${nonCalculatedExtra.join(", ")}. Refusing to write.`);
+  }
 }
 
 async function extendAnalysisForMasterRows(zip, targetLastRow) {
@@ -2170,6 +2304,50 @@ function extendMasterTableColumns(tableXml, existingColumnCount) {
   }
 
   throw new Error("tblTrades has no tableColumns block; refusing to extend schema.");
+}
+
+function fillMasterCalculatedTableColumns(sheetXml, tableColumns, templateRow, targetLastRow) {
+  const calculatedColumns = tableColumns
+    .slice(MASTER_COLUMNS.length)
+    .filter((column) => column.formula);
+  if (calculatedColumns.length === 0 || targetLastRow < 2) return sheetXml;
+
+  let out = sheetXml;
+  const firstRow = Math.max(2, templateRow + 1);
+  for (let row = firstRow; row <= targetLastRow; row++) {
+    const rowMatch = out.match(new RegExp(`<row\\b([^>]*)\\br="${row}"([^>]*)>([\\s\\S]*?)<\\/row>`));
+    if (!rowMatch) continue;
+    const priorRowMatch = out.match(new RegExp(`<row\\b[^>]*\\br="${Math.max(2, row - 1)}"[^>]*>([\\s\\S]*?)<\\/row>`));
+    const formulaCells = calculatedColumns.map((column) => {
+      const columnNameText = columnName(column.index);
+      const cellRef = `${columnNameText}${row}`;
+      const templateAttrs = calculatedColumnTemplateAttrs(priorRowMatch?.[1] ?? "", columnNameText, row - 1);
+      const formula = translateFormulaRows(column.formula, row - 2);
+      return calculatedFormulaCell(cellRef, formula, templateAttrs);
+    }).join("");
+    let body = rowMatch[3];
+    for (const column of calculatedColumns) {
+      const columnNameText = columnName(column.index);
+      body = body.replace(new RegExp(`<c\\b[^>]*\\br="${columnNameText}${row}"[^>]*(?:\\/>|>[\\s\\S]*?<\\/c>)`, "g"), "");
+    }
+    out = out.replace(rowMatch[0], `<row${rowMatch[1]} r="${row}"${rowMatch[2]}>${body}${formulaCells}</row>`);
+  }
+  return out;
+}
+
+function calculatedColumnTemplateAttrs(rowBody, columnNameText, row) {
+  if (row < 2) return "";
+  const match = rowBody.match(new RegExp(`<c\\b([^>]*\\br="${columnNameText}${row}"[^>]*)(?:\\/>|>[\\s\\S]*?<\\/c>)`));
+  if (!match) return "";
+  return match[1]
+    .replace(/\br="[^"]+"/, "")
+    .replace(/\bcm="[^"]*"/g, "")
+    .trim();
+}
+
+function calculatedFormulaCell(cellRef, formula, templateAttrs) {
+  const attrs = templateAttrs ? ` ${templateAttrs}` : "";
+  return `<c r="${cellRef}"${attrs}><f>${xml(formula)}</f></c>`;
 }
 
 function fillAnalysisTableRows(sheetXml, currentTableLastRow, targetLastRow) {
@@ -2432,12 +2610,11 @@ function formulaCell(cellRef, formula, style, stringResult) {
   return `<c r="${cellRef}"${styleAttr}${typeAttr}><f>${xml(formula)}</f></c>`;
 }
 
-async function updateWorkbookMetadata(zip, masterLastRow) {
+async function updateWorkbookMetadata(zip, masterLastRow, masterLastColumn = columnName(MASTER_COLUMNS.length - 1)) {
   const workbookFile = zip.file("xl/workbook.xml");
   if (!workbookFile) return;
   let workbook = await workbookFile.async("string");
-  const lastMasterColumn = columnName(MASTER_COLUMNS.length - 1);
-  workbook = workbook.replace(/'Master Trading Log'!\$A\$1:\$[A-Z]+\$\d+/g, `'Master Trading Log'!$A$1:$${lastMasterColumn}$${masterLastRow}`);
+  workbook = workbook.replace(/'Master Trading Log'!\$A\$1:\$[A-Z]+\$\d+/g, `'Master Trading Log'!$A$1:$${masterLastColumn}$${masterLastRow}`);
   if (/<calcPr\b[^>]*\/>/.test(workbook)) {
     workbook = workbook.replace(/<calcPr\b[^>]*\/>/, '<calcPr calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/>');
   } else if (/<calcPr\b[^>]*>[\s\S]*?<\/calcPr>/.test(workbook)) {
@@ -2502,12 +2679,12 @@ async function writeXlsx(filePath, rows) {
   xl?.folder("worksheets")?.file("sheet1.xml", worksheetXml(rows, widths));
   zip.folder("docProps")?.file("app.xml", appPropsXml());
   zip.folder("docProps")?.file("core.xml", corePropsXml());
-  await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  await writeZipWorkbook(filePath, zip);
 }
 
 async function writeTradeLogRowsXlsx(filePath, rows) {
   const widths = TRADE_LOG_COLUMNS.map((column) => {
-    const max = [column, ...rows.map((row) => row[column] ?? "")].reduce((m, value) => {
+    const max = [tradeLogHeaderLabel(column), ...rows.map((row) => row[column] ?? "")].reduce((m, value) => {
       return Math.max(m, ...String(value).split(/\r?\n/).map((line) => line.length));
     }, 0);
     return Math.max(8, Math.min(40, max));
@@ -2522,7 +2699,7 @@ async function writeTradeLogRowsXlsx(filePath, rows) {
   xl?.folder("worksheets")?.file("sheet1.xml", worksheetXmlForColumns(rows, TRADE_LOG_COLUMNS, widths));
   zip.folder("docProps")?.file("app.xml", appPropsXml());
   zip.folder("docProps")?.file("core.xml", corePropsXml());
-  await fs.writeFile(filePath, await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  await writeZipWorkbook(filePath, zip);
 }
 
 function worksheetXml(rows, widths, styles = null) {
@@ -2542,7 +2719,7 @@ function worksheetXml(rows, widths, styles = null) {
 }
 
 function worksheetXmlForColumns(rows, columns, widths) {
-  const header = columns.map((column, i) => cell(ref(i, 1), column, 1)).join("");
+  const header = columns.map((column, i) => cell(ref(i, 1), tradeLogHeaderLabel(column), 1)).join("");
   const body = rows.map((row, rowIndex) => {
     const rowNumber = rowIndex + 2;
     const values = columns.map((column, i) =>
@@ -2561,6 +2738,10 @@ function worksheetXmlForColumns(rows, columns, widths) {
   <autoFilter ref="A1:${ref(columns.length - 1, Math.max(1, rows.length + 1))}"/>
   <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
 </worksheet>`;
+}
+
+function tradeLogHeaderLabel(column) {
+  return TRADE_LOG_HEADER_LABELS.get(column) ?? column;
 }
 
 function typedTradeLogCell(cellRef, column, value) {

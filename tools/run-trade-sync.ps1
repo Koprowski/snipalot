@@ -36,6 +36,38 @@ function Resolve-DisplayMasterPath([string]$Root, [string]$RequestedMaster) {
   return $rootMaster
 }
 
+function Close-OpenMasterWorkbook([string]$WorkbookPath) {
+  if (-not $WorkbookPath -or -not (Test-Path -LiteralPath $WorkbookPath)) {
+    return
+  }
+
+  $resolvedTarget = [System.IO.Path]::GetFullPath($WorkbookPath)
+  try {
+    $excel = [Runtime.InteropServices.Marshal]::GetActiveObject("Excel.Application")
+  } catch {
+    return
+  }
+
+  foreach ($workbook in @($excel.Workbooks)) {
+    $fullName = ""
+    try {
+      $fullName = [System.IO.Path]::GetFullPath([string]$workbook.FullName)
+    } catch {
+      continue
+    }
+    if (-not [string]::Equals($fullName, $resolvedTarget, [System.StringComparison]::OrdinalIgnoreCase)) {
+      continue
+    }
+    if (-not $workbook.Saved) {
+      throw "Master workbook is open in Excel with unsaved changes. Save or close it, then rerun sync: $resolvedTarget"
+    }
+    Write-Host "Closing open saved master workbook in Excel: $resolvedTarget"
+    $workbook.Close($false)
+    Start-Sleep -Milliseconds 500
+    return
+  }
+}
+
 if (-not (Test-Path -LiteralPath $node)) {
   $node = "node"
 }
@@ -44,12 +76,17 @@ Write-Host "Snipalot trade sync"
 if ($ArchiveOnly) {
   Write-Host "Archive-only mode: master trading log.xlsx is not imported, rewritten, or finalized."
 } else {
-  Write-Host "Close master trading log.xlsx in Excel before running this."
+  Write-Host "Master workbook must be writable. If it is open in Excel and already saved, this script will close it."
 }
 Write-Host ""
 
 Push-Location (Split-Path -Parent $scriptDir)
 try {
+  if (-not $ArchiveOnly) {
+    $displayMasterBeforeSync = Resolve-DisplayMasterPath $CapturesRoot $MasterPath
+    Close-OpenMasterWorkbook $displayMasterBeforeSync
+  }
+
   $args = @($syncScript)
   if ($CapturesRoot) {
     $args += @("--root", $CapturesRoot)

@@ -1785,6 +1785,10 @@ const XLSX_COLUMNS = [
 type XlsxColumn = typeof XLSX_COLUMNS[number];
 type XlsxRow = Record<XlsxColumn, string>;
 
+const XLSX_HEADER_LABELS: Partial<Record<XlsxColumn, string>> = {
+  entry_time_inferred: 'entry_time_actual',
+};
+
 async function writeTradeLogXlsx(
   sessionDir: string,
   trades: TradeEvent[],
@@ -2033,7 +2037,7 @@ function wrapSpreadsheetText(value: string | null | undefined, width = 40): stri
 
 function computeXlsxColumnWidths(rows: XlsxRow[]): number[] {
   return XLSX_COLUMNS.map((column) => {
-    const values = [column, ...rows.map((row) => row[column])];
+    const values = [xlsxHeaderLabel(column), ...rows.map((row) => row[column])];
     const maxLineLength = values.reduce((max, value) => {
       const lines = String(value ?? '').split(/\r?\n/);
       return Math.max(max, ...lines.map((line) => line.length));
@@ -2044,7 +2048,7 @@ function computeXlsxColumnWidths(rows: XlsxRow[]): number[] {
 
 function worksheetXml(rows: XlsxRow[], widths: number[]): string {
   const headerCells = XLSX_COLUMNS.map((column, i) =>
-    inlineStringCell(cellRef(i, 1), column, 1)
+    inlineStringCell(cellRef(i, 1), xlsxHeaderLabel(column), 1)
   ).join('');
   const dataRows = rows.map((row, rowIndex) => {
     const rowNumber = rowIndex + 2;
@@ -2072,6 +2076,10 @@ function worksheetXml(rows: XlsxRow[], widths: number[]): string {
   </sheetData>
   <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
 </worksheet>`;
+}
+
+function xlsxHeaderLabel(column: XlsxColumn): string {
+  return XLSX_HEADER_LABELS[column] ?? column;
 }
 
 function inlineStringCell(ref: string, value: string, style: number): string {
@@ -2206,7 +2214,7 @@ function writeTradeLogMd(
     lines.push(`- **Trade date:** ${formatTradeDate(timeline.tradeDate)}`);
     lines.push(`- **Video start:** ${formatTradeTime(timeline.videoStart)}`);
     lines.push(`- **Entry commentary time:** ${formatTradeTime(timeline.entryCommentary) || 'unknown'}`);
-    lines.push(`- **Entry time inferred:** ${formatTradeTime(timeline.entryInferred) || 'unknown'}`);
+    lines.push(`- **Entry time actual:** ${formatTradeTime(timeline.entryInferred) || 'unknown'}`);
     lines.push(`- **Exit commentary time:** ${formatTradeTime(timeline.exitCommentary) || 'unknown'}`);
     lines.push(`- **Exit time actual:** ${formatTradeTime(timeline.exitActual) || 'unknown'}`);
     lines.push(`- **Time in trade seconds:** ${timeline.timeInTradeSeconds ?? 'unknown'}`);

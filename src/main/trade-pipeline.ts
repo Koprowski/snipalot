@@ -1031,7 +1031,7 @@ function formatOffset(ms: number): string {
  * â€” content alone is enough.
  */
 /**
- * Wait until either mockape.json or mockape.json.skipped exists in the
+ * Wait until either mockape.json, wilytrader.json, or mockape.json.skipped exists in the
  * session folder. The trade-context window writes one of these when the
  * user clicks Continue/Skip, OR main writes the .skipped sentinel
  * directly when autoPromptForTradeData is off. Polls every 1s; max wait
@@ -1045,20 +1045,30 @@ async function waitForTradeContextDecision(
   abortSignal?: AbortSignal
 ): Promise<void> {
   const dataPath = getTradeInputPath(sessionDir, 'mockape.json');
+  const wilyTraderPath = getTradeInputPath(sessionDir, 'wilytrader.json');
+  const priorBrandFileName = ['wily', 'mem', 'trader.json'].join('');
+  const priorBrandPath = getTradeInputPath(sessionDir, priorBrandFileName);
   const skipPath = getTradeInputPath(sessionDir, 'mockape.json.skipped');
   const legacyDataPath = path.join(sessionDir, 'mockape.json');
+  const legacyWilyTraderPath = path.join(sessionDir, 'wilytrader.json');
+  const legacyPriorBrandPath = path.join(sessionDir, priorBrandFileName);
   const legacySkipPath = path.join(sessionDir, 'mockape.json.skipped');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     throwIfAborted(abortSignal);
     if (
       fs.existsSync(dataPath) ||
+      fs.existsSync(wilyTraderPath) ||
+      fs.existsSync(priorBrandPath) ||
       fs.existsSync(skipPath) ||
       fs.existsSync(legacyDataPath) ||
+      fs.existsSync(legacyWilyTraderPath) ||
+      fs.existsSync(legacyPriorBrandPath) ||
       fs.existsSync(legacySkipPath)
     ) {
       log('trade-pipeline', 'trade-context decision detected', {
         hasData: fs.existsSync(dataPath) || fs.existsSync(legacyDataPath),
+        hasWilyTrader: fs.existsSync(wilyTraderPath) || fs.existsSync(legacyWilyTraderPath) || fs.existsSync(priorBrandPath) || fs.existsSync(legacyPriorBrandPath),
         skipped: fs.existsSync(skipPath) || fs.existsSync(legacySkipPath),
       });
       return;
@@ -2433,45 +2443,133 @@ function formatMc(mc: number): string {
 function loadMockApeTrades(sessionDir: string): MockApeTrade[] | null {
   const mockApePath = getTradeInputPath(sessionDir, 'mockape.json');
   const legacyMockApePath = path.join(sessionDir, 'mockape.json');
-  const actualPath = fs.existsSync(mockApePath) ? mockApePath : legacyMockApePath;
-  if (!fs.existsSync(actualPath)) return null;
+  const wilyTraderPath = getTradeInputPath(sessionDir, 'wilytrader.json');
+  const priorBrandFileName = ['wily', 'mem', 'trader.json'].join('');
+  const priorBrandPath = getTradeInputPath(sessionDir, priorBrandFileName);
+  const legacyWilyTraderPath = path.join(sessionDir, 'wilytrader.json');
+  const legacyPriorBrandPath = path.join(sessionDir, priorBrandFileName);
+  const actualMockApePath = fs.existsSync(mockApePath) ? mockApePath : legacyMockApePath;
+  if (fs.existsSync(actualMockApePath)) {
+    return loadMockApeArrayFile(actualMockApePath, 'mockape.json');
+  }
+
+  const actualWilyTraderPath =
+    fs.existsSync(wilyTraderPath) ? wilyTraderPath :
+    fs.existsSync(priorBrandPath) ? priorBrandPath :
+    fs.existsSync(legacyWilyTraderPath) ? legacyWilyTraderPath :
+    legacyPriorBrandPath;
+  if (!fs.existsSync(actualWilyTraderPath)) return null;
+  try {
+    const raw = fs.readFileSync(actualWilyTraderPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const trades = normalizeWilyTraderTrades(parsed);
+    log('trade-pipeline', 'wilytrader.json loaded', {
+      entries: trades.length,
+      wilyTraderPath: actualWilyTraderPath,
+    });
+    return trades.length > 0 ? trades : null;
+  } catch (err) {
+    log('trade-pipeline', 'wilytrader.json parse fail', { err: (err as Error).message });
+    return null;
+  }
+}
+
+function loadMockApeArrayFile(actualPath: string, label: string): MockApeTrade[] | null {
   try {
     const raw = fs.readFileSync(actualPath, 'utf-8');
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) {
-      log('trade-pipeline', 'mockape.json not an array, skipping join');
+      log('trade-pipeline', `${label} not an array, skipping join`);
       return null;
     }
-    // Best-effort schema validation; skip entries missing required fields.
-    const trades: MockApeTrade[] = [];
-    for (const e of arr) {
-      if (
-        typeof e?.tokenName === 'string' &&
-        typeof e?.timestamp === 'number' &&
-        typeof e?.entryMarketCap === 'number' &&
-        typeof e?.exitMarketCap === 'number'
-      ) {
-        trades.push({
-          chain: typeof e.chain === 'string' ? e.chain : '',
-          entryMarketCap: e.entryMarketCap,
-          exitMarketCap: e.exitMarketCap,
-          id: typeof e.id === 'string' ? e.id : '',
-          platform: typeof e.platform === 'string' ? e.platform : '',
-          pnlPercentage: typeof e.pnlPercentage === 'number' ? e.pnlPercentage : 0,
-          pnlSol: typeof e.pnlSol === 'number' ? e.pnlSol : 0,
-          solInvested: typeof e.solInvested === 'number' ? e.solInvested : 0,
-          solReceived: typeof e.solReceived === 'number' ? e.solReceived : 0,
-          timestamp: e.timestamp,
-          tokenName: e.tokenName,
-        });
-      }
-    }
-    log('trade-pipeline', 'mockape.json loaded', { entries: trades.length, mockApePath: actualPath });
+    const trades = normalizeMockApeTradeArray(arr);
+    log('trade-pipeline', `${label} loaded`, { entries: trades.length, mockApePath: actualPath });
     return trades;
   } catch (err) {
-    log('trade-pipeline', 'mockape.json parse fail', { err: (err as Error).message });
+    log('trade-pipeline', `${label} parse fail`, { err: (err as Error).message });
     return null;
   }
+}
+
+function normalizeWilyTraderTrades(parsed: unknown): MockApeTrade[] {
+  const root = unwrapWilyTraderPayload(parsed);
+  if (!root || typeof root !== 'object') return [];
+  const record = root as Record<string, unknown>;
+  if (Array.isArray(record.mockapeCompatibleTrades)) {
+    return normalizeMockApeTradeArray(record.mockapeCompatibleTrades);
+  }
+  const positions = Array.isArray(record.closedPositions)
+    ? record.closedPositions
+    : Array.isArray(record.positions)
+      ? record.positions.filter((p) => (p as Record<string, unknown>)?.status === 'closed')
+      : [];
+  const trades: MockApeTrade[] = [];
+  for (const p of positions) {
+    if (!p || typeof p !== 'object') continue;
+    const pos = p as Record<string, unknown>;
+    const tokenName = typeof pos.tokenName === 'string' ? pos.tokenName : '';
+    const finalExitAt = typeof pos.finalExitAt === 'string' ? pos.finalExitAt : '';
+    const timestamp = Date.parse(finalExitAt);
+    const entryMarketCap = numberOrNull(pos.entryMarketCapVwapUsd);
+    const exitMarketCap = numberOrNull(pos.exitMarketCapVwapUsd);
+    if (!tokenName || !Number.isFinite(timestamp) || entryMarketCap === null || exitMarketCap === null) continue;
+    trades.push({
+      chain: typeof pos.chain === 'string' ? pos.chain : '',
+      entryMarketCap,
+      exitMarketCap,
+      id: typeof pos.id === 'string' ? pos.id : `wilytrader-${timestamp}-${tokenName}`,
+      platform: typeof pos.platform === 'string' ? pos.platform : 'padre',
+      pnlPercentage: numberOrZero(pos.pnlPct),
+      pnlSol: numberOrZero(pos.pnlPostFeeNative),
+      solInvested: numberOrZero(pos.investedNative) + numberOrZero(pos.buyFeesNative),
+      solReceived: numberOrZero(pos.netReceivedNative),
+      timestamp,
+      tokenName,
+    });
+  }
+  return trades;
+}
+
+function unwrapWilyTraderPayload(parsed: unknown): unknown {
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  const record = parsed as Record<string, unknown>;
+  return record.payload && typeof record.payload === 'object' ? record.payload : parsed;
+}
+
+function normalizeMockApeTradeArray(arr: unknown[]): MockApeTrade[] {
+  const trades: MockApeTrade[] = [];
+  for (const e of arr) {
+    if (!e || typeof e !== 'object') continue;
+    const row = e as Record<string, unknown>;
+    const tokenName = typeof row.tokenName === 'string' ? row.tokenName : '';
+    const timestamp = numberOrNull(row.timestamp);
+    const entryMarketCap = numberOrNull(row.entryMarketCap);
+    const exitMarketCap = numberOrNull(row.exitMarketCap);
+    if (!tokenName || timestamp === null || entryMarketCap === null || exitMarketCap === null) continue;
+    trades.push({
+      chain: typeof row.chain === 'string' ? row.chain : '',
+      entryMarketCap,
+      exitMarketCap,
+      id: typeof row.id === 'string' ? row.id : '',
+      platform: typeof row.platform === 'string' ? row.platform : '',
+      pnlPercentage: numberOrZero(row.pnlPercentage),
+      pnlSol: numberOrZero(row.pnlSol),
+      solInvested: numberOrZero(row.solInvested),
+      solReceived: numberOrZero(row.solReceived),
+      timestamp,
+      tokenName,
+    });
+  }
+  return trades;
+}
+
+function numberOrNull(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function numberOrZero(value: unknown): number {
+  return numberOrNull(value) ?? 0;
 }
 
 /**

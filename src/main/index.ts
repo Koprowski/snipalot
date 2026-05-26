@@ -39,6 +39,8 @@ import type { MicDiagnosticsPayload } from '../shared/mic-diagnostics';
 import { resolveGeminiCliExecutable } from './gemini-cli-exec';
 import { writeSessionLog } from './session-log';
 import type { SessionLogStatus } from './session-log';
+import { startWilyTraderBridge, stopWilyTraderBridge } from './wilytrader-bridge';
+import type { WilyTraderExecutionEvent } from './wilytrader-bridge';
 
 const isDev = process.argv.includes('--dev');
 const isSpikeM1 = process.argv.includes('--spike=m1');
@@ -1715,6 +1717,17 @@ let pendingTradeContext: {
   recordingStartedAtMs: number;
   durationMs: number;
 } | null = null;
+
+function hasWilyTraderLedger(sessionDir: string): boolean {
+  const priorBrandFileName = ['wily', 'mem', 'trader.json'].join('');
+  return (
+    fs.existsSync(path.join(sessionDir, 'Inputs', 'wilytrader.json')) ||
+    fs.existsSync(path.join(sessionDir, 'wilytrader.json')) ||
+    fs.existsSync(path.join(sessionDir, 'Inputs', priorBrandFileName)) ||
+    fs.existsSync(path.join(sessionDir, priorBrandFileName))
+  );
+}
+
 function openAnnotator(): void {
   if (annotatorWindow && !annotatorWindow.isDestroyed()) {
     annotatorWindow.focus();
@@ -4834,6 +4847,14 @@ function stopRecording(reason: string): void {
       mode: pendingProcessing.mode,
       tradeMarkers: pendingProcessing.tradeMarkers.length,
     }, 'start');
+    if (currentSessionMode === 'trade' && liveSessionDir !== null) {
+      startWilyTraderBridge({
+        sessionDir: liveSessionDir,
+        startedAtMs: recordingStartedAt,
+        durationMs: pendingProcessing.durationMs,
+        captureTradeScreenshot: captureWilyTraderTradeScreenshot,
+      });
+    }
     setSessionStatus(liveSessionDir, 'processing', {
       mode: pendingProcessing.mode,
       stage: 'waiting for recorder save-webm',
@@ -4851,7 +4872,8 @@ function stopRecording(reason: string): void {
     if (
       currentSessionMode === 'trade' &&
       liveSessionDir !== null &&
-      getConfig().trade.autoPromptForTradeData
+      getConfig().trade.autoPromptForTradeData &&
+      !hasWilyTraderLedger(liveSessionDir)
     ) {
       openTradeContextWindow(
         liveSessionDir,
@@ -5378,6 +5400,9 @@ ipcMain.handle(
           );
         }
         activeProcessingRun = null;
+        if ((run?.mode ?? snap?.mode) === 'trade') {
+          stopWilyTraderBridge('trade pipeline complete');
+        }
         writeSessionLog(result.sessionDir, 'pipeline', 'complete', {
           warnings: result.warnings.length,
           frameCount: result.framePaths.length,
@@ -5424,6 +5449,9 @@ ipcMain.handle(
           false
         );
         activeProcessingRun = null;
+        if ((run?.mode ?? snap?.mode) === 'trade') {
+          stopWilyTraderBridge('trade pipeline failed');
+        }
         updateActiveSessionStatus('failed', {
           stage: 'pipeline failed',
           error: msg,
@@ -5638,6 +5666,16 @@ ipcMain.handle(
         displayId: activeDisplayId,
         sourceId: activeSourceId,
       }, 'start');
+      if (currentSessionMode === 'trade') {
+        startWilyTraderBridge({
+          sessionDir: liveSessionDir,
+          startedAtMs: recordingStartedAt,
+          durationMs: null,
+          captureTradeScreenshot: captureWilyTraderTradeScreenshot,
+        });
+      } else {
+        stopWilyTraderBridge('non-trade recording started');
+      }
       flushPendingRecorderLifecycle(liveSessionDir);
       startIncrementalTranscriptionSession(liveSessionDir, currentSessionMode);
 
@@ -5847,6 +5885,87 @@ async function runSnapshot(): Promise<void> {
 
 ipcMain.handle('hud:snap', () => doSnapshot());
 ipcMain.handle('hud:trade-marker', () => doTradeMarker());
+
+function captureWilyTraderTradeScreenshot(event: WilyTraderExecutionEvent): Promise<string | null> {
+  let screenshotPath: string | null = null;
+  snapshotChain = snapshotChain
+    .then(async () => {
+      screenshotPath = await runWilyTraderTradeScreenshot(event);
+    })
+    .catch((err) => {
+      log('wilytrader', 'trade screenshot chain error', {
+        err: (err as Error).message,
+        executionId: event.executionId,
+      });
+      screenshotPath = null;
+    });
+  return snapshotChain.then(() => screenshotPath);
+}
+
+async function runWilyTraderTradeScreenshot(event: WilyTraderExecutionEvent): Promise<string | null> {
+  if (
+    appState !== 'recording' ||
+    currentSessionMode !== 'trade' ||
+    recordingStartedAt === null ||
+    !recorderWindow ||
+    !liveSessionDir
+  ) {
+    log('wilytrader', 'trade screenshot ignored (not in active trade recording)', {
+      appState,
+      currentSessionMode,
+      executionId: event.executionId,
+    });
+    return null;
+  }
+
+  const offsetMs = Math.max(0, Date.now() - recordingStartedAt - totalPausedMs);
+  const screenshotDir = path.join(liveSessionDir, 'Inputs', 'wilytrader-screenshots');
+  if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const side = sanitizeFilePart(event.side || 'trade');
+  const executionId = sanitizeFilePart(event.executionId).slice(0, 80);
+  const screenshotPath = path.join(screenshotDir, `${timestamp}-${side}-${executionId}.png`);
+
+  const buffer = await new Promise<ArrayBuffer | null>((resolve) => {
+    ipcMain.once('recorder:snap-result', (_evt, buf: ArrayBuffer | null) => resolve(buf));
+    recorderWindow!.webContents.send('recorder:snap');
+  });
+  if (!buffer) {
+    log('wilytrader', 'trade screenshot failed: no buffer from renderer', {
+      executionId: event.executionId,
+      offsetMs,
+    });
+    writeSessionLog(liveSessionDir, 'wilytrader', 'trade screenshot failed', {
+      executionId: event.executionId,
+      side: event.side ?? null,
+      offsetMs,
+    }, 'warning');
+    return null;
+  }
+
+  fs.writeFileSync(screenshotPath, Buffer.from(buffer));
+  log('wilytrader', 'trade screenshot saved', {
+    screenshotPath,
+    bytes: buffer.byteLength,
+    executionId: event.executionId,
+    side: event.side ?? null,
+    offsetMs,
+  });
+  writeSessionLog(liveSessionDir, 'wilytrader', 'trade screenshot saved', {
+    screenshotPath,
+    bytes: buffer.byteLength,
+    executionId: event.executionId,
+    side: event.side ?? null,
+    offsetMs,
+    offsetLabel: formatMs(offsetMs),
+  }, 'success');
+  return screenshotPath;
+}
+
+function sanitizeFilePart(value: string): string {
+  const cleaned = value.trim().replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '');
+  return cleaned || 'trade';
+}
 
 function doTradeMarker(): Promise<void> {
   snapshotChain = snapshotChain
@@ -6281,6 +6400,7 @@ app.on('will-quit', () => {
     quitCleanupRan = true;
     killSiblingSnipalotElectronProcesses();
   }
+  stopWilyTraderBridge('app will quit');
   globalShortcut.unregisterAll();
   destroyTray();
   log('main', 'will-quit', { appState, appExitRequested });

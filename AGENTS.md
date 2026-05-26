@@ -99,6 +99,11 @@ Agent behavior:
 
 - When updating Mission Control from another repo, preserve unrelated local work
   in both repos.
+- Before pushing substantive Codex-authored repo changes, make sure there is a
+  durable trace target: GitHub issue/PR, Mission Control WBS/briefing/logbook,
+  repo-local handoff note, OpenBrain capture, or an explicit digest-only note.
+  Use `E:\Apps\mission-control\resources\repo-change-traceability.md` for the
+  routing decision.
 - After any significant code change or fix in this repo, update `AGENTS.md`
   with the outcome, verification, and any follow-up issues so future agents do
   not have to reconstruct the context from chat history.

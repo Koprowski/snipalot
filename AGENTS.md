@@ -123,7 +123,7 @@ Agent behavior:
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).
 - **Config:** `%USERPROFILE%\.snipalot\config.json`; defaults in `src/main/config.ts`.
 
-## Recent improvements (v1.0.1 onward; current release v1.0.71)
+## Recent improvements (v1.0.1 onward; current release v1.1.1)
 
 - **Fullscreen + screen share:** Before `getDisplayMedia`, main **lowers overlay alwaysOnTop** so Windows’ “what to share” dialog is not hidden behind the Snipalot overlay; then restores `screen-saver` level.
 - **Recorder logs in snipalot.log:** Recorder renderer lines are forwarded to main **`log('recorder', …)`** so `%APPDATA%\\Snipalot\\logs\\snipalot.log` shows `getDisplayMedia` progress without `--debug`.
@@ -611,6 +611,10 @@ Agent behavior:
  - Root cause found for intermittent region-select / drawing weirdness: Windows display-change events rebuilt all overlay windows immediately and `rebuildOverlays()` cleared the overlay map even if a close was prevented during active selection, which could orphan transparent overlay windows.
  - Display-change overlay rebuilds are now debounced; active region selection is cleanly cancelled before rebuild; rebuilds defer during recording/processing. Overlay renderer console/load/preload/crash diagnostics now land in `snipalot.log`.
  - Validation: `npm run build` and `npm test`.
+- **v1.1.1 release build:**
+ - Bumped Snipalot from `1.1.0` to `1.1.1` after overlay rebuild, WilyTrader bridge, trade-log label, and master trade-sync compatibility fixes.
+ - `npm test` passed, and the light NSIS installer built at `release/Snipalot-1.1.1-setup.exe` with `npm run package:nopublish -- --config.win.signAndEditExecutable=false` due the known local `winCodeSign` symlink privilege issue.
+ - SHA256: `00BD4263DF45C22E9F648B84B8512F95B201A49228A741BE80B5DCE43681B480`.
 
 ## Packaged app logs
 

@@ -60,6 +60,7 @@ export interface TradeEvent {
    *  'medium' = token match but loose time, 'low' = fuzzy token. */
   mockape_join_confidence?: 'high' | 'medium' | 'low' | null;
   mockape_timestamp_ms?: number | null;
+  entry_timestamp_ms?: number | null;
   entry_mc_actual?: number | null;
   exit_mc_actual?: number | null;
   sol_invested?: number | null;
@@ -142,6 +143,11 @@ export interface MockApeTrade {
   solReceived: number;
   /** Unix epoch ms â€” matches Date.now() output. */
   timestamp: number;
+  /** Unix epoch ms for the first buy/entry, when the source ledger provides it. */
+  entryTimestamp?: number | null;
+  /** Original token contract/mint address, used only to avoid address-like labels. */
+  tokenAddress?: string | null;
+  timeInTradeSeconds?: number | null;
   tokenName: string;
 }
 
@@ -1144,13 +1150,18 @@ function renderExtractionPrompt(
     lines.push('recording start. Use this list as the SOURCE OF TRUTH and find');
     lines.push('the spoken context (transcript window around that M:SS) that');
     lines.push('matches each trade.');
+    lines.push('When an actual entry timestamp is listed, use that as the entry time;');
+    lines.push('do not infer entry time from transcript distance.');
     lines.push('');
     sorted.forEach((t, i) => {
       const offsetMs = t.timestamp - recordingStartedAtMs;
       const offsetLabel = offsetMs >= 0 ? formatOffset(offsetMs) : '(before recording)';
+      const entryOffsetMs = t.entryTimestamp === null || t.entryTimestamp === undefined ? null : t.entryTimestamp - recordingStartedAtMs;
+      const entryOffsetLabel = entryOffsetMs === null ? null : entryOffsetMs >= 0 ? formatOffset(entryOffsetMs) : '(before recording)';
       const pnlSign = t.pnlSol >= 0 ? '+' : '';
+      const entryText = entryOffsetLabel ? ` · actual entry **${entryOffsetLabel}**` : '';
       lines.push(
-        `${i + 1}. **${t.tokenName}** Â· entry $${formatMcInline(t.entryMarketCap)} â†’ exit $${formatMcInline(t.exitMarketCap)} Â· ${pnlSign}${t.pnlSol.toFixed(4)} SOL (${pnlSign}${t.pnlPercentage.toFixed(2)}%) Â· fired at **${offsetLabel}** in session Â· trade_id=${t.id}`
+        `${i + 1}. **${t.tokenName}** Â· entry $${formatMcInline(t.entryMarketCap)} â†’ exit $${formatMcInline(t.exitMarketCap)} Â· ${pnlSign}${t.pnlSol.toFixed(4)} SOL (${pnlSign}${t.pnlPercentage.toFixed(2)}%)${entryText} Â· fired at **${offsetLabel}** in session Â· trade_id=${t.id}`
       );
     });
     lines.push('');
@@ -1223,6 +1234,7 @@ Use null for any field the transcript / data genuinely doesn't speak to.
     "trade_id": <SEQUENTIAL_INT_STARTING_AT_1>,
     "token_name": "<TOKEN_NAME_FROM_MOCKAPE_LIST_ABOVE>",
     "mockape_trade_id": ${hasMockape ? '"<EXACT_TRADE_ID_FROM_MOCKAPE_LIST_ABOVE>"' : 'null'},
+    "entry_timestamp_ms": <ACTUAL_ENTRY_EPOCH_MS_FROM_TRADE_LIST_OR_NULL>,
     "leg_index": <INT_OR_NULL>,
     "leg_count": <INT_OR_NULL>,
     "position_fraction": <NUMBER_0_TO_1_OR_NULL>,
@@ -1261,6 +1273,7 @@ Use null for any field the transcript / data genuinely doesn't speak to.
 Rules:
 - Market cap values are integers in dollars ("80k" â†’ 80000, "1.2m" â†’ 1200000).
 - ${hasMockape ? 'mockape_trade_id MUST match the trade_id from the MockApe list above for matched trades. Use null for spoken-only musings with no actual trade.' : 'mockape_trade_id should be null (no MockApe data was provided this session).'}
+- If the MockApe / Padre list includes an actual entry timestamp, copy it into entry_timestamp_ms for the matched trade.
 - pre_call_offset_label / pre_call_offset_ms = where in the recording (M:SS
   + same value in ms) the trader spoke the prediction.
 - post_call_offset_label / post_call_offset_ms = where the trader spoke
@@ -1641,6 +1654,7 @@ function parseAndValidateResponse(raw: string): TradeEvent[] {
       // and just enriches with PnL from the matching trade.
       mockape_trade_id: strOrNull(e.mockape_trade_id),
       mockape_timestamp_ms: numOrNull(e.mockape_timestamp_ms),
+      entry_timestamp_ms: numOrNull(e.entry_timestamp_ms),
     });
   }
   return out;
@@ -1954,14 +1968,19 @@ function buildTradeTimeline(
   const entryCommentary = dateFromOffset(recordingStartedAtMs, trade.pre_call_offset_ms);
   const exitCommentary = dateFromOffset(recordingStartedAtMs, trade.post_call_offset_ms);
   const exitActual = trade.mockape_timestamp_ms ? new Date(trade.mockape_timestamp_ms) : null;
-  const timeInTradeSeconds = getTimeInTradeSeconds(trade);
+  const entryActual = trade.entry_timestamp_ms ? new Date(trade.entry_timestamp_ms) : null;
+  const timeInTradeSeconds =
+    entryActual && exitActual
+      ? Math.max(0, Math.round((exitActual.getTime() - entryActual.getTime()) / 1000))
+      : getTimeInTradeSeconds(trade);
   const entryInferred =
-    exitActual && timeInTradeSeconds !== null
+    entryActual ??
+    (exitActual && timeInTradeSeconds !== null
       ? new Date(exitActual.getTime() - timeInTradeSeconds * 1000)
-      : null;
+      : null);
 
   return {
-    tradeDate: exitActual ?? videoStart,
+    tradeDate: entryActual ?? exitActual ?? videoStart,
     videoStart,
     videoEnd,
     entryCommentary,
@@ -2470,7 +2489,7 @@ function loadMockApeTrades(sessionDir: string): MockApeTrade[] | null {
   try {
     const raw = fs.readFileSync(actualWilyTraderPath, 'utf-8');
     const parsed = JSON.parse(raw);
-    const trades = normalizeWilyTraderTrades(parsed);
+    const trades = normalizeWilyTraderTrades(parsed, loadWilyTraderExecutionsSnapshot(sessionDir));
     log('trade-pipeline', 'wilytrader.json loaded', {
       entries: trades.length,
       wilyTraderPath: actualWilyTraderPath,
@@ -2478,6 +2497,18 @@ function loadMockApeTrades(sessionDir: string): MockApeTrade[] | null {
     return trades.length > 0 ? trades : null;
   } catch (err) {
     log('trade-pipeline', 'wilytrader.json parse fail', { err: (err as Error).message });
+    return null;
+  }
+}
+
+function loadWilyTraderExecutionsSnapshot(sessionDir: string): unknown[] | null {
+  const snapshotPath = path.join(sessionDir, 'Inputs', 'wilytrader', 'executions.json');
+  if (!fs.existsSync(snapshotPath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(snapshotPath, 'utf-8'));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (err) {
+    log('trade-pipeline', 'wilytrader executions snapshot parse fail', { err: (err as Error).message });
     return null;
   }
 }
@@ -2499,13 +2530,11 @@ function loadMockApeArrayFile(actualPath: string, label: string): MockApeTrade[]
   }
 }
 
-function normalizeWilyTraderTrades(parsed: unknown): MockApeTrade[] {
+function normalizeWilyTraderTrades(parsed: unknown, sidecarExecutions: unknown[] | null = null): MockApeTrade[] {
   const root = unwrapWilyTraderPayload(parsed);
   if (!root || typeof root !== 'object') return [];
   const record = root as Record<string, unknown>;
-  if (Array.isArray(record.mockapeCompatibleTrades)) {
-    return normalizeMockApeTradeArray(record.mockapeCompatibleTrades);
-  }
+  const executions = getWilyTraderExecutions(record, sidecarExecutions);
   const positions = Array.isArray(record.closedPositions)
     ? record.closedPositions
     : Array.isArray(record.positions)
@@ -2515,12 +2544,14 @@ function normalizeWilyTraderTrades(parsed: unknown): MockApeTrade[] {
   for (const p of positions) {
     if (!p || typeof p !== 'object') continue;
     const pos = p as Record<string, unknown>;
-    const tokenName = typeof pos.tokenName === 'string' ? pos.tokenName : '';
-    const finalExitAt = typeof pos.finalExitAt === 'string' ? pos.finalExitAt : '';
-    const timestamp = Date.parse(finalExitAt);
+    const tokenAddress = strOrNull(pos.tokenAddress);
+    const positionExecutions = filterWilyTraderPositionExecutions(pos, executions);
+    const tokenName = chooseWilyTraderTokenName(pos, record, positionExecutions, tokenAddress);
+    const timestamp = parseTimestampMs(pos.finalExitAt);
+    const entryTimestamp = parseTimestampMs(pos.firstEntryAt) ?? findFirstBuyTimestampMs(positionExecutions);
     const entryMarketCap = numberOrNull(pos.entryMarketCapVwapUsd);
     const exitMarketCap = numberOrNull(pos.exitMarketCapVwapUsd);
-    if (!tokenName || !Number.isFinite(timestamp) || entryMarketCap === null || exitMarketCap === null) continue;
+    if (!tokenName || timestamp === null || entryMarketCap === null || exitMarketCap === null) continue;
     trades.push({
       chain: typeof pos.chain === 'string' ? pos.chain : '',
       entryMarketCap,
@@ -2532,10 +2563,17 @@ function normalizeWilyTraderTrades(parsed: unknown): MockApeTrade[] {
       solInvested: numberOrZero(pos.investedNative) + numberOrZero(pos.buyFeesNative),
       solReceived: numberOrZero(pos.netReceivedNative),
       timestamp,
+      entryTimestamp,
+      tokenAddress,
+      timeInTradeSeconds: numberOrNull(pos.timeInTradeSeconds),
       tokenName,
     });
   }
-  return trades;
+  if (trades.length > 0) return trades;
+  if (Array.isArray(record.mockapeCompatibleTrades)) {
+    return normalizeMockApeTradeArray(record.mockapeCompatibleTrades);
+  }
+  return [];
 }
 
 function unwrapWilyTraderPayload(parsed: unknown): unknown {
@@ -2551,6 +2589,11 @@ function normalizeMockApeTradeArray(arr: unknown[]): MockApeTrade[] {
     const row = e as Record<string, unknown>;
     const tokenName = typeof row.tokenName === 'string' ? row.tokenName : '';
     const timestamp = numberOrNull(row.timestamp);
+    const entryTimestamp =
+      numberOrNull(row.entryTimestamp) ??
+      numberOrNull(row.entryTimestampMs) ??
+      parseTimestampMs(row.firstEntryAt) ??
+      parseTimestampMs(row.entryAt);
     const entryMarketCap = numberOrNull(row.entryMarketCap);
     const exitMarketCap = numberOrNull(row.exitMarketCap);
     if (!tokenName || timestamp === null || entryMarketCap === null || exitMarketCap === null) continue;
@@ -2565,10 +2608,72 @@ function normalizeMockApeTradeArray(arr: unknown[]): MockApeTrade[] {
       solInvested: numberOrZero(row.solInvested),
       solReceived: numberOrZero(row.solReceived),
       timestamp,
+      entryTimestamp,
+      tokenAddress: strOrNull(row.tokenAddress),
+      timeInTradeSeconds: numberOrNull(row.timeInTradeSeconds),
       tokenName,
     });
   }
   return trades;
+}
+
+function getWilyTraderExecutions(record: Record<string, unknown>, sidecarExecutions: unknown[] | null): Record<string, unknown>[] {
+  const source = Array.isArray(record.executions) ? record.executions : sidecarExecutions;
+  return (source ?? []).filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
+}
+
+function filterWilyTraderPositionExecutions(
+  pos: Record<string, unknown>,
+  executions: Record<string, unknown>[]
+): Record<string, unknown>[] {
+  const positionId = strOrNull(pos.id);
+  const tokenAddress = strOrNull(pos.tokenAddress);
+  const executionIds = new Set(
+    Array.isArray(pos.executionIds) ? pos.executionIds.filter((id): id is string => typeof id === 'string') : []
+  );
+  return executions
+    .filter((execution) => {
+      if (executionIds.size > 0 && executionIds.has(strOrNull(execution.id) ?? '')) return true;
+      if (positionId && strOrNull(execution.positionId) === positionId) return true;
+      if (tokenAddress && strOrNull(execution.tokenAddress) === tokenAddress) return true;
+      return false;
+    })
+    .sort((a, b) => (parseTimestampMs(a.timestampMs ?? a.timestamp) ?? 0) - (parseTimestampMs(b.timestampMs ?? b.timestamp) ?? 0));
+}
+
+function findFirstBuyTimestampMs(executions: Record<string, unknown>[]): number | null {
+  const buy = executions.find((execution) => strOrNull(execution.side)?.toLowerCase() === 'buy');
+  return buy ? parseTimestampMs(buy.timestampMs ?? buy.timestamp) : null;
+}
+
+function chooseWilyTraderTokenName(
+  pos: Record<string, unknown>,
+  record: Record<string, unknown>,
+  executions: Record<string, unknown>[],
+  tokenAddress: string | null
+): string {
+  const candidates: Array<string | null> = [
+    strOrNull(pos.tokenName),
+    getMatchingActiveTokenName(record, tokenAddress),
+    ...executions.map((execution) => strOrNull(execution.tokenName)),
+  ];
+  return candidates.find((name) => name && !isAddressLikeTokenLabel(name, tokenAddress)) ?? candidates.find(Boolean) ?? '';
+}
+
+function getMatchingActiveTokenName(record: Record<string, unknown>, tokenAddress: string | null): string | null {
+  const activeToken = record.activeToken;
+  if (!activeToken || typeof activeToken !== 'object') return null;
+  const active = activeToken as Record<string, unknown>;
+  const activeAddress = strOrNull(active.address);
+  if (tokenAddress && activeAddress && activeAddress !== tokenAddress) return null;
+  return strOrNull(active.name);
+}
+
+function parseTimestampMs(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -2648,6 +2753,12 @@ function enrichTradeFromMockape(
   trade.mockape_trade_id = m.id;
   trade.mockape_join_confidence = confidence;
   trade.mockape_timestamp_ms = m.timestamp;
+  trade.entry_timestamp_ms = m.entryTimestamp ?? trade.entry_timestamp_ms ?? null;
+  if (!isAddressLikeTokenLabel(m.tokenName, m.tokenAddress)) {
+    trade.token_name = m.tokenName;
+  } else if (isAddressLikeTokenLabel(trade.token_name, m.tokenAddress)) {
+    trade.token_name = m.tokenName;
+  }
   trade.entry_mc_actual = m.entryMarketCap;
   trade.exit_mc_actual = m.exitMarketCap;
   trade.sol_invested = roundTo(m.solInvested * share, 6);
@@ -2679,6 +2790,18 @@ function normalizeTradeShares(trades: TradeEvent[]): number[] {
 function roundTo(value: number, decimals: number): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
+}
+
+function isAddressLikeTokenLabel(label: string | null | undefined, tokenAddress?: string | null): boolean {
+  const value = String(label || '').trim();
+  if (!value) return true;
+  const compact = value.replace(/\s+/g, '');
+  const address = String(tokenAddress || '').trim();
+  if (address && compact.toLowerCase() === address.toLowerCase()) return true;
+  if (address && compact === `${address.slice(0, 6)}...${address.slice(-4)}`) return true;
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(compact)) return true;
+  if (/^0x[a-f0-9]{40}$/i.test(compact)) return true;
+  return /^[1-9A-HJ-NP-Za-km-z]{4,12}\.\.\.[1-9A-HJ-NP-Za-km-z]{4,12}$/.test(compact);
 }
 
 /**

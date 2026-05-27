@@ -77,11 +77,18 @@ Var pid
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk"
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Electron.lnk"
   Delete "$QUICKLAUNCH\User Pinned\TaskBar\Electron.lnk"
+  CreateShortCut "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\resources\resources\icons\app.ico" 0 "" "" "${APP_DESCRIPTION}"
+  ClearErrors
+  WinShell::SetLnkAUMI "$APPDATA\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk" "${APP_ID}"
+
+  !ifdef INSTALL_MODE_PER_ALL_USERS
   SetShellVarContext all
+  Delete "$SMPROGRAMS\Snipalot.lnk"
   Delete "$SMPROGRAMS\Electron.lnk"
   CreateShortCut "$SMPROGRAMS\Snipalot.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\resources\resources\icons\app.ico" 0 "" "" "${APP_DESCRIPTION}"
   ClearErrors
   WinShell::SetLnkAUMI "$SMPROGRAMS\Snipalot.lnk" "${APP_ID}"
+  !endif
 
   ; If Snipalot was pinned while the app still exposed Electron's default
   ; identity/icon, Windows can keep showing that stale taskbar metadata across
@@ -103,7 +110,9 @@ Var pid
   Delete "$APPDATA\Microsoft\Windows\Start Menu\Programs\Electron.lnk"
   Delete "$QUICKLAUNCH\User Pinned\TaskBar\Snipalot.lnk"
   Delete "$QUICKLAUNCH\User Pinned\TaskBar\Electron.lnk"
+  !ifdef INSTALL_MODE_PER_ALL_USERS
   SetShellVarContext all
   Delete "$SMPROGRAMS\Electron.lnk"
   Delete "$SMPROGRAMS\Snipalot.lnk"
+  !endif
 !macroend

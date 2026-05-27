@@ -657,6 +657,17 @@ Agent behavior:
  - Default light/full packaging now leaves executable resource editing enabled and runs `scripts/assert-windows-icon.mjs` after packaging. The assertion compares the packaged `release/win-unpacked/Snipalot.exe` associated icon against `resources/icons/app.ico` and fails the package if they differ.
  - `tests/windows-icon-invariant.test.mjs` guards against reintroducing `signAndEditExecutable: false` in release configs and verifies normal package scripts run the icon assertion. `package:unsafe-no-icon-edit` is the explicit local-only escape hatch for the known `winCodeSign` symlink privilege failure and should not be used for release/install acceptance.
  - Validation: `npm test` passed. `npm run assert-windows-icon` correctly failed against the existing bad local artifact, and `npm run package:nopublish` failed earlier at `winCodeSign` cache extraction (`Cannot create symbolic link`), confirming this machine needs elevated/Developer Mode or CI for icon-correct packages.
+- **Trade log actual entry time + token labels (local branch):**
+ - Snipalot now carries WilyTrader `firstEntryAt` / first buy execution timestamps into generated trade rows as `entry_timestamp_ms`; the existing visible `entry_time_actual` column position remains schema-compatible, but it now uses the source ledger timestamp before falling back to transcript-derived inference.
+ - WilyTrader-derived rows prefer real token display names over address-like labels. Snipalot preserves a non-address LLM token name if the source label is only a shortened mint address, and WilyTrader now includes entry timestamp, token address, and time-in-trade fields in `mockapeCompatibleTrades`.
+ - Axiom token-name detection in WilyTrader now reads chart/header text such as `Save Snuggles/USD on Pump V1` before falling back to shortened addresses, so future Snipalot logs should show names like `Save Snuggles` instead of `7MoWsa...QAFB`.
+ - Validation: `npm test` passed in Snipalot; `node --check E:\Apps\wilytrader\extension\src\content.js` passed.
+- **Start Menu search regression repair (local branch):**
+ - The installed machine had a valid all-users `C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Snipalot.lnk`, but also a stale per-user `Electron.lnk` targeting `C:\Program Files\Snipalot\Snipalot.exe`, which can confuse Windows Search/taskbar identity.
+ - Light/full `electron-builder` configs now disable built-in Start Menu shortcut creation; `resources/installer.nsh` owns shortcut creation explicitly, deletes stale `Electron.lnk`, and creates canonical current-user plus all-users `Snipalot.lnk` entries with the Snipalot icon and `app.snipalot` AppUserModelID.
+ - Current machine remediation performed: removed `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Electron.lnk` and copied the canonical all-users `Snipalot.lnk` into the current-user Start Menu. Search indexing may still need a short Windows refresh delay.
+ - Validation: `npm test` passed, including installer shortcut guards.
+- **Version bump:** `package.json` bumped to `1.1.14` for the trade-log and Start Menu shortcut fixes above.
 
 ## Packaged app logs
 

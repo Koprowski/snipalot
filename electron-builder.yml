@@ -33,7 +33,9 @@ nsis:
   oneClick: false
   perMachine: true
   allowToChangeInstallationDirectory: true
-  createStartMenuShortcut: true
+  # resources/installer.nsh creates Start Menu shortcuts explicitly so stale
+  # Electron.lnk entries cannot be recreated by electron-builder's shortcut path.
+  createStartMenuShortcut: false
   shortcutName: Snipalot
   runAfterFinish: true
   warningsAsErrors: false

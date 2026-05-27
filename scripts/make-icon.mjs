@@ -67,6 +67,35 @@ function makePng(size, pixel) {
   ]);
 }
 
+function makeIcoBitmap(size, pixel) {
+  const xorStride = size * 4;
+  const xor = Buffer.alloc(xorStride * size);
+  for (let y = 0; y < size; y++) {
+    const sourceY = size - 1 - y;
+    for (let x = 0; x < size; x++) {
+      const [r, g, b, a] = pixel(x, sourceY, size);
+      const i = y * xorStride + x * 4;
+      xor[i] = b;
+      xor[i + 1] = g;
+      xor[i + 2] = r;
+      xor[i + 3] = a;
+    }
+  }
+
+  const maskStride = Math.ceil(size / 32) * 4;
+  const mask = Buffer.alloc(maskStride * size);
+  const header = Buffer.alloc(40);
+  header.writeUInt32LE(40, 0); // BITMAPINFOHEADER size
+  header.writeInt32LE(size, 4);
+  header.writeInt32LE(size * 2, 8); // XOR + AND mask heights
+  header.writeUInt16LE(1, 12); // planes
+  header.writeUInt16LE(32, 14); // bits per pixel
+  header.writeUInt32LE(0, 16); // BI_RGB
+  header.writeUInt32LE(xor.length + mask.length, 20);
+
+  return Buffer.concat([header, xor, mask]);
+}
+
 function makeIco(entries) {
   const header = Buffer.alloc(6);
   header.writeUInt16LE(0, 0); // reserved
@@ -75,7 +104,7 @@ function makeIco(entries) {
 
   const directory = Buffer.alloc(entries.length * 16);
   let offset = header.length + directory.length;
-  entries.forEach(({ size, png }, idx) => {
+  entries.forEach(({ size, image }, idx) => {
     const i = idx * 16;
     directory[i] = size >= 256 ? 0 : size;
     directory[i + 1] = size >= 256 ? 0 : size;
@@ -83,12 +112,12 @@ function makeIco(entries) {
     directory[i + 3] = 0; // reserved
     directory.writeUInt16LE(1, i + 4); // planes
     directory.writeUInt16LE(32, i + 6); // bit count
-    directory.writeUInt32LE(png.length, i + 8);
+    directory.writeUInt32LE(image.length, i + 8);
     directory.writeUInt32LE(offset, i + 12);
-    offset += png.length;
+    offset += image.length;
   });
 
-  return Buffer.concat([header, directory, ...entries.map((entry) => entry.png)]);
+  return Buffer.concat([header, directory, ...entries.map((entry) => entry.image)]);
 }
 
 // ─── icon design ─────────────────────────────────────────────────────
@@ -122,7 +151,7 @@ for (const sz of sizes) {
   const file = join(iconsDir, `app-${sz}.png`);
   const png = makePng(sz, iconPixel);
   writeFileSync(file, png);
-  icoEntries.push({ size: sz, png });
+  icoEntries.push({ size: sz, image: makeIcoBitmap(sz, iconPixel) });
   console.log(`[make-icon] ${file}`);
 }
 // Canonical reference used by the app

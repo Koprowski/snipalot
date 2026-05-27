@@ -621,6 +621,10 @@ Agent behavior:
  - If no existing folder is found, clicking the WilyTrader banner asks the user to select the repo/extension folder, use a managed folder, or cancel. Selected folders are validated against WilyTrader `manifest.json` before files are written.
  - Updates use `git pull --ff-only` when the target is a Git checkout; otherwise Snipalot downloads the latest WilyTrader tag ZIP, overwrites the existing folder contents, and opens `chrome://extensions` so the user can manually click Reload on the unpacked extension.
  - Validation: `npm test`.
+- **WilyTrader first-install UX fix (v1.1.3 local branch):**
+ - Selecting a folder now accepts an empty custom folder as a WilyTrader install target instead of requiring an existing `manifest.json`; non-empty non-WilyTrader folders are still rejected.
+ - After install/update, Snipalot opens the final `extension` folder in Explorer, copies that Load unpacked path to the clipboard, opens `chrome://extensions/`, and shows a native completion dialog with the exact folder paths and manual Chrome steps.
+ - The launcher keeps the WilyTrader success banner visible after completion instead of immediately hiding it.
 
 ## Packaged app logs
 

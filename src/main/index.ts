@@ -2661,6 +2661,16 @@ function detectWilyTraderInstall(): { repoPath: string; extensionPath: string; v
   return null;
 }
 
+function isDirectoryEmpty(dirPath: string): boolean {
+  try {
+    return fs.existsSync(dirPath) &&
+      fs.statSync(dirPath).isDirectory() &&
+      fs.readdirSync(dirPath).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchLatestWilyTraderReleaseInfo(signal?: AbortSignal): Promise<WilyTraderReleaseInfo> {
   const res = await fetch(WILYTRADER_TAGS_API_URL, {
     method: 'GET',
@@ -2933,12 +2943,29 @@ async function extractWilyTraderZip(
 
 async function openChromeExtensionsPage(): Promise<void> {
   if (process.platform === 'win32') {
+    const chromeCandidates = [
+      process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe')
+        : null,
+      process.env.PROGRAMFILES
+        ? path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe')
+        : null,
+      process.env['PROGRAMFILES(X86)']
+        ? path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe')
+        : null,
+    ].filter((candidate): candidate is string => Boolean(candidate && fs.existsSync(candidate)));
     try {
-      const child = spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', 'chrome://extensions'], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
+      const child = chromeCandidates.length > 0
+        ? spawn(chromeCandidates[0], ['--new-window', 'chrome://extensions/'], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+        : spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', '--new-window', 'chrome://extensions/'], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
       child.unref();
       return;
     } catch (err) {
@@ -2947,7 +2974,72 @@ async function openChromeExtensionsPage(): Promise<void> {
       });
     }
   }
-  await shell.openExternal('chrome://extensions');
+  await shell.openExternal('chrome://extensions/');
+}
+
+async function revealWilyTraderExtensionFolder(extensionPath: string): Promise<void> {
+  try {
+    const manifestPath = path.join(extensionPath, 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+      shell.showItemInFolder(manifestPath);
+      return;
+    }
+    const openError = await shell.openPath(extensionPath);
+    if (openError) {
+      log('wilytrader-update', 'extension folder open failed', { extensionPath, err: openError });
+    }
+  } catch (err) {
+    log('wilytrader-update', 'extension folder reveal failed', {
+      extensionPath,
+      err: (err as Error).message,
+    });
+  }
+}
+
+async function showWilyTraderInstallCompleteDialog(options: {
+  version: string;
+  repoPath: string;
+  extensionPath: string;
+}): Promise<void> {
+  const parent = launcherWindow && !launcherWindow.isDestroyed() ? launcherWindow : undefined;
+  const dialogOptions: MessageBoxOptions = {
+    type: 'info',
+    buttons: ['Open Chrome Extensions', 'Open WilyTrader Folder', 'OK'],
+    defaultId: 2,
+    cancelId: 2,
+    title: 'WilyTrader files are ready',
+    message: `WilyTrader ${options.version} files are ready.`,
+    detail: [
+      `Load unpacked folder:`,
+      options.extensionPath,
+      '',
+      `WilyTrader files folder:`,
+      options.repoPath,
+      '',
+      'That folder path has been copied to your clipboard.',
+      'In Chrome, turn on Developer mode, click Load unpacked, and choose this folder.',
+    ].join('\n'),
+  };
+  const response = parent
+    ? await dialog.showMessageBox(parent, dialogOptions)
+    : await dialog.showMessageBox(dialogOptions);
+
+  if (response.response === 0) {
+    await openChromeExtensionsPage();
+  } else if (response.response === 1) {
+    await revealWilyTraderExtensionFolder(options.extensionPath);
+  }
+}
+
+async function prepareWilyTraderPostInstall(options: {
+  version: string;
+  repoPath: string;
+  extensionPath: string;
+}): Promise<void> {
+  clipboard.writeText(options.extensionPath);
+  await revealWilyTraderExtensionFolder(options.extensionPath);
+  await openChromeExtensionsPage();
+  await showWilyTraderInstallCompleteDialog(options);
 }
 
 async function resolveWilyTraderUpdateTarget(
@@ -2963,12 +3055,12 @@ async function resolveWilyTraderUpdateTarget(
 
   const messageBoxOptions: MessageBoxOptions = {
     type: 'question',
-    buttons: ['Select existing folder', 'Use Snipalot-managed folder', 'Cancel'],
+    buttons: ['Select folder', 'Use Snipalot-managed folder', 'Cancel'],
     defaultId: 0,
     cancelId: 2,
     title: 'Find WilyTrader',
     message: 'Snipalot could not find the local WilyTrader extension folder.',
-    detail: 'If WilyTrader is already loaded in Chrome, select the folder you used for Load unpacked. You can choose either the repo folder or its extension folder.',
+    detail: 'Select an existing WilyTrader repo/extension folder, or select an empty folder where Snipalot can install WilyTrader. You can also use the managed folder.',
   };
   const response = launcherWindow
     ? await dialog.showMessageBox(launcherWindow, messageBoxOptions)
@@ -2991,9 +3083,17 @@ async function resolveWilyTraderUpdateTarget(
     ? await dialog.showOpenDialog(launcherWindow, openDialogOptions)
     : await dialog.showOpenDialog(openDialogOptions);
   if (selection.canceled || selection.filePaths.length === 0) return null;
-  const manifest = readWilyTraderManifest(selection.filePaths[0]);
+  const selectedPath = path.resolve(selection.filePaths[0]);
+  const manifest = readWilyTraderManifest(selectedPath);
   if (!manifest) {
-    throw new Error('The selected folder is not WilyTrader. Select the repo folder or the extension folder that contains WilyTrader manifest.json.');
+    if (isDirectoryEmpty(selectedPath)) {
+      return {
+        repoPath: selectedPath,
+        extensionPath: path.join(selectedPath, 'extension'),
+        isGitRepo: false,
+      };
+    }
+    throw new Error('The selected folder is not WilyTrader and is not empty. Select the WilyTrader repo/extension folder, or select an empty folder where Snipalot can install WilyTrader.');
   }
   return {
     repoPath: manifest.repoPath,
@@ -3050,24 +3150,30 @@ async function updateWilyTraderFiles(sender: WebContents): Promise<WilyTraderUpd
     }
 
     const manifest = readWilyTraderManifest(repoPath);
+    const installedVersion = manifest?.version ?? latest.version;
+    const finalExtensionPath = manifest?.extensionPath ?? extensionPath;
     cachedWilyTraderUpdateCheckResult = {
       ok: true,
-      currentVersion: manifest?.version ?? latest.version,
+      currentVersion: installedVersion,
       latestVersion: latest.version,
       updateAvailable: false,
       repoPath,
-      extensionPath: manifest?.extensionPath ?? extensionPath,
+      extensionPath: finalExtensionPath,
       releaseUrl: latest.htmlUrl,
-      message: `WilyTrader files are updated to ${manifest?.version ?? latest.version}. Reload the unpacked extension in Chrome.`,
+      message: `WilyTrader files are updated to ${installedVersion}. Load unpacked from ${finalExtensionPath}.`,
     };
     cachedWilyTraderUpdateCheckResultAtMs = Date.now();
     sendLauncherWilyTraderUpdateCheckResult(cachedWilyTraderUpdateCheckResult);
-    await openChromeExtensionsPage();
+    await prepareWilyTraderPostInstall({
+      version: installedVersion,
+      repoPath,
+      extensionPath: finalExtensionPath,
+    });
     return {
       ok: true,
-      message: `Updated WilyTrader files to ${manifest?.version ?? latest.version}. Chrome Extensions is open; click Reload on WilyTrader.`,
+      message: `Updated WilyTrader files to ${installedVersion}. Load unpacked from ${finalExtensionPath}.`,
       repoPath,
-      extensionPath: manifest?.extensionPath ?? extensionPath,
+      extensionPath: finalExtensionPath,
       releaseUrl: latest.htmlUrl,
     };
   } catch (err) {

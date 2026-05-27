@@ -158,8 +158,9 @@ function applyWilyTraderUpdateCheckResult(result: WilyTraderUpdateCheckResult): 
     wilyTraderUpdateVersion = null;
     wilyTraderCurrentVersion = result.currentVersion;
     wilyTraderRepoPath = result.repoPath;
-    wilyTraderStatusMessage = null;
-    wilyTraderStatusIsError = false;
+    if (!wilyTraderStatusMessage) {
+      wilyTraderStatusIsError = false;
+    }
     wilyTraderDownloadProgress = null;
   }
   renderLauncherImpl();
@@ -373,10 +374,10 @@ function renderLauncherUpdate(): void {
 }
 
 function renderWilyTraderUpdate(): void {
-  const shouldShow = Boolean(wilyTraderUpdateVersion);
+  const shouldShow = Boolean(wilyTraderUpdateVersion || wilyTraderStatusMessage);
   wilyTraderUpdateEl.hidden = !shouldShow;
   if (!shouldShow) return;
-  wilyTraderUpdateEl.disabled = wilyTraderUpdateInProgress;
+  wilyTraderUpdateEl.disabled = wilyTraderUpdateInProgress || !wilyTraderUpdateVersion;
   wilyTraderUpdateEl.classList.toggle('installing', wilyTraderUpdateInProgress && !wilyTraderStatusIsError);
   wilyTraderUpdateEl.classList.toggle('downloading', wilyTraderUpdateInProgress && wilyTraderDownloadProgress !== null);
   wilyTraderUpdateEl.classList.toggle('err', wilyTraderStatusIsError);
@@ -409,7 +410,10 @@ function renderWilyTraderUpdate(): void {
 }
 
 function resizeForVisibleUpdateBanners(): void {
-  const visibleCount = [availableUpdateVersion, wilyTraderUpdateVersion].filter(Boolean).length;
+  const visibleCount = [
+    availableUpdateVersion,
+    wilyTraderUpdateVersion || wilyTraderStatusMessage,
+  ].filter(Boolean).length;
   const shouldShow = visibleCount > 0;
   if (updateBannerVisible !== shouldShow || updateBannerVisibleCount !== visibleCount) {
     updateBannerVisible = shouldShow;

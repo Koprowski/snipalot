@@ -635,6 +635,10 @@ Agent behavior:
 - **WilyTrader move EPERM fix (v1.1.6 local branch):**
  - `Move Location` now clarifies that it moves the whole WilyTrader files folder; Chrome should load the `extension` subfolder.
  - Windows `EPERM` / `EACCES` directory rename failures now fall back to copy-verify-delete. If Windows refuses to remove the old folder, Snipalot still saves the new verified folder and tells the user the old folder can be deleted manually later.
+- **Chrome Extensions handoff fix (v1.1.7 local branch):**
+ - Settings closes itself before opening Chrome Extensions so the always-on-top Settings window does not cover Chrome.
+ - Chrome handoff no longer passes `--new-window`; it passes the extensions URL to Chrome so an already-running Chrome instance can route it through the active/recent profile instead of forcing the profile picker.
+ - If Chrome Preferences already contain a WilyTrader extension id, the handoff uses `chrome://extensions/?id=<id>`; otherwise it falls back to `chrome://extensions/`.
 
 ## Packaged app logs
 

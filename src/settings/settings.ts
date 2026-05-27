@@ -428,8 +428,7 @@ async function moveWilyTraderInstallFolder(): Promise<void> {
 async function openChromeExtensionsPage(): Promise<void> {
   btnOpenChromeExtensions.disabled = true;
   try {
-    const result = await api.openChromeExtensions();
-    setStatus(result.message, !result.ok);
+    await api.openChromeExtensions();
   } catch (err) {
     setStatus(`Could not open Chrome Extensions: ${(err as Error).message}`, true);
   } finally {

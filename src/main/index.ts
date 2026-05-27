@@ -2653,6 +2653,38 @@ function wilyTraderPathsFromChromeProfiles(): string[] {
   return paths;
 }
 
+function wilyTraderExtensionIdsFromChromeProfiles(): string[] {
+  const userDataRoot = path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'User Data');
+  if (!fs.existsSync(userDataRoot)) return [];
+  const profileDirs = fs.readdirSync(userDataRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && (entry.name === 'Default' || /^Profile \d+$/i.test(entry.name)))
+    .map((entry) => path.join(userDataRoot, entry.name));
+  const ids: string[] = [];
+  for (const profileDir of profileDirs) {
+    const preferencesPath = path.join(profileDir, 'Preferences');
+    if (!fs.existsSync(preferencesPath)) continue;
+    try {
+      const json = JSON.parse(fs.readFileSync(preferencesPath, 'utf8')) as {
+        extensions?: { settings?: Record<string, { path?: unknown; manifest?: { name?: unknown } }> };
+      };
+      const settings = json.extensions?.settings ?? {};
+      for (const [extensionId, extension] of Object.entries(settings)) {
+        const extensionPath = typeof extension.path === 'string' ? extension.path : '';
+        const manifestName = typeof extension.manifest?.name === 'string' ? extension.manifest.name : '';
+        if (manifestName === 'WilyTrader' || (extensionPath && readWilyTraderManifest(extensionPath))) {
+          ids.push(extensionId);
+        }
+      }
+    } catch (err) {
+      log('wilytrader-update', 'chrome extension id scan failed', {
+        preferencesPath,
+        err: (err as Error).message,
+      });
+    }
+  }
+  return [...new Set(ids)];
+}
+
 function wilyTraderCandidateRepoPaths(): string[] {
   const configuredInstallPath = getConfig().wilyTrader?.installPath;
   const candidates = [
@@ -2878,10 +2910,13 @@ ipcMain.handle('settings:open-wilytrader-folder', async (): Promise<{ ok: boolea
 });
 
 ipcMain.handle('settings:open-chrome-extensions', async (): Promise<{ ok: boolean; message: string }> => {
-  await openChromeExtensionsPage();
+  const extensionIds = wilyTraderExtensionIdsFromChromeProfiles();
+  await openChromeExtensionsPage({ closeSettings: true });
   return {
     ok: true,
-    message: 'Opened chrome://extensions/. Use Developer mode, Load unpacked, or Reload for WilyTrader.',
+    message: extensionIds.length > 0
+      ? 'Closed Settings and opened Chrome Extensions for WilyTrader. Use Reload if needed.'
+      : 'Closed Settings and opened chrome://extensions/. Use Developer mode and Load unpacked for WilyTrader.',
   };
 });
 
@@ -3098,7 +3133,27 @@ async function extractWilyTraderZip(
   return fileCount;
 }
 
-async function openChromeExtensionsPage(): Promise<void> {
+function closeSettingsBeforeExternalHandoff(): void {
+  if (!settingsWindow || settingsWindow.isDestroyed()) return;
+  try {
+    settingsWindow.setAlwaysOnTop(false);
+    settingsWindow.close();
+  } catch (err) {
+    log('settings', 'close before external handoff failed', { err: (err as Error).message });
+  }
+}
+
+function chromeExtensionsUrl(): string {
+  const extensionId = wilyTraderExtensionIdsFromChromeProfiles()[0];
+  return extensionId ? `chrome://extensions/?id=${extensionId}` : 'chrome://extensions/';
+}
+
+async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {}): Promise<void> {
+  if (options.closeSettings) {
+    closeSettingsBeforeExternalHandoff();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  const targetUrl = chromeExtensionsUrl();
   if (process.platform === 'win32') {
     const chromeCandidates = [
       process.env.LOCALAPPDATA
@@ -3113,12 +3168,12 @@ async function openChromeExtensionsPage(): Promise<void> {
     ].filter((candidate): candidate is string => Boolean(candidate && fs.existsSync(candidate)));
     try {
       const child = chromeCandidates.length > 0
-        ? spawn(chromeCandidates[0], ['--new-window', 'chrome://extensions/'], {
+        ? spawn(chromeCandidates[0], [targetUrl], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
         })
-        : spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', '--new-window', 'chrome://extensions/'], {
+        : spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', targetUrl], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
@@ -3131,7 +3186,7 @@ async function openChromeExtensionsPage(): Promise<void> {
       });
     }
   }
-  await shell.openExternal('chrome://extensions/');
+  await shell.openExternal(targetUrl);
 }
 
 async function revealWilyTraderExtensionFolder(extensionPath: string): Promise<void> {

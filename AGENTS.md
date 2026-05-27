@@ -652,6 +652,11 @@ Agent behavior:
  - `snapshot.png` export now clears the active annotation/overlay selection and renders annotations in final mode, so selected resize handles and dashed selection borders are not baked into the saved screenshot.
  - Annotation note/comment text is no longer stamped as a legend inside the image; notes stay in `prompt.md` / clipboard prompt where they do not block the visual reference.
  - Validation: `npm test`.
+- **Windows executable icon release invariant (local branch):**
+ - Root cause of the latest Electron taskbar icon recurrence: `win.signAndEditExecutable: false` had been committed as the default package config in v1.1.11. That lets local packages build without `winCodeSign`, but leaves `Snipalot.exe` with Electron's embedded icon. Any `Electron.lnk` / generic shortcut / taskbar grouping that falls back to the EXE icon can then show Electron again.
+ - Default light/full packaging now leaves executable resource editing enabled and runs `scripts/assert-windows-icon.mjs` after packaging. The assertion compares the packaged `release/win-unpacked/Snipalot.exe` associated icon against `resources/icons/app.ico` and fails the package if they differ.
+ - `tests/windows-icon-invariant.test.mjs` guards against reintroducing `signAndEditExecutable: false` in release configs and verifies normal package scripts run the icon assertion. `package:unsafe-no-icon-edit` is the explicit local-only escape hatch for the known `winCodeSign` symlink privilege failure and should not be used for release/install acceptance.
+ - Validation: `npm test` passed. `npm run assert-windows-icon` correctly failed against the existing bad local artifact, and `npm run package:nopublish` failed earlier at `winCodeSign` cache extraction (`Cannot create symbolic link`), confirming this machine needs elevated/Developer Mode or CI for icon-correct packages.
 
 ## Packaged app logs
 

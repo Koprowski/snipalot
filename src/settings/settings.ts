@@ -55,6 +55,7 @@ const wilyTraderVersionEl = document.getElementById('wilytrader-version') as HTM
 const wilyTraderLocationBtn = document.getElementById('btn-wilytrader-location') as HTMLButtonElement;
 const wilyTraderStatusEl = document.getElementById('wilytrader-status') as HTMLElement;
 const btnRefreshWilyTraderStatus = document.getElementById('btn-refresh-wilytrader-status') as HTMLButtonElement;
+const btnUpdateWilyTrader = document.getElementById('btn-update-wilytrader') as HTMLButtonElement;
 const btnMoveWilyTraderFolder = document.getElementById('btn-move-wilytrader-folder') as HTMLButtonElement;
 const btnOpenChromeExtensions = document.getElementById('btn-open-chrome-extensions') as HTMLButtonElement;
 
@@ -106,6 +107,7 @@ let editedGeminiCliCommand = 'gemini';
 let editedGeminiCliModel = 'gemini-3.1-pro-preview';
 let fetchedGeminiCliModels: Array<{ id: string; createdAtMs: number }> = [];
 let fetchedOpenrouterModels: Array<{ id: string; createdAtMs: number; inputCostPer1M: number }> = [];
+let settingsWilyTraderUpdateVersion: string | null = null;
 // Working copy of the countdown duration.
 let editedCountdownSec = 3;
 let editedFeedbackOutputs = {
@@ -327,6 +329,9 @@ async function init(): Promise<void> {
   btnRefreshWilyTraderStatus.addEventListener('click', () => {
     void refreshWilyTraderStatus();
   });
+  btnUpdateWilyTrader.addEventListener('click', () => {
+    void updateWilyTraderFromSettings();
+  });
   wilyTraderLocationBtn.addEventListener('click', () => {
     void openWilyTraderInstallFolder();
   });
@@ -344,6 +349,9 @@ async function init(): Promise<void> {
 
 async function refreshWilyTraderStatus(): Promise<void> {
   btnRefreshWilyTraderStatus.disabled = true;
+  btnUpdateWilyTrader.disabled = true;
+  btnUpdateWilyTrader.textContent = 'Checking WilyTrader Updates...';
+  settingsWilyTraderUpdateVersion = null;
   wilyTraderVersionEl.textContent = 'Checking...';
   wilyTraderLocationBtn.textContent = 'Checking...';
   wilyTraderLocationBtn.disabled = true;
@@ -357,6 +365,7 @@ async function refreshWilyTraderStatus(): Promise<void> {
       wilyTraderLocationBtn.disabled = true;
       btnMoveWilyTraderFolder.disabled = true;
       wilyTraderStatusEl.textContent = result.message;
+      await refreshWilyTraderUpdateButton();
       return;
     }
     wilyTraderVersionEl.textContent = result.version ?? 'Unknown';
@@ -380,12 +389,66 @@ async function refreshWilyTraderStatus(): Promise<void> {
         : null,
     ].filter((line): line is string => Boolean(line));
     wilyTraderStatusEl.textContent = lines.join('\n');
+    await refreshWilyTraderUpdateButton(lines);
   } catch (err) {
     wilyTraderVersionEl.textContent = 'Unavailable';
     wilyTraderLocationBtn.textContent = 'Could not check WilyTrader';
     wilyTraderLocationBtn.disabled = true;
     btnMoveWilyTraderFolder.disabled = true;
+    btnUpdateWilyTrader.textContent = 'Check WilyTrader Updates';
+    btnUpdateWilyTrader.disabled = false;
     wilyTraderStatusEl.textContent = `WilyTrader status check failed: ${(err as Error).message}`;
+  } finally {
+    btnRefreshWilyTraderStatus.disabled = false;
+  }
+}
+
+async function refreshWilyTraderUpdateButton(existingLines: string[] = []): Promise<void> {
+  try {
+    const update = await api.checkWilyTraderUpdates();
+    if (update.ok && update.updateAvailable && update.latestVersion) {
+      settingsWilyTraderUpdateVersion = update.latestVersion;
+      btnUpdateWilyTrader.textContent = `Update WilyTrader to ${update.latestVersion}`;
+      btnUpdateWilyTrader.disabled = false;
+      wilyTraderStatusEl.textContent = [
+        ...existingLines,
+        update.message,
+      ].filter(Boolean).join('\n');
+      return;
+    }
+    settingsWilyTraderUpdateVersion = null;
+    btnUpdateWilyTrader.textContent = update.ok ? 'WilyTrader Up To Date' : 'Check WilyTrader Updates';
+    btnUpdateWilyTrader.disabled = !update.ok;
+    if (!existingLines.length) {
+      wilyTraderStatusEl.textContent = update.message;
+    }
+  } catch (err) {
+    settingsWilyTraderUpdateVersion = null;
+    btnUpdateWilyTrader.textContent = 'Retry WilyTrader Update Check';
+    btnUpdateWilyTrader.disabled = false;
+    wilyTraderStatusEl.textContent = [
+      ...existingLines,
+      `WilyTrader update check failed: ${(err as Error).message}`,
+    ].filter(Boolean).join('\n');
+  }
+}
+
+async function updateWilyTraderFromSettings(): Promise<void> {
+  if (!settingsWilyTraderUpdateVersion) {
+    await refreshWilyTraderStatus();
+    return;
+  }
+  btnUpdateWilyTrader.disabled = true;
+  btnRefreshWilyTraderStatus.disabled = true;
+  btnUpdateWilyTrader.textContent = `Updating WilyTrader ${settingsWilyTraderUpdateVersion}...`;
+  setStatus(`Updating WilyTrader ${settingsWilyTraderUpdateVersion}.`);
+  try {
+    const result = await api.updateWilyTrader();
+    setStatus(result.message, !result.ok);
+    await refreshWilyTraderStatus();
+  } catch (err) {
+    setStatus(`WilyTrader update failed: ${(err as Error).message}`, true);
+    btnUpdateWilyTrader.disabled = false;
   } finally {
     btnRefreshWilyTraderStatus.disabled = false;
   }

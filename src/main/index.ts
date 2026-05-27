@@ -2906,6 +2906,14 @@ ipcMain.handle('launcher:update-wilytrader', async (evt): Promise<WilyTraderUpda
   return updateWilyTraderFiles(evt.sender);
 });
 
+ipcMain.handle('settings:check-wilytrader-updates', async (): Promise<WilyTraderUpdateCheckResult> => {
+  return getWilyTraderUpdateCheckResult('settings', { force: true });
+});
+
+ipcMain.handle('settings:update-wilytrader', async (evt): Promise<WilyTraderUpdateInstallResult> => {
+  return updateWilyTraderFiles(evt.sender);
+});
+
 ipcMain.handle('settings:get-wilytrader-status', async (): Promise<WilyTraderInstallStatus> => {
   const install = detectWilyTraderInstall();
   const configuredPath = getConfig().wilyTrader?.installPath?.trim() || null;

@@ -85,6 +85,23 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     chromeExtensionPaths: string[];
     message: string;
   }> => ipcRenderer.invoke('settings:get-wilytrader-status'),
+  checkWilyTraderUpdates: (): Promise<{
+    ok: boolean;
+    currentVersion: string | null;
+    latestVersion: string | null;
+    updateAvailable: boolean;
+    releaseUrl: string | null;
+    repoPath: string;
+    message: string;
+  }> => ipcRenderer.invoke('settings:check-wilytrader-updates'),
+  updateWilyTrader: (): Promise<{
+    ok: boolean;
+    message: string;
+    version: string | null;
+    repoPath: string | null;
+    extensionPath: string | null;
+    releaseUrl?: string | null;
+  }> => ipcRenderer.invoke('settings:update-wilytrader'),
   openWilyTraderFolder: (): Promise<{ ok: boolean; message: string; path?: string | null }> =>
     ipcRenderer.invoke('settings:open-wilytrader-folder'),
   moveWilyTraderFolder: (): Promise<{

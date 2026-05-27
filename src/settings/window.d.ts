@@ -27,6 +27,23 @@ interface Window {
       chromeExtensionPaths: string[];
       message: string;
     }>;
+    checkWilyTraderUpdates: () => Promise<{
+      ok: boolean;
+      currentVersion: string | null;
+      latestVersion: string | null;
+      updateAvailable: boolean;
+      releaseUrl: string | null;
+      repoPath: string;
+      message: string;
+    }>;
+    updateWilyTrader: () => Promise<{
+      ok: boolean;
+      message: string;
+      version: string | null;
+      repoPath: string | null;
+      extensionPath: string | null;
+      releaseUrl?: string | null;
+    }>;
     openWilyTraderFolder: () => Promise<{ ok: boolean; message: string; path?: string | null }>;
     moveWilyTraderFolder: () => Promise<{
       ok: boolean;

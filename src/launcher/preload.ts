@@ -37,6 +37,16 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     message: string;
     installerAssetUrl?: string | null;
   }> => ipcRenderer.invoke('launcher:check-for-updates'),
+  checkWilyTraderUpdates: (): Promise<{
+    ok: boolean;
+    currentVersion: string | null;
+    latestVersion: string | null;
+    releaseUrl: string | null;
+    updateAvailable: boolean;
+    repoPath: string | null;
+    extensionPath: string | null;
+    message: string;
+  }> => ipcRenderer.invoke('launcher:check-wilytrader-updates'),
   onUpdateCheckResult: (callback: (result: {
     ok: boolean;
     currentVersion: string;
@@ -58,8 +68,38 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     ipcRenderer.on('launcher:update-check-result', listener);
     return () => ipcRenderer.removeListener('launcher:update-check-result', listener);
   },
+  onWilyTraderUpdateCheckResult: (callback: (result: {
+    ok: boolean;
+    currentVersion: string | null;
+    latestVersion: string | null;
+    releaseUrl: string | null;
+    updateAvailable: boolean;
+    repoPath: string | null;
+    extensionPath: string | null;
+    message: string;
+  }) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: {
+      ok: boolean;
+      currentVersion: string | null;
+      latestVersion: string | null;
+      releaseUrl: string | null;
+      updateAvailable: boolean;
+      repoPath: string | null;
+      extensionPath: string | null;
+      message: string;
+    }) => callback(result);
+    ipcRenderer.on('launcher:wilytrader-update-check-result', listener);
+    return () => ipcRenderer.removeListener('launcher:wilytrader-update-check-result', listener);
+  },
   installUpdate: (): Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }> =>
     ipcRenderer.invoke('launcher:install-update'),
+  updateWilyTrader: (): Promise<{
+    ok: boolean;
+    message: string;
+    repoPath?: string | null;
+    extensionPath?: string | null;
+    releaseUrl?: string | null;
+  }> => ipcRenderer.invoke('launcher:update-wilytrader'),
   onUpdateDownloadProgress: (callback: (progress: {
     version: string;
     installerName: string;
@@ -77,8 +117,23 @@ contextBridge.exposeInMainWorld('snipalotLauncher', {
     ipcRenderer.on('launcher:update-download-progress', listener);
     return () => ipcRenderer.removeListener('launcher:update-download-progress', listener);
   },
-  setUpdateBannerVisible: (visible: boolean): Promise<boolean> =>
-    ipcRenderer.invoke('launcher:set-update-banner-visible', visible),
+  onWilyTraderDownloadProgress: (callback: (progress: {
+    version: string;
+    downloadedBytes: number;
+    totalBytes: number | null;
+    percent: number | null;
+  }) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: {
+      version: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+      percent: number | null;
+    }) => callback(progress);
+    ipcRenderer.on('launcher:wilytrader-download-progress', listener);
+    return () => ipcRenderer.removeListener('launcher:wilytrader-download-progress', listener);
+  },
+  setUpdateBannerVisible: (visible: boolean, count?: number): Promise<boolean> =>
+    ipcRenderer.invoke('launcher:set-update-banner-visible', visible, count),
   settings: () => ipcRenderer.invoke('launcher:settings'),
   exitApp: (): Promise<boolean> => ipcRenderer.invoke('settings:exit-app'),
   toggleMinimize: () => ipcRenderer.invoke('launcher:toggle-minimize'),

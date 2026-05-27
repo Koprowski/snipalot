@@ -512,6 +512,30 @@ body[data-visible-action-count="3"] .shortcut-row {
   color: #bbf7d0;
 }
 
+.wilytrader-update {
+  border-color: rgba(45, 212, 191, 0.52);
+  background: rgba(20, 83, 78, 0.22);
+  color: #99f6e4;
+}
+
+.wilytrader-update:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.86);
+  background: rgba(15, 118, 110, 0.26);
+  color: #ccfbf1;
+}
+
+.wilytrader-update.installing {
+  border-color: rgba(34, 197, 94, 0.50);
+  background: rgba(22, 101, 52, 0.18);
+  color: #86efac;
+}
+
+.wilytrader-update.err {
+  border-color: rgba(239, 68, 68, 0.65);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+}
+
 .launcher-update:disabled {
   opacity: 0.65;
   cursor: progress;

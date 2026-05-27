@@ -14,11 +14,12 @@ import {
   shell,
   nativeImage,
 } from 'electron';
-import type { WebContents } from 'electron';
+import type { MessageBoxOptions, OpenDialogOptions, WebContents } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { execSync, spawn } from 'node:child_process';
+import JSZip from 'jszip';
 import { getLogPath, log } from './logger';
 import {
   runPipeline,
@@ -2327,6 +2328,25 @@ interface SettingsUpdateInstallResult {
   releaseUrl?: string | null;
 }
 
+interface WilyTraderUpdateCheckResult {
+  ok: boolean;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  repoPath: string | null;
+  extensionPath: string | null;
+  releaseUrl: string | null;
+  message: string;
+}
+
+interface WilyTraderUpdateInstallResult {
+  ok: boolean;
+  message: string;
+  repoPath?: string | null;
+  extensionPath?: string | null;
+  releaseUrl?: string | null;
+}
+
 interface GitHubReleaseInfo {
   tagName: string;
   version: string;
@@ -2335,11 +2355,29 @@ interface GitHubReleaseInfo {
   installerAssetName: string | null;
 }
 
+interface GitHubTagInfo {
+  name?: string;
+  zipball_url?: string;
+}
+
+interface WilyTraderReleaseInfo {
+  tagName: string;
+  version: string;
+  zipballUrl: string;
+  htmlUrl: string;
+}
+
 const UPDATE_CHECK_CACHE_TTL_MS = 5 * 60 * 1000;
+const WILYTRADER_REPO_URL = 'https://github.com/Koprowski/WilyTrader';
+const WILYTRADER_TAGS_API_URL = 'https://api.github.com/repos/Koprowski/WilyTrader/tags?per_page=10';
+const WILYTRADER_MANAGED_DIR = path.join(os.homedir(), '.snipalot', 'wilytrader');
 
 let cachedUpdateCheckResult: SettingsUpdateCheckResult | null = null;
 let cachedUpdateCheckResultAtMs = 0;
 let updateCheckPromise: Promise<SettingsUpdateCheckResult> | null = null;
+let cachedWilyTraderUpdateCheckResult: WilyTraderUpdateCheckResult | null = null;
+let cachedWilyTraderUpdateCheckResultAtMs = 0;
+let wilyTraderUpdateCheckPromise: Promise<WilyTraderUpdateCheckResult> | null = null;
 
 type SettingsTestLlmGuidance = {
   kind: 'gemini-cli-missing';
@@ -2519,11 +2557,228 @@ function getSnipalotUpdateCheckResult(
 
 function startBackgroundUpdateCheck(reason: string): void {
   void getSnipalotUpdateCheckResult(reason);
+  void getWilyTraderUpdateCheckResult(reason);
 }
 
 function sendLauncherUpdateCheckResult(result: SettingsUpdateCheckResult): void {
   if (!launcherWindow || launcherWindow.isDestroyed()) return;
   launcherWindow.webContents.send('launcher:update-check-result', result);
+}
+
+function sendLauncherWilyTraderUpdateCheckResult(result: WilyTraderUpdateCheckResult): void {
+  if (!launcherWindow || launcherWindow.isDestroyed()) return;
+  launcherWindow.webContents.send('launcher:wilytrader-update-check-result', result);
+}
+
+function normalizeVersionTag(tag: string): string {
+  return tag.trim().replace(/^v/i, '');
+}
+
+function readWilyTraderManifest(candidatePath: string): { repoPath: string; extensionPath: string; version: string } | null {
+  const possibleExtensionPaths = [
+    candidatePath,
+    path.join(candidatePath, 'extension'),
+  ];
+  for (const extensionPath of possibleExtensionPaths) {
+    const manifestPath = path.join(extensionPath, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const json = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { name?: unknown; version?: unknown };
+      const name = typeof json.name === 'string' ? json.name.trim() : '';
+      const version = typeof json.version === 'string' ? json.version.trim() : '';
+      if (name !== 'WilyTrader' || !version) continue;
+      return {
+        repoPath: path.basename(extensionPath).toLowerCase() === 'extension'
+          ? path.dirname(extensionPath)
+          : extensionPath,
+        extensionPath,
+        version,
+      };
+    } catch (err) {
+      log('wilytrader-update', 'manifest read failed', { manifestPath, err: (err as Error).message });
+    }
+  }
+  return null;
+}
+
+function wilyTraderPathsFromChromeProfiles(): string[] {
+  const userDataRoot = path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'User Data');
+  if (!fs.existsSync(userDataRoot)) return [];
+  const profileDirs = fs.readdirSync(userDataRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && (entry.name === 'Default' || /^Profile \d+$/i.test(entry.name)))
+    .map((entry) => path.join(userDataRoot, entry.name));
+  const paths: string[] = [];
+  for (const profileDir of profileDirs) {
+    const preferencesPath = path.join(profileDir, 'Preferences');
+    if (!fs.existsSync(preferencesPath)) continue;
+    try {
+      const json = JSON.parse(fs.readFileSync(preferencesPath, 'utf8')) as {
+        extensions?: { settings?: Record<string, { path?: unknown; manifest?: { name?: unknown } }> };
+      };
+      const settings = json.extensions?.settings ?? {};
+      for (const extension of Object.values(settings)) {
+        const extensionPath = typeof extension.path === 'string' ? extension.path : '';
+        const manifestName = typeof extension.manifest?.name === 'string' ? extension.manifest.name : '';
+        if (!extensionPath) continue;
+        if (manifestName === 'WilyTrader' || readWilyTraderManifest(extensionPath)) {
+          paths.push(extensionPath);
+        }
+      }
+    } catch (err) {
+      log('wilytrader-update', 'chrome preferences scan failed', {
+        preferencesPath,
+        err: (err as Error).message,
+      });
+    }
+  }
+  return paths;
+}
+
+function wilyTraderCandidateRepoPaths(): string[] {
+  const candidates = [
+    ...wilyTraderPathsFromChromeProfiles(),
+    process.env.WILYTRADER_HOME,
+    path.join(os.homedir(), '.snipalot', 'wilytrader'),
+    path.join(os.homedir(), 'WilyTrader'),
+    path.join(os.homedir(), 'Documents', 'WilyTrader'),
+    'C:\\Tools\\WilyTrader',
+    'E:\\Apps\\wilytrader',
+  ].filter((candidate): candidate is string => Boolean(candidate && candidate.trim()));
+  return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
+}
+
+function detectWilyTraderInstall(): { repoPath: string; extensionPath: string; version: string; isGitRepo: boolean } | null {
+  for (const candidatePath of wilyTraderCandidateRepoPaths()) {
+    const manifest = readWilyTraderManifest(candidatePath);
+    if (!manifest) continue;
+    return {
+      repoPath: manifest.repoPath,
+      extensionPath: manifest.extensionPath,
+      version: manifest.version,
+      isGitRepo: fs.existsSync(path.join(manifest.repoPath, '.git')),
+    };
+  }
+  return null;
+}
+
+async function fetchLatestWilyTraderReleaseInfo(signal?: AbortSignal): Promise<WilyTraderReleaseInfo> {
+  const res = await fetch(WILYTRADER_TAGS_API_URL, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': `snipalot/${app.getVersion()}`,
+    },
+    signal,
+  });
+  if (!res.ok) {
+    throw new Error(`WilyTrader tag check failed (HTTP ${res.status}).`);
+  }
+  const tags = await res.json() as GitHubTagInfo[];
+  const latest = tags
+    .map((tag) => ({
+      tagName: (tag.name ?? '').trim(),
+      version: normalizeVersionTag(tag.name ?? ''),
+      zipballUrl: tag.zipball_url ?? '',
+    }))
+    .filter((tag) => /^\d+\.\d+\.\d+$/.test(tag.version) && /^https?:\/\//i.test(tag.zipballUrl))
+    .sort((a, b) => (isRemoteVersionNewer(a.version, b.version) ? 1 : isRemoteVersionNewer(b.version, a.version) ? -1 : 0))
+    .pop();
+  if (!latest) {
+    throw new Error('WilyTrader tag metadata did not include a valid version tag.');
+  }
+  return {
+    ...latest,
+    htmlUrl: `${WILYTRADER_REPO_URL}/releases/tag/${latest.tagName || `v${latest.version}`}`,
+  };
+}
+
+async function performWilyTraderUpdateCheck(reason: string): Promise<WilyTraderUpdateCheckResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const [latest, install] = await Promise.all([
+      fetchLatestWilyTraderReleaseInfo(controller.signal),
+      Promise.resolve(detectWilyTraderInstall()),
+    ]);
+    const currentVersion = install?.version ?? null;
+    const updateAvailable = !currentVersion || isRemoteVersionNewer(currentVersion, latest.version);
+    const result: WilyTraderUpdateCheckResult = {
+      ok: true,
+      currentVersion,
+      latestVersion: latest.version,
+      updateAvailable,
+      repoPath: install?.repoPath ?? WILYTRADER_MANAGED_DIR,
+      extensionPath: install?.extensionPath ?? path.join(WILYTRADER_MANAGED_DIR, 'extension'),
+      releaseUrl: latest.htmlUrl,
+      message: updateAvailable
+        ? currentVersion
+          ? `WilyTrader ${latest.version} is available (installed ${currentVersion}).`
+          : `WilyTrader ${latest.version} is available to install locally.`
+        : `WilyTrader is up to date (${currentVersion}).`,
+    };
+    log('wilytrader-update', 'check complete', {
+      reason,
+      ok: true,
+      currentVersion,
+      latestVersion: latest.version,
+      updateAvailable,
+      repoPath: result.repoPath,
+    });
+    return result;
+  } catch (err) {
+    log('wilytrader-update', 'check failed', { reason, err: (err as Error).message });
+    return {
+      ok: false,
+      currentVersion: null,
+      latestVersion: null,
+      updateAvailable: false,
+      repoPath: detectWilyTraderInstall()?.repoPath ?? WILYTRADER_MANAGED_DIR,
+      extensionPath: null,
+      releaseUrl: WILYTRADER_REPO_URL,
+      message: `WilyTrader update check failed: ${(err as Error).message}`,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function getWilyTraderUpdateCheckResult(
+  reason: string,
+  options: { force?: boolean } = {}
+): Promise<WilyTraderUpdateCheckResult> {
+  const cacheAgeMs = cachedWilyTraderUpdateCheckResultAtMs > 0
+    ? Date.now() - cachedWilyTraderUpdateCheckResultAtMs
+    : Number.POSITIVE_INFINITY;
+  if (
+    !options.force &&
+    cachedWilyTraderUpdateCheckResult?.ok &&
+    cacheAgeMs >= 0 &&
+    cacheAgeMs < UPDATE_CHECK_CACHE_TTL_MS
+  ) {
+    log('wilytrader-update', 'check cache hit', {
+      reason,
+      latestVersion: cachedWilyTraderUpdateCheckResult.latestVersion,
+      updateAvailable: cachedWilyTraderUpdateCheckResult.updateAvailable,
+      cacheAgeMs,
+    });
+    return Promise.resolve(cachedWilyTraderUpdateCheckResult);
+  }
+  if (wilyTraderUpdateCheckPromise) {
+    log('wilytrader-update', 'check joining in-flight request', { reason, force: Boolean(options.force) });
+    return wilyTraderUpdateCheckPromise;
+  }
+  log('wilytrader-update', 'check start', { reason, force: Boolean(options.force) });
+  wilyTraderUpdateCheckPromise = performWilyTraderUpdateCheck(reason)
+    .then((result) => {
+      cachedWilyTraderUpdateCheckResult = result;
+      cachedWilyTraderUpdateCheckResultAtMs = Date.now();
+      sendLauncherWilyTraderUpdateCheckResult(result);
+      return result;
+    })
+    .finally(() => {
+      wilyTraderUpdateCheckPromise = null;
+    });
+  return wilyTraderUpdateCheckPromise;
 }
 
 ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
@@ -2532,6 +2787,14 @@ ipcMain.handle('settings:check-for-updates', async (): Promise<SettingsUpdateChe
 
 ipcMain.handle('launcher:check-for-updates', async (): Promise<SettingsUpdateCheckResult> => {
   return getSnipalotUpdateCheckResult('launcher');
+});
+
+ipcMain.handle('launcher:check-wilytrader-updates', async (): Promise<WilyTraderUpdateCheckResult> => {
+  return getWilyTraderUpdateCheckResult('launcher');
+});
+
+ipcMain.handle('launcher:update-wilytrader', async (evt): Promise<WilyTraderUpdateInstallResult> => {
+  return updateWilyTraderFiles(evt.sender);
 });
 
 ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
@@ -2601,6 +2864,225 @@ async function launchUpdateInstaller(installerPath: string): Promise<void> {
       reject(err);
     });
   });
+}
+
+function runGitPull(repoPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn('git', ['-C', repoPath, 'pull', '--ff-only'], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0) {
+        log('wilytrader-update', 'git pull complete', { repoPath, stdout: stdout.trim().slice(-500) });
+        resolve();
+      } else {
+        reject(new Error((stderr || stdout || `git pull exited ${code}`).trim().slice(-800)));
+      }
+    });
+  });
+}
+
+async function extractWilyTraderZip(
+  zipPath: string,
+  destination: string,
+  options: { extensionOnly?: boolean } = {}
+): Promise<number> {
+  const zip = await JSZip.loadAsync(fs.readFileSync(zipPath));
+  const rootNames = Object.keys(zip.files)
+    .map((name) => name.split('/')[0])
+    .filter(Boolean);
+  const rootPrefix = rootNames.length > 0 ? `${rootNames[0]}/` : '';
+  let fileCount = 0;
+  fs.mkdirSync(destination, { recursive: true });
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir) continue;
+    let rawName = entry.name.startsWith(rootPrefix) ? entry.name.slice(rootPrefix.length) : entry.name;
+    if (options.extensionOnly) {
+      if (!rawName.startsWith('extension/')) continue;
+      rawName = rawName.slice('extension/'.length);
+    }
+    const normalized = path.normalize(rawName);
+    if (!normalized || normalized.startsWith('..') || path.isAbsolute(normalized)) continue;
+    const targetPath = path.join(destination, normalized);
+    const resolvedTarget = path.resolve(targetPath);
+    const resolvedDestination = path.resolve(destination);
+    if (!resolvedTarget.startsWith(resolvedDestination + path.sep)) continue;
+    fs.mkdirSync(path.dirname(resolvedTarget), { recursive: true });
+    const content = await entry.async('nodebuffer');
+    fs.writeFileSync(resolvedTarget, content);
+    fileCount += 1;
+  }
+  return fileCount;
+}
+
+async function openChromeExtensionsPage(): Promise<void> {
+  if (process.platform === 'win32') {
+    try {
+      const child = spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', 'chrome://extensions'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      return;
+    } catch (err) {
+      log('wilytrader-update', 'chrome start failed, falling back to shell.openExternal', {
+        err: (err as Error).message,
+      });
+    }
+  }
+  await shell.openExternal('chrome://extensions');
+}
+
+async function resolveWilyTraderUpdateTarget(
+  install: ReturnType<typeof detectWilyTraderInstall>
+): Promise<{ repoPath: string; extensionPath: string; isGitRepo: boolean } | null> {
+  if (install) {
+    return {
+      repoPath: install.repoPath,
+      extensionPath: install.extensionPath,
+      isGitRepo: install.isGitRepo,
+    };
+  }
+
+  const messageBoxOptions: MessageBoxOptions = {
+    type: 'question',
+    buttons: ['Select existing folder', 'Use Snipalot-managed folder', 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Find WilyTrader',
+    message: 'Snipalot could not find the local WilyTrader extension folder.',
+    detail: 'If WilyTrader is already loaded in Chrome, select the folder you used for Load unpacked. You can choose either the repo folder or its extension folder.',
+  };
+  const response = launcherWindow
+    ? await dialog.showMessageBox(launcherWindow, messageBoxOptions)
+    : await dialog.showMessageBox(messageBoxOptions);
+
+  if (response.response === 2) return null;
+  if (response.response === 1) {
+    return {
+      repoPath: WILYTRADER_MANAGED_DIR,
+      extensionPath: path.join(WILYTRADER_MANAGED_DIR, 'extension'),
+      isGitRepo: false,
+    };
+  }
+
+  const openDialogOptions: OpenDialogOptions = {
+    title: 'Select WilyTrader folder',
+    properties: ['openDirectory'],
+  };
+  const selection = launcherWindow
+    ? await dialog.showOpenDialog(launcherWindow, openDialogOptions)
+    : await dialog.showOpenDialog(openDialogOptions);
+  if (selection.canceled || selection.filePaths.length === 0) return null;
+  const manifest = readWilyTraderManifest(selection.filePaths[0]);
+  if (!manifest) {
+    throw new Error('The selected folder is not WilyTrader. Select the repo folder or the extension folder that contains WilyTrader manifest.json.');
+  }
+  return {
+    repoPath: manifest.repoPath,
+    extensionPath: manifest.extensionPath,
+    isGitRepo: fs.existsSync(path.join(manifest.repoPath, '.git')),
+  };
+}
+
+async function updateWilyTraderFiles(sender: WebContents): Promise<WilyTraderUpdateInstallResult> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+  const install = detectWilyTraderInstall();
+  let target: Awaited<ReturnType<typeof resolveWilyTraderUpdateTarget>> = null;
+  let latest: WilyTraderReleaseInfo | null = null;
+  try {
+    latest = await fetchLatestWilyTraderReleaseInfo(controller.signal);
+    target = await resolveWilyTraderUpdateTarget(install);
+    if (!target) {
+      return {
+        ok: false,
+        message: 'WilyTrader update canceled. No local folder was changed.',
+        repoPath: null,
+        extensionPath: null,
+        releaseUrl: latest.htmlUrl,
+      };
+    }
+    const { repoPath, extensionPath, isGitRepo } = target;
+    log('wilytrader-update', 'update start', {
+      repoPath,
+      currentVersion: install?.version ?? null,
+      latestVersion: latest.version,
+      isGitRepo,
+    });
+
+    if (isGitRepo) {
+      await runGitPull(repoPath);
+    } else {
+      const downloadDir = path.join(os.tmpdir(), 'snipalot-wilytrader-updates');
+      const zipPath = path.join(downloadDir, `WilyTrader-${latest.version}.zip`);
+      const bytes = await downloadFile(latest.zipballUrl, zipPath, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          if (sender.isDestroyed()) return;
+          sender.send('launcher:wilytrader-download-progress', {
+            version: latest?.version ?? '',
+            ...progress,
+          });
+        },
+      });
+      const extensionOnly = fs.existsSync(path.join(repoPath, 'manifest.json')) &&
+        !fs.existsSync(path.join(repoPath, 'extension', 'manifest.json'));
+      const files = await extractWilyTraderZip(zipPath, repoPath, { extensionOnly });
+      log('wilytrader-update', 'zip update complete', { repoPath, bytes, files });
+    }
+
+    const manifest = readWilyTraderManifest(repoPath);
+    cachedWilyTraderUpdateCheckResult = {
+      ok: true,
+      currentVersion: manifest?.version ?? latest.version,
+      latestVersion: latest.version,
+      updateAvailable: false,
+      repoPath,
+      extensionPath: manifest?.extensionPath ?? extensionPath,
+      releaseUrl: latest.htmlUrl,
+      message: `WilyTrader files are updated to ${manifest?.version ?? latest.version}. Reload the unpacked extension in Chrome.`,
+    };
+    cachedWilyTraderUpdateCheckResultAtMs = Date.now();
+    sendLauncherWilyTraderUpdateCheckResult(cachedWilyTraderUpdateCheckResult);
+    await openChromeExtensionsPage();
+    return {
+      ok: true,
+      message: `Updated WilyTrader files to ${manifest?.version ?? latest.version}. Chrome Extensions is open; click Reload on WilyTrader.`,
+      repoPath,
+      extensionPath: manifest?.extensionPath ?? extensionPath,
+      releaseUrl: latest.htmlUrl,
+    };
+  } catch (err) {
+    const message = (err as Error).message;
+    log('wilytrader-update', 'update failed', { repoPath: target?.repoPath ?? install?.repoPath ?? null, err: message });
+    return {
+      ok: false,
+      message: `WilyTrader update failed: ${message}`,
+      repoPath: target?.repoPath ?? install?.repoPath ?? null,
+      extensionPath: target?.extensionPath ?? install?.extensionPath ?? null,
+      releaseUrl: latest?.htmlUrl ?? WILYTRADER_REPO_URL,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function downloadAndInstallSnipalotUpdate(
@@ -6201,13 +6683,16 @@ ipcMain.handle('launcher:get-pin-state', () => {
 
 ipcMain.handle('launcher:get-capture-mode', () => getConfig().capture.mode);
 
-ipcMain.handle('launcher:set-update-banner-visible', (_evt, visible: boolean) => {
+ipcMain.handle('launcher:set-update-banner-visible', (_evt, visible: boolean, countArg?: number) => {
   if (!launcherWindow || launcherWindow.isDestroyed()) return false;
-  const nextHeight = visible ? LAUNCHER_UPDATE_HEIGHT : LAUNCHER_BASE_HEIGHT;
+  const count = visible ? Math.max(1, Math.min(2, Math.round(Number(countArg || 1)))) : 0;
+  const nextHeight = visible
+    ? LAUNCHER_BASE_HEIGHT + (LAUNCHER_UPDATE_HEIGHT - LAUNCHER_BASE_HEIGHT) * count
+    : LAUNCHER_BASE_HEIGHT;
   const [currentWidth, currentHeight] = launcherWindow.getSize();
   if (currentWidth !== LAUNCHER_WIDTH || currentHeight !== nextHeight) {
     launcherWindow.setSize(LAUNCHER_WIDTH, nextHeight, false);
-    log('launcher', 'resize for update banner', { visible, height: nextHeight });
+    log('launcher', 'resize for update banner', { visible, count, height: nextHeight });
   }
   return true;
 });

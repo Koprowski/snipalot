@@ -28,6 +28,9 @@ const hkTradeEl = document.getElementById('hk-trade')!;
 const launcherUpdateEl = document.getElementById('launcher-update') as HTMLButtonElement;
 const launcherUpdateLabelEl = document.getElementById('launcher-update-label')!;
 const launcherUpdateProgressFillEl = document.getElementById('launcher-update-progress-fill') as HTMLElement;
+const wilyTraderUpdateEl = document.getElementById('wilytrader-update') as HTMLButtonElement;
+const wilyTraderUpdateLabelEl = document.getElementById('wilytrader-update-label')!;
+const wilyTraderUpdateProgressFillEl = document.getElementById('wilytrader-update-progress-fill') as HTMLElement;
 const captureModeEl = document.querySelector('.capture-mode') as HTMLDivElement;
 const captureModeButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('.capture-mode-btn')
@@ -62,6 +65,7 @@ let availableUpdateVersion: string | null = null;
 let availableUpdateHasInstaller = false;
 let updateInstallInProgress = false;
 let updateBannerVisible: boolean | null = null;
+let updateBannerVisibleCount: number | null = null;
 let updateDownloadProgress: {
   version: string;
   installerName: string;
@@ -71,11 +75,24 @@ let updateDownloadProgress: {
 } | null = null;
 let updateStatusMessage: string | null = null;
 let updateStatusIsError = false;
+let wilyTraderUpdateVersion: string | null = null;
+let wilyTraderCurrentVersion: string | null = null;
+let wilyTraderRepoPath: string | null = null;
+let wilyTraderUpdateInProgress = false;
+let wilyTraderStatusMessage: string | null = null;
+let wilyTraderStatusIsError = false;
+let wilyTraderDownloadProgress: {
+  version: string;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+} | null = null;
 // Tracks whether the active recording is record-mode or trade-mode (both
 // share the 'recording' AppState; only the launcher label/hint differ).
 let currentSessionMode: 'record' | 'trade' = 'record';
 
 type LauncherUpdateCheckResult = Awaited<ReturnType<typeof window.snipalotLauncher.checkForUpdates>>;
+type WilyTraderUpdateCheckResult = Awaited<ReturnType<typeof window.snipalotLauncher.checkWilyTraderUpdates>>;
 
 function normalizeHotkey(combo: string): string[] {
   return combo
@@ -129,11 +146,41 @@ function applyUpdateCheckResult(result: LauncherUpdateCheckResult): void {
   renderLauncherImpl();
 }
 
+function applyWilyTraderUpdateCheckResult(result: WilyTraderUpdateCheckResult): void {
+  if (result.ok && result.updateAvailable && result.latestVersion) {
+    wilyTraderUpdateVersion = result.latestVersion;
+    wilyTraderCurrentVersion = result.currentVersion;
+    wilyTraderRepoPath = result.repoPath;
+    wilyTraderStatusMessage = null;
+    wilyTraderStatusIsError = false;
+    wilyTraderDownloadProgress = null;
+  } else if (result.ok && !wilyTraderUpdateInProgress) {
+    wilyTraderUpdateVersion = null;
+    wilyTraderCurrentVersion = result.currentVersion;
+    wilyTraderRepoPath = result.repoPath;
+    wilyTraderStatusMessage = null;
+    wilyTraderStatusIsError = false;
+    wilyTraderDownloadProgress = null;
+  }
+  renderLauncherImpl();
+}
+
 function refreshLauncherUpdateCheck(reason: string): void {
   void window.snipalotLauncher.checkForUpdates()
     .then(applyUpdateCheckResult)
     .catch((err) => {
       window.snipalotLauncher.log('update-check', 'fail', {
+        reason,
+        message: (err as Error).message,
+      });
+    });
+}
+
+function refreshWilyTraderUpdateCheck(reason: string): void {
+  void window.snipalotLauncher.checkWilyTraderUpdates()
+    .then(applyWilyTraderUpdateCheckResult)
+    .catch((err) => {
+      window.snipalotLauncher.log('wilytrader-update-check', 'fail', {
         reason,
         message: (err as Error).message,
       });
@@ -290,42 +337,87 @@ function formatLauncherBytes(bytes: number): string {
 function renderLauncherUpdate(): void {
   const shouldShow = Boolean(availableUpdateVersion);
   launcherUpdateEl.hidden = !shouldShow;
-  if (updateBannerVisible !== shouldShow) {
+  if (shouldShow) {
+    launcherUpdateEl.disabled = updateInstallInProgress || !availableUpdateHasInstaller;
+    launcherUpdateEl.classList.toggle('installing', updateInstallInProgress && !updateStatusIsError);
+    launcherUpdateEl.classList.toggle('downloading', updateInstallInProgress && updateDownloadProgress !== null);
+    launcherUpdateEl.classList.toggle('err', updateStatusIsError);
+    const percent = updateDownloadProgress?.percent ?? (
+      updateDownloadProgress?.totalBytes
+        ? Math.round((updateDownloadProgress.downloadedBytes / updateDownloadProgress.totalBytes) * 100)
+        : null
+    );
+    launcherUpdateProgressFillEl.style.width = updateDownloadProgress
+      ? `${Math.max(0, Math.min(100, percent ?? 8))}%`
+      : '0%';
+    if (updateStatusMessage) {
+      launcherUpdateLabelEl.textContent = updateStatusMessage;
+    } else if (updateDownloadProgress) {
+      const sizeText = updateDownloadProgress.totalBytes
+        ? `${formatLauncherBytes(updateDownloadProgress.downloadedBytes)} of ${formatLauncherBytes(updateDownloadProgress.totalBytes)}`
+        : formatLauncherBytes(updateDownloadProgress.downloadedBytes);
+      launcherUpdateLabelEl.textContent = percent === null
+        ? `Downloading Snipalot ${updateDownloadProgress.version} installer... ${sizeText}`
+        : `Downloading Snipalot ${updateDownloadProgress.version} installer... ${percent}% (${sizeText})`;
+    } else {
+      launcherUpdateLabelEl.textContent = updateInstallInProgress
+        ? `Installing Snipalot ${availableUpdateVersion}...`
+        : `Snipalot ${availableUpdateVersion} is available. Click here to install.`;
+    }
+    launcherUpdateEl.title = availableUpdateHasInstaller
+      ? `Download and install Snipalot ${availableUpdateVersion}`
+      : `Snipalot ${availableUpdateVersion} is available, but no installer asset was found`;
+  }
+  renderWilyTraderUpdate();
+  resizeForVisibleUpdateBanners();
+}
+
+function renderWilyTraderUpdate(): void {
+  const shouldShow = Boolean(wilyTraderUpdateVersion);
+  wilyTraderUpdateEl.hidden = !shouldShow;
+  if (!shouldShow) return;
+  wilyTraderUpdateEl.disabled = wilyTraderUpdateInProgress;
+  wilyTraderUpdateEl.classList.toggle('installing', wilyTraderUpdateInProgress && !wilyTraderStatusIsError);
+  wilyTraderUpdateEl.classList.toggle('downloading', wilyTraderUpdateInProgress && wilyTraderDownloadProgress !== null);
+  wilyTraderUpdateEl.classList.toggle('err', wilyTraderStatusIsError);
+  const percent = wilyTraderDownloadProgress?.percent ?? (
+    wilyTraderDownloadProgress?.totalBytes
+      ? Math.round((wilyTraderDownloadProgress.downloadedBytes / wilyTraderDownloadProgress.totalBytes) * 100)
+      : null
+  );
+  wilyTraderUpdateProgressFillEl.style.width = wilyTraderDownloadProgress
+    ? `${Math.max(0, Math.min(100, percent ?? 8))}%`
+    : '0%';
+  if (wilyTraderStatusMessage) {
+    wilyTraderUpdateLabelEl.textContent = wilyTraderStatusMessage;
+  } else if (wilyTraderDownloadProgress) {
+    const sizeText = wilyTraderDownloadProgress.totalBytes
+      ? `${formatLauncherBytes(wilyTraderDownloadProgress.downloadedBytes)} of ${formatLauncherBytes(wilyTraderDownloadProgress.totalBytes)}`
+      : formatLauncherBytes(wilyTraderDownloadProgress.downloadedBytes);
+    wilyTraderUpdateLabelEl.textContent = percent === null
+      ? `Downloading WilyTrader ${wilyTraderDownloadProgress.version}... ${sizeText}`
+      : `Downloading WilyTrader ${wilyTraderDownloadProgress.version}... ${percent}% (${sizeText})`;
+  } else {
+    const current = wilyTraderCurrentVersion ? ` from ${wilyTraderCurrentVersion}` : '';
+    wilyTraderUpdateLabelEl.textContent = wilyTraderUpdateInProgress
+      ? `Updating WilyTrader ${wilyTraderUpdateVersion}...`
+      : `WilyTrader ${wilyTraderUpdateVersion} is available${current}. Click to update files.`;
+  }
+  wilyTraderUpdateEl.title = wilyTraderRepoPath
+    ? `Update WilyTrader files in ${wilyTraderRepoPath}, then reload the unpacked extension in Chrome`
+    : `Download WilyTrader ${wilyTraderUpdateVersion} files and open Chrome Extensions`;
+}
+
+function resizeForVisibleUpdateBanners(): void {
+  const visibleCount = [availableUpdateVersion, wilyTraderUpdateVersion].filter(Boolean).length;
+  const shouldShow = visibleCount > 0;
+  if (updateBannerVisible !== shouldShow || updateBannerVisibleCount !== visibleCount) {
     updateBannerVisible = shouldShow;
-    void window.snipalotLauncher.setUpdateBannerVisible(shouldShow).catch((err) => {
+    updateBannerVisibleCount = visibleCount;
+    void window.snipalotLauncher.setUpdateBannerVisible(shouldShow, visibleCount).catch((err) => {
       window.snipalotLauncher.log('update-banner-resize', 'fail', { message: (err as Error).message });
     });
   }
-  if (!shouldShow) return;
-  launcherUpdateEl.disabled = updateInstallInProgress || !availableUpdateHasInstaller;
-  launcherUpdateEl.classList.toggle('installing', updateInstallInProgress && !updateStatusIsError);
-  launcherUpdateEl.classList.toggle('downloading', updateInstallInProgress && updateDownloadProgress !== null);
-  launcherUpdateEl.classList.toggle('err', updateStatusIsError);
-  const percent = updateDownloadProgress?.percent ?? (
-    updateDownloadProgress?.totalBytes
-      ? Math.round((updateDownloadProgress.downloadedBytes / updateDownloadProgress.totalBytes) * 100)
-      : null
-  );
-  launcherUpdateProgressFillEl.style.width = updateDownloadProgress
-    ? `${Math.max(0, Math.min(100, percent ?? 8))}%`
-    : '0%';
-  if (updateStatusMessage) {
-    launcherUpdateLabelEl.textContent = updateStatusMessage;
-  } else if (updateDownloadProgress) {
-    const sizeText = updateDownloadProgress.totalBytes
-      ? `${formatLauncherBytes(updateDownloadProgress.downloadedBytes)} of ${formatLauncherBytes(updateDownloadProgress.totalBytes)}`
-      : formatLauncherBytes(updateDownloadProgress.downloadedBytes);
-    launcherUpdateLabelEl.textContent = percent === null
-      ? `Downloading Snipalot ${updateDownloadProgress.version} installer... ${sizeText}`
-      : `Downloading Snipalot ${updateDownloadProgress.version} installer... ${percent}% (${sizeText})`;
-  } else {
-    launcherUpdateLabelEl.textContent = updateInstallInProgress
-      ? `Installing Snipalot ${availableUpdateVersion}...`
-      : `Snipalot ${availableUpdateVersion} is available. Click here to install.`;
-  }
-  launcherUpdateEl.title = availableUpdateHasInstaller
-    ? `Download and install Snipalot ${availableUpdateVersion}`
-    : `Snipalot ${availableUpdateVersion} is available, but no installer asset was found`;
 }
 
 function renderCaptureModeButtons(): void {
@@ -543,6 +635,42 @@ launcherUpdateEl.addEventListener('click', async () => {
   }
 });
 
+wilyTraderUpdateEl.addEventListener('click', async () => {
+  if (!wilyTraderUpdateVersion || wilyTraderUpdateInProgress) return;
+  wilyTraderUpdateInProgress = true;
+  wilyTraderStatusMessage = null;
+  wilyTraderStatusIsError = false;
+  wilyTraderDownloadProgress = {
+    version: wilyTraderUpdateVersion,
+    downloadedBytes: 0,
+    totalBytes: null,
+    percent: null,
+  };
+  renderWilyTraderUpdate();
+  try {
+    const result = await window.snipalotLauncher.updateWilyTrader();
+    wilyTraderDownloadProgress = null;
+    wilyTraderStatusMessage = result.message;
+    wilyTraderStatusIsError = !result.ok;
+    if (result.ok) {
+      wilyTraderUpdateVersion = null;
+      wilyTraderUpdateInProgress = false;
+      window.snipalotLauncher.log('wilytrader-update', 'success', result);
+    } else {
+      wilyTraderUpdateInProgress = false;
+      window.snipalotLauncher.log('wilytrader-update', 'fail', result);
+    }
+    renderLauncherImpl();
+  } catch (err) {
+    wilyTraderUpdateInProgress = false;
+    wilyTraderDownloadProgress = null;
+    wilyTraderStatusMessage = `WilyTrader update failed: ${(err as Error).message}`;
+    wilyTraderStatusIsError = true;
+    renderLauncherImpl();
+    window.snipalotLauncher.log('wilytrader-update', 'error', { message: wilyTraderStatusMessage });
+  }
+});
+
 window.snipalotLauncher.onUpdateDownloadProgress((progress) => {
   updateInstallInProgress = true;
   updateDownloadProgress = progress;
@@ -551,6 +679,14 @@ window.snipalotLauncher.onUpdateDownloadProgress((progress) => {
   renderLauncherUpdate();
 });
 window.snipalotLauncher.onUpdateCheckResult(applyUpdateCheckResult);
+window.snipalotLauncher.onWilyTraderDownloadProgress((progress) => {
+  wilyTraderUpdateInProgress = true;
+  wilyTraderDownloadProgress = progress;
+  wilyTraderStatusMessage = null;
+  wilyTraderStatusIsError = false;
+  renderWilyTraderUpdate();
+});
+window.snipalotLauncher.onWilyTraderUpdateCheckResult(applyWilyTraderUpdateCheckResult);
 
 window.addEventListener('keydown', (event) => {
   if (event.repeat) return;
@@ -605,5 +741,7 @@ window.snipalotLauncher.getCaptureMode()
   })
   .catch(() => { /* ignore */ });
 refreshLauncherUpdateCheck('boot');
+refreshWilyTraderUpdateCheck('boot');
 setInterval(() => refreshLauncherUpdateCheck('periodic'), 60 * 1000);
+setInterval(() => refreshWilyTraderUpdateCheck('periodic'), 5 * 60 * 1000);
 window.snipalotLauncher.log('boot', 'launcher ready');

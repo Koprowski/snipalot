@@ -30,6 +30,16 @@ interface Window {
       message: string;
       installerAssetUrl?: string | null;
     }>;
+    checkWilyTraderUpdates: () => Promise<{
+      ok: boolean;
+      currentVersion: string | null;
+      latestVersion: string | null;
+      releaseUrl: string | null;
+      updateAvailable: boolean;
+      repoPath: string | null;
+      extensionPath: string | null;
+      message: string;
+    }>;
     onUpdateCheckResult: (callback: (result: {
       ok: boolean;
       currentVersion: string;
@@ -39,7 +49,24 @@ interface Window {
       message: string;
       installerAssetUrl?: string | null;
     }) => void) => (() => void);
+    onWilyTraderUpdateCheckResult: (callback: (result: {
+      ok: boolean;
+      currentVersion: string | null;
+      latestVersion: string | null;
+      releaseUrl: string | null;
+      updateAvailable: boolean;
+      repoPath: string | null;
+      extensionPath: string | null;
+      message: string;
+    }) => void) => (() => void);
     installUpdate: () => Promise<{ ok: boolean; message: string; releaseUrl?: string; installerPath?: string }>;
+    updateWilyTrader: () => Promise<{
+      ok: boolean;
+      message: string;
+      repoPath?: string | null;
+      extensionPath?: string | null;
+      releaseUrl?: string | null;
+    }>;
     onUpdateDownloadProgress: (callback: (progress: {
       version: string;
       installerName: string;
@@ -47,7 +74,13 @@ interface Window {
       totalBytes: number | null;
       percent: number | null;
     }) => void) => (() => void);
-    setUpdateBannerVisible: (visible: boolean) => Promise<boolean>;
+    onWilyTraderDownloadProgress: (callback: (progress: {
+      version: string;
+      downloadedBytes: number;
+      totalBytes: number | null;
+      percent: number | null;
+    }) => void) => (() => void);
+    setUpdateBannerVisible: (visible: boolean, count?: number) => Promise<boolean>;
     settings: () => Promise<void>;
     exitApp: () => Promise<boolean>;
     toggleMinimize: () => Promise<void>;

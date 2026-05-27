@@ -615,6 +615,12 @@ Agent behavior:
  - Bumped Snipalot from `1.1.0` to `1.1.1` after overlay rebuild, WilyTrader bridge, trade-log label, and master trade-sync compatibility fixes.
  - `npm test` passed, and the light NSIS installer built at `release/Snipalot-1.1.1-setup.exe` with `npm run package:nopublish -- --config.win.signAndEditExecutable=false` due the known local `winCodeSign` symlink privilege issue.
  - SHA256: `00BD4263DF45C22E9F648B84B8512F95B201A49228A741BE80B5DCE43681B480`.
+- **WilyTrader launcher update flow (v1.1.2 local branch):**
+ - Launcher now checks WilyTrader GitHub tags separately from Snipalot app releases and can show a second home-screen update banner.
+ - WilyTrader update target detection prefers the existing Chrome unpacked-extension path from Chrome profile Preferences, then `WILYTRADER_HOME`, common local folders, and only then a Snipalot-managed fallback folder.
+ - If no existing folder is found, clicking the WilyTrader banner asks the user to select the repo/extension folder, use a managed folder, or cancel. Selected folders are validated against WilyTrader `manifest.json` before files are written.
+ - Updates use `git pull --ff-only` when the target is a Git checkout; otherwise Snipalot downloads the latest WilyTrader tag ZIP, overwrites the existing folder contents, and opens `chrome://extensions` so the user can manually click Reload on the unpacked extension.
+ - Validation: `npm test`.
 
 ## Packaged app logs
 

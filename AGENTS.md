@@ -667,7 +667,7 @@ Agent behavior:
  - Light/full `electron-builder` configs now disable built-in Start Menu shortcut creation; `resources/installer.nsh` owns shortcut creation explicitly, deletes stale `Electron.lnk`, and creates canonical current-user plus all-users `Snipalot.lnk` entries with the Snipalot icon and `app.snipalot` AppUserModelID.
  - Current machine remediation performed: removed `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Electron.lnk` and copied the canonical all-users `Snipalot.lnk` into the current-user Start Menu. Search indexing may still need a short Windows refresh delay.
  - Validation: `npm test` passed, including installer shortcut guards.
-- **Version bump:** `package.json` bumped to `1.1.14` for the trade-log and Start Menu shortcut fixes above.
+- **Version bump / release follow-up:** `package.json` bumped to `1.1.15` for the trade-log and Start Menu shortcut fixes above. The first `v1.1.14` release workflow produced the installer but failed the post-package icon assertion; `scripts/assert-windows-icon.mjs` now compares the expected icon at the same frame size Windows extracts from the EXE before failing.
 
 ## Packaged app logs
 

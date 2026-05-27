@@ -24,32 +24,48 @@ const ps = `
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Security
 
-function Get-IconHash([string] $Path) {
+function Get-IconBitmap([string] $Path, [int] $Width = 0, [int] $Height = 0) {
   if ($Path.ToLowerInvariant().EndsWith('.ico')) {
-    $icon = [System.Drawing.Icon]::new($Path)
+    if ($Width -gt 0 -and $Height -gt 0) {
+      $icon = [System.Drawing.Icon]::new($Path, [System.Drawing.Size]::new($Width, $Height))
+    } else {
+      $icon = [System.Drawing.Icon]::new($Path)
+    }
   } else {
     $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($Path)
   }
   if ($null -eq $icon) {
     throw "No associated icon found for $Path"
   }
-  $bitmap = $icon.ToBitmap()
+  try {
+    return $icon.ToBitmap()
+  } finally {
+    $icon.Dispose()
+  }
+}
+
+function Get-BitmapHash([System.Drawing.Bitmap] $Bitmap) {
   $stream = [System.IO.MemoryStream]::new()
-  $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+  $Bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
   $sha = [System.Security.Cryptography.SHA256]::Create()
   try {
     return [Convert]::ToBase64String($sha.ComputeHash($stream.ToArray()))
   } finally {
     $sha.Dispose()
     $stream.Dispose()
-    $bitmap.Dispose()
-    $icon.Dispose()
   }
 }
 
-$expected = Get-IconHash -Path '${expectedIcon.replaceAll("'", "''")}'
-$actual = Get-IconHash -Path '${exePath.replaceAll("'", "''")}'
-[Console]::Out.WriteLine(($expected + "|" + $actual))
+$actualBitmap = Get-IconBitmap -Path '${exePath.replaceAll("'", "''")}'
+$expectedBitmap = Get-IconBitmap -Path '${expectedIcon.replaceAll("'", "''")}' -Width $actualBitmap.Width -Height $actualBitmap.Height
+try {
+  $expected = Get-BitmapHash -Bitmap $expectedBitmap
+  $actual = Get-BitmapHash -Bitmap $actualBitmap
+  [Console]::Out.WriteLine(($expected + "|" + $actual + "|" + $actualBitmap.Width + "x" + $actualBitmap.Height))
+} finally {
+  $expectedBitmap.Dispose()
+  $actualBitmap.Dispose()
+}
 `;
 
 const result = spawnSync(
@@ -65,7 +81,7 @@ if (result.status !== 0) {
   process.exit(result.status || 1);
 }
 
-const [expectedHash, actualHash] = result.stdout.trim().split('|');
+const [expectedHash, actualHash, actualSize] = result.stdout.trim().split('|');
 if (!expectedHash || !actualHash) {
   console.error(`[assert-windows-icon] unexpected hash output: ${result.stdout.trim()}`);
   process.exit(1);
@@ -75,6 +91,7 @@ if (expectedHash !== actualHash) {
   console.error('[assert-windows-icon] packaged Snipalot.exe does not embed the Snipalot app icon');
   console.error(`[assert-windows-icon] expected icon: ${expectedIcon}`);
   console.error(`[assert-windows-icon] executable: ${exePath}`);
+  if (actualSize) console.error(`[assert-windows-icon] compared icon size: ${actualSize}`);
   console.error('[assert-windows-icon] likely cause: win.signAndEditExecutable is disabled or executable resource editing failed');
   process.exit(1);
 }

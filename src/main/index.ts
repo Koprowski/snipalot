@@ -2790,7 +2790,7 @@ async function fetchLatestWilyTraderReleaseInfo(signal?: AbortSignal): Promise<W
       zipballUrl: tag.zipball_url ?? '',
     }))
     .filter((tag) => /^\d+\.\d+\.\d+$/.test(tag.version) && /^https?:\/\//i.test(tag.zipballUrl))
-    .sort((a, b) => (isRemoteVersionNewer(a.version, b.version) ? 1 : isRemoteVersionNewer(b.version, a.version) ? -1 : 0))
+    .sort((a, b) => (isRemoteVersionNewer(a.version, b.version) ? -1 : isRemoteVersionNewer(b.version, a.version) ? 1 : 0))
     .pop();
   if (!latest) {
     throw new Error('WilyTrader tag metadata did not include a valid version tag.');

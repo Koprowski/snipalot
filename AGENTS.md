@@ -645,6 +645,9 @@ Agent behavior:
 - **Chrome Extensions delayed navigation retry (v1.1.9 local branch):**
  - The Settings **Open Chrome Extensions** button now uses a two-stage Windows Chrome handoff: first activate the selected Chrome profile, then after a short delay open `chrome://extensions/` or the known WilyTrader extension URL in a new tab.
  - This handles the case where Chrome accepts the profile handoff but drops the internal `chrome://` navigation from the initial launch command.
+- **Chrome Extensions clipboard navigation (v1.1.10 local branch):**
+ - Windows Chrome handoff now opens one blank tab in the selected profile, temporarily places the Chrome Extensions URL on the clipboard, sends `Ctrl+L`, `Ctrl+V`, and `Enter`, then restores the previous clipboard text.
+ - This avoids Chrome's command-line filtering of `chrome://` URLs while avoiding visible character-by-character typing.
 
 ## Packaged app logs
 

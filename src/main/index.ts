@@ -3227,6 +3227,51 @@ function startChromeDetached(args: string[]): void {
   child.unref();
 }
 
+function navigateActiveChromeTabWithClipboard(url: string): Promise<boolean> {
+  const previousClipboardText = clipboard.readText();
+  clipboard.writeText(url);
+  const script = [
+    '$ErrorActionPreference = \'Stop\'',
+    'Add-Type -AssemblyName System.Windows.Forms',
+    '$ws = New-Object -ComObject WScript.Shell',
+    '$deadline = (Get-Date).AddSeconds(5)',
+    'do {',
+    '  if ($ws.AppActivate(\'Google Chrome\') -or $ws.AppActivate(\'Chrome\')) {',
+    '    Start-Sleep -Milliseconds 250',
+    '    [System.Windows.Forms.SendKeys]::SendWait(\'^l\')',
+    '    Start-Sleep -Milliseconds 80',
+    '    [System.Windows.Forms.SendKeys]::SendWait(\'^v\')',
+    '    Start-Sleep -Milliseconds 80',
+    '    [System.Windows.Forms.SendKeys]::SendWait(\'{ENTER}\')',
+    '    exit 0',
+    '  }',
+    '  Start-Sleep -Milliseconds 150',
+    '} while ((Get-Date) -lt $deadline)',
+    'exit 1',
+  ].join('; ');
+
+  return new Promise((resolve) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.on('error', (err) => {
+      log('wilytrader-update', 'chrome sendkeys navigation failed to start', {
+        err: err.message,
+      });
+      clipboard.writeText(previousClipboardText);
+      resolve(false);
+    });
+    child.on('exit', (code) => {
+      clipboard.writeText(previousClipboardText);
+      if (code !== 0) {
+        log('wilytrader-update', 'chrome sendkeys navigation failed', { code });
+      }
+      resolve(code === 0);
+    });
+  });
+}
+
 async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {}): Promise<void> {
   if (options.closeSettings) {
     closeSettingsBeforeExternalHandoff();
@@ -3236,10 +3281,11 @@ async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {
   const profileArgs = target.profileName ? [`--profile-directory=${target.profileName}`] : [];
   if (process.platform === 'win32') {
     try {
-      startChromeDetached(profileArgs);
-      await new Promise((resolve) => setTimeout(resolve, 650));
-      startChromeDetached([...profileArgs, '--new-tab', target.url]);
-      return;
+      startChromeDetached([...profileArgs, 'about:blank']);
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      if (await navigateActiveChromeTabWithClipboard(target.url)) {
+        return;
+      }
     } catch (err) {
       log('wilytrader-update', 'chrome start failed, falling back to shell.openExternal', {
         err: (err as Error).message,

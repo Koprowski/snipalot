@@ -145,9 +145,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   retention: 'keep-all',
   audio: { microphone: true },
   hotkeys: {
-    // 'S' for Snip (was 'R' for Record). The R chord conflicts with several
-    // common reload bindings (Ctrl+Shift+R in browsers, IDEs).
-    startStop: 'Ctrl+Shift+S',
+    // 'S' for Snip/recording. Ctrl+Alt avoids the sticky Shift rearm issues
+    // seen on some Windows systems with state-changing global shortcuts.
+    startStop: 'Ctrl+Alt+S',
     // 'A' for Annotate (was 'N'). N is taken by "new file/window" in many
     // apps and the conflict was costing Jason muscle memory.
     annotate: 'Ctrl+Shift+A',
@@ -157,7 +157,7 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
     snapshot: 'Ctrl+Alt+P',
     // 'T' for Trade — toggles a Trade session, equivalent to clicking
     // the violet Trade button in the launcher. Always-on global.
-    startTrade: 'Ctrl+Shift+T',
+    startTrade: 'Ctrl+Alt+T',
     // 'X' for "X marks the spot" — only registered while a trade-mode recording is
     // live. Each press logs a recording-relative timestamp the LLM
     // uses as an anchor when extracting trades.
@@ -289,6 +289,20 @@ function migrateLoadedConfig(
     log('config', 'migrated old default snapshot hotkey', {
       from: 'Ctrl+Shift+P',
       to: config.hotkeys.snapshot,
+    });
+  }
+  if (parsed.hotkeys?.startStop === 'Ctrl+Shift+S') {
+    config.hotkeys.startStop = DEFAULT_CONFIG.hotkeys.startStop;
+    log('config', 'migrated old default startStop hotkey', {
+      from: 'Ctrl+Shift+S',
+      to: config.hotkeys.startStop,
+    });
+  }
+  if (parsed.hotkeys?.startTrade === 'Ctrl+Shift+T') {
+    config.hotkeys.startTrade = DEFAULT_CONFIG.hotkeys.startTrade;
+    log('config', 'migrated old default startTrade hotkey', {
+      from: 'Ctrl+Shift+T',
+      to: config.hotkeys.startTrade,
     });
   }
   if (parsed.trade?.geminiCliModel === 'gemini-2.5-flash') {

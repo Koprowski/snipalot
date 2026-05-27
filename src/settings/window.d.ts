@@ -17,6 +17,15 @@ interface Window {
       installerAssetName?: string | null;
       message: string;
     }>;
+    getWilyTraderStatus: () => Promise<{
+      installed: boolean;
+      version: string | null;
+      repoPath: string | null;
+      extensionPath: string | null;
+      isGitRepo: boolean;
+      message: string;
+    }>;
+    openWilyTraderFolder: () => Promise<{ ok: boolean; message: string; path?: string | null }>;
     downloadAndInstallUpdate: () => Promise<{
       ok: boolean;
       message: string;

@@ -49,10 +49,10 @@ let currentProcessingProgress:
   | null = null;
 let currentCanAbandonProcessing = false;
 // Mirrors config.hotkeys.startStop. Updated on every state broadcast so the
-// idle hint always reflects the current binding (default: Ctrl+Shift+S).
-let currentStartStopHotkey = 'Ctrl+Shift+S';
+// idle hint always reflects the current binding (default: Ctrl+Alt+S).
+let currentStartStopHotkey = 'Ctrl+Alt+S';
 let currentSnapshotHotkey = 'Ctrl+Alt+P';
-let currentStartTradeHotkey = 'Ctrl+Shift+T';
+let currentStartTradeHotkey = 'Ctrl+Alt+T';
 // Mirrors config.hotkeys.tradeMarker. Used in the trade-recording hint only.
 let currentTradeMarkerHotkey = 'Ctrl+Shift+X';
 let currentCaptureMode: 'region' | 'fullscreen' | 'window' = 'region';

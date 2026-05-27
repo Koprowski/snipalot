@@ -63,7 +63,7 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     ipcRenderer.invoke('settings:gemini-cli-signin-cancel'),
   geminiCliSignout: (): Promise<{ ok: boolean; message?: string }> =>
     ipcRenderer.invoke('settings:gemini-cli-signout'),
-  getAppInfo: (): Promise<{ version: string; platform: string }> =>
+  getAppInfo: (): Promise<{ version: string; releasePageUrl: string }> =>
     ipcRenderer.invoke('settings:get-app-info'),
   checkForUpdates: (): Promise<{
     ok: boolean;
@@ -75,6 +75,16 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     installerAssetName?: string | null;
     message: string;
   }> => ipcRenderer.invoke('settings:check-for-updates'),
+  getWilyTraderStatus: (): Promise<{
+    installed: boolean;
+    version: string | null;
+    repoPath: string | null;
+    extensionPath: string | null;
+    isGitRepo: boolean;
+    message: string;
+  }> => ipcRenderer.invoke('settings:get-wilytrader-status'),
+  openWilyTraderFolder: (): Promise<{ ok: boolean; message: string; path?: string | null }> =>
+    ipcRenderer.invoke('settings:open-wilytrader-folder'),
   downloadAndInstallUpdate: (): Promise<{
     ok: boolean;
     message: string;

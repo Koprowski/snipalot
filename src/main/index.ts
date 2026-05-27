@@ -2310,6 +2310,15 @@ ipcMain.handle('settings:get-app-info', () => ({
   releasePageUrl: 'https://github.com/Koprowski/snipalot/releases/latest',
 }));
 
+interface WilyTraderInstallStatus {
+  installed: boolean;
+  version: string | null;
+  repoPath: string | null;
+  extensionPath: string | null;
+  isGitRepo: boolean;
+  message: string;
+}
+
 interface SettingsUpdateCheckResult {
   ok: boolean;
   currentVersion: string;
@@ -2805,6 +2814,45 @@ ipcMain.handle('launcher:check-wilytrader-updates', async (): Promise<WilyTrader
 
 ipcMain.handle('launcher:update-wilytrader', async (evt): Promise<WilyTraderUpdateInstallResult> => {
   return updateWilyTraderFiles(evt.sender);
+});
+
+ipcMain.handle('settings:get-wilytrader-status', async (): Promise<WilyTraderInstallStatus> => {
+  const install = detectWilyTraderInstall();
+  if (!install) {
+    return {
+      installed: false,
+      version: null,
+      repoPath: WILYTRADER_MANAGED_DIR,
+      extensionPath: path.join(WILYTRADER_MANAGED_DIR, 'extension'),
+      isGitRepo: false,
+      message: 'No local WilyTrader manifest was found. Install from the launcher WilyTrader update notice first.',
+    };
+  }
+  return {
+    installed: true,
+    version: install.version,
+    repoPath: install.repoPath,
+    extensionPath: install.extensionPath,
+    isGitRepo: install.isGitRepo,
+    message: `WilyTrader ${install.version} is installed at ${install.extensionPath}.`,
+  };
+});
+
+ipcMain.handle('settings:open-wilytrader-folder', async (): Promise<{ ok: boolean; message: string; path?: string | null }> => {
+  const install = detectWilyTraderInstall();
+  if (!install) {
+    return {
+      ok: false,
+      message: 'No local WilyTrader install was found yet.',
+      path: null,
+    };
+  }
+  await revealWilyTraderExtensionFolder(install.extensionPath);
+  return {
+    ok: true,
+    message: `Opened WilyTrader folder: ${install.extensionPath}`,
+    path: install.extensionPath,
+  };
 });
 
 ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
@@ -6910,7 +6958,7 @@ ipcMain.handle('launcher:close-to-tray', () => {
     hideToTrayNotificationShown = true;
     showNotification(
       'Snipalot is still running',
-      'Hotkeys (Ctrl+Shift+S record, Ctrl+Shift+T trade) stay active. ' +
+      'Hotkeys (Ctrl+Alt+S record, Ctrl+Alt+T trade) stay active. ' +
         'Click the tray icon to bring the launcher back, or right-click ' +
         'the tray → Quit Snipalot to fully exit.'
     );

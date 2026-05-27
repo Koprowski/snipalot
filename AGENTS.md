@@ -131,7 +131,7 @@ Agent behavior:
 - **Processing / trade stalls:** If `save-webm` never arrives or Whisper hangs, a **processing watchdog** returns the launcher to idle with a toast (and Whisper is killed after 25 min). Trade-mode **MockApe wait** defaults to **3 minutes** then proceeds without trade data (was 30 min).
 - **`mic_diagnostics.json`** in each **record/trade** session folder when recording starts: `getUserMedia` success/failure, active audio track label + `deviceId` (when exposed), `enumerateDevices` snapshot for `audioinput`. Main logs a one-line **`recorder` / `mic capture summary`**. Use for “no audio” / wrong-default-mic support (Snipalot still uses OS default input; no in-app mic picker yet).
 - **Frame picker:** Export uses `recording.mp4` inside the session directory (not the parent folder).
-- **Hotkeys:** README, launcher hints, and logs aligned with `config.ts` (e.g. trade marker `Ctrl+Shift+X`, trade toggle `Ctrl+Shift+T`).
+- **Hotkeys:** README, launcher hints, and logs aligned with `config.ts` (e.g. trade marker `Ctrl+Shift+X`, trade toggle `Ctrl+Alt+T`).
 - **Snapshots:** Serialized in main so concurrent 📸 cannot cross-wire `recorder:snap-result`.
 - **Settings:** Folder picker avoids a forced parent window when settings is closed.
 - **Docs:** README links Releases + Issue #2 for exe vs dev install; production build uses `npm run package` → **`release/`**.
@@ -231,7 +231,7 @@ Agent behavior:
  - `electron-builder.yml` was updated for `electron-builder@26` compatibility (`win.sign` removed, `nsis.warningsAsErrors=false` for bundled NSIS template warning). A fresh-output NSIS build succeeded and verified Whisper/model are present under packaged `resources/resources/...`; default `release/` may still be locally file-locked by Windows until handles clear.
 - **Review-priority follow-ups (local branch):**
  - Completed: `settings:save` now logs `sanitizeSettingsPartialForLog(partial)` so `trade.openaiApiKey` is redacted in `snipalot.log`; Trade auto-extraction now retries with a positional prompt after Gemini CLI's known "`--prompt` + positional" parser conflict, matching Settings test behavior.
- - Recorder shortcut fail-safe passed build/static review and Pass 3 was appended to `docs/recording-shortcuts-issue-log.md`; still needs hands-on runtime validation for both `Ctrl+Shift+S` and `Ctrl+Shift+T` with exact log lines.
+ - Recorder shortcut fail-safe passed build/static review and Pass 3 was appended to `docs/recording-shortcuts-issue-log.md`; legacy validation notes refer to the former `Ctrl+Shift+S` and `Ctrl+Shift+T` defaults.
  - Completed in v1.0.9 local branch: trade hotkeys are editable in Settings, launcher-X docs/tooltips match full-exit behavior, config write errors propagate to Settings, and `docs/installation-guide-issue-2.md` now documents Gemini CLI/OpenRouter mode instead of the removed Gemini API key field.
 - **Settings/docs/persistence hardening (v1.0.9 local branch):**
  - Settings hotkey editor now includes `startTrade` and `tradeMarker`, so all README/config advertised trade shortcuts are rebindable from the UI.
@@ -625,6 +625,9 @@ Agent behavior:
  - Selecting a folder now accepts an empty custom folder as a WilyTrader install target instead of requiring an existing `manifest.json`; non-empty non-WilyTrader folders are still rejected.
  - After install/update, Snipalot opens the final `extension` folder in Explorer, copies that Load unpacked path to the clipboard, opens `chrome://extensions/`, and shows a native completion dialog with the exact folder paths and manual Chrome steps.
  - The launcher keeps the WilyTrader success banner visible after completion instead of immediately hiding it.
+- **WilyTrader settings status + hotkey defaults (v1.1.4 local branch):**
+ - Settings now shows WilyTrader installed version plus the clickable Load unpacked folder near the bottom of the window; the folder opens in Explorer through main-process IPC.
+ - Default shortcuts are now `Ctrl+Alt+S` for feedback recording, `Ctrl+Alt+T` for Trade, and `Ctrl+Alt+P` for screenshot/snapshot. Config load migrates users still on the old default `Ctrl+Shift+S` / `Ctrl+Shift+T`; custom bindings are preserved.
 
 ## Packaged app logs
 
@@ -646,7 +649,7 @@ These came from code review; **not** implemented yet. Pick up as separate tasks 
 
 6. **In-app microphone device picker:** Diagnostics exist; explicit device selection in Settings still deferred.
 
-7. **Shortcut-triggered recording startup reliability:** Mitigations landed (queued-start fallback + timeout) and build/static verification passed, but runtime validation across both hotkeys (`Ctrl+Shift+S` and `Ctrl+Shift+T`) remains in progress; track detailed passes in `docs/recording-shortcuts-issue-log.md`.
+7. **Shortcut-triggered recording startup reliability:** Mitigations landed (queued-start fallback + timeout) and build/static verification passed. Defaults moved to `Ctrl+Alt+S` and `Ctrl+Alt+T`; track detailed passes in `docs/recording-shortcuts-issue-log.md`.
 
 ## Conventions
 

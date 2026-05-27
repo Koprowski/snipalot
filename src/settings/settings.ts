@@ -51,6 +51,10 @@ const launcherShowScreenshotInput = document.getElementById('launcher-show-scree
 const launcherShowTradeInput = document.getElementById('launcher-show-trade') as HTMLInputElement;
 const feedbackGenerateMp4Input = document.getElementById('feedback-generate-mp4') as HTMLInputElement;
 const feedbackGenerateGifInput = document.getElementById('feedback-generate-gif') as HTMLInputElement;
+const wilyTraderVersionEl = document.getElementById('wilytrader-version') as HTMLElement;
+const wilyTraderLocationBtn = document.getElementById('btn-wilytrader-location') as HTMLButtonElement;
+const wilyTraderStatusEl = document.getElementById('wilytrader-status') as HTMLElement;
+const btnRefreshWilyTraderStatus = document.getElementById('btn-refresh-wilytrader-status') as HTMLButtonElement;
 
 // ─── hotkey label map ──────────────────────────────────────────────────
 
@@ -71,8 +75,8 @@ const HOTKEY_LABELS: Record<string, string> = {
 // Reset button can apply locally without an extra IPC roundtrip. Keep
 // in sync if defaults ever change.
 const DEFAULT_HOTKEYS: Record<string, string> = {
-  startStop: 'Ctrl+Shift+S',
-  startTrade: 'Ctrl+Shift+T',
+  startStop: 'Ctrl+Alt+S',
+  startTrade: 'Ctrl+Alt+T',
   tradeMarker: 'Ctrl+Shift+X',
   annotate: 'Ctrl+Shift+A',
   snapshot: 'Ctrl+Alt+P',
@@ -128,6 +132,7 @@ async function init(): Promise<void> {
     firstRun: config.firstRun,
   });
   await refreshVersionAndUpdateStatus();
+  await refreshWilyTraderStatus();
 
   // Output dir
   dirInput.value = config.outputDir ?? '';
@@ -317,10 +322,63 @@ async function init(): Promise<void> {
   btnSetupNext.addEventListener('click', () => {
     void runSetupModalInstall();
   });
+  btnRefreshWilyTraderStatus.addEventListener('click', () => {
+    void refreshWilyTraderStatus();
+  });
+  wilyTraderLocationBtn.addEventListener('click', () => {
+    void openWilyTraderInstallFolder();
+  });
   void refreshDependencyStatus({ maybeShowFirstRunModal: config.firstRun });
 
   // ── Gemini CLI Google sign-in wiring ─────────────────────────────
   initGeminiSignin();
+}
+
+async function refreshWilyTraderStatus(): Promise<void> {
+  btnRefreshWilyTraderStatus.disabled = true;
+  wilyTraderVersionEl.textContent = 'Checking...';
+  wilyTraderLocationBtn.textContent = 'Checking...';
+  wilyTraderLocationBtn.disabled = true;
+  wilyTraderStatusEl.textContent = '';
+  try {
+    const result = await api.getWilyTraderStatus();
+    if (!result.installed) {
+      wilyTraderVersionEl.textContent = 'Not installed';
+      wilyTraderLocationBtn.textContent = 'No local WilyTrader folder found';
+      wilyTraderLocationBtn.disabled = true;
+      wilyTraderStatusEl.textContent = result.message;
+      return;
+    }
+    wilyTraderVersionEl.textContent = result.version ?? 'Unknown';
+    wilyTraderLocationBtn.textContent = result.extensionPath ?? result.repoPath ?? 'Unknown location';
+    wilyTraderLocationBtn.disabled = !result.extensionPath;
+    wilyTraderStatusEl.textContent = result.isGitRepo
+      ? 'Detected from a local Git checkout.'
+      : 'Detected from local extension files.';
+  } catch (err) {
+    wilyTraderVersionEl.textContent = 'Unavailable';
+    wilyTraderLocationBtn.textContent = 'Could not check WilyTrader';
+    wilyTraderLocationBtn.disabled = true;
+    wilyTraderStatusEl.textContent = `WilyTrader status check failed: ${(err as Error).message}`;
+  } finally {
+    btnRefreshWilyTraderStatus.disabled = false;
+  }
+}
+
+async function openWilyTraderInstallFolder(): Promise<void> {
+  wilyTraderLocationBtn.disabled = true;
+  try {
+    const result = await api.openWilyTraderFolder();
+    if (!result.ok) {
+      setStatus(result.message, true);
+      return;
+    }
+    setStatus(result.message);
+  } catch (err) {
+    setStatus(`Could not open WilyTrader folder: ${(err as Error).message}`, true);
+  } finally {
+    wilyTraderLocationBtn.disabled = false;
+  }
 }
 
 function formatDependencyStatus(result: DependencyStatus): string {
@@ -737,7 +795,7 @@ function renderHotkeyRows(): void {
 
 /**
  * Convert a KeyboardEvent.key into our canonical combo segment. Maps
- * letter keys to upper-case (so Ctrl+Shift+S, not Ctrl+Shift+s) and
+ * letter keys to upper-case (so Ctrl+Alt+S, not Ctrl+Alt+s) and
  * passes through named keys (Enter, Tab, F1, ArrowUp). Returns empty
  * string for keys we don't accept (modifier-only events get filtered
  * earlier).

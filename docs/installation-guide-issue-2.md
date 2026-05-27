@@ -74,7 +74,7 @@ This uses free Gemini Code Assist quota. No Gemini API key is needed.
 ## Step 5 — Record your first trade session
 
 1. Launch Snipalot from the Start menu
-2. Click the **violet Trade button** in the launcher (or press `Ctrl+Shift+T`)
+2. Click the **violet Trade button** in the launcher (or press `Ctrl+Alt+T`)
 3. Drag to select the region of your screen to record (your Padre / trading window)
 4. Trade normally and narrate out loud: *"Going into PEPE at 80k market cap, target 150k…"*
 5. Press `Ctrl+Shift+X` to drop a marker at any key moment

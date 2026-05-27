@@ -558,6 +558,52 @@ select:focus {
   overflow-wrap: anywhere;
 }
 
+.install-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.install-info-row {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.install-info-row > span {
+  color: var(--text-muted);
+}
+
+.install-info-row strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.path-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 11px;
+  min-width: 0;
+  padding: 2px 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  cursor: pointer;
+}
+
+.path-link:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  text-decoration: none;
+}
+
 .missing-cli-help {
   margin-top: 8px;
   border: 1px solid var(--border);

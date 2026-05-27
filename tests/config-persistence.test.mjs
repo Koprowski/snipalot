@@ -92,6 +92,25 @@ test('loadConfig migrates old default snapshot hotkey', () => {
   runConfigChild(home, code);
 });
 
+test('loadConfig migrates old default record and trade hotkeys', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-migrate-record-trade-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ hotkeys: { startStop: 'Ctrl+Shift+S', startTrade: 'Ctrl+Shift+T' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.hotkeys.startStop, 'Ctrl+Alt+S');
+    assert.equal(loaded.hotkeys.startTrade, 'Ctrl+Alt+T');
+  `;
+  runConfigChild(home, code);
+});
+
 test('loadConfig preserves custom snapshot hotkey', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-custom-snapshot-'));
   const configDir = path.join(home, '.snipalot');

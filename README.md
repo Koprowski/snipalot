@@ -89,8 +89,8 @@ During recording, a compact HUD overlays your screen with:
 
 | Action | Default |
 |--------|---------|
-| Start/stop recording | `Ctrl+Shift+S` |
-| Start / stop trade session | `Ctrl+Shift+T` (toggle from idle or while trading) |
+| Start/stop recording | `Ctrl+Alt+S` |
+| Start / stop trade session | `Ctrl+Alt+T` (toggle from idle or while trading) |
 | Mark trade event | `Ctrl+Shift+X` (only while a trade recording is active) |
 | Mid-session snapshot | `Ctrl+Alt+P` |
 | Annotate (during recording) | `Ctrl+Shift+A` |

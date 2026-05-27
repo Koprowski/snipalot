@@ -3196,40 +3196,49 @@ function chromeExtensionsTarget(): { url: string; profileName: string | null; ex
   };
 }
 
+function chromeExecutableCandidates(): string[] {
+  if (process.platform !== 'win32') return [];
+  return [
+    process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe')
+      : null,
+    process.env.PROGRAMFILES
+      ? path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe')
+      : null,
+    process.env['PROGRAMFILES(X86)']
+      ? path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe')
+      : null,
+  ].filter((candidate): candidate is string => Boolean(candidate && fs.existsSync(candidate)));
+}
+
+function startChromeDetached(args: string[]): void {
+  const chromeCandidates = chromeExecutableCandidates();
+  const child = chromeCandidates.length > 0
+    ? spawn(chromeCandidates[0], args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    : spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', ...args], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+  child.unref();
+}
+
 async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {}): Promise<void> {
   if (options.closeSettings) {
     closeSettingsBeforeExternalHandoff();
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   const target = chromeExtensionsTarget();
-  const chromeArgs = target.profileName
-    ? [`--profile-directory=${target.profileName}`, target.url]
-    : [target.url];
+  const profileArgs = target.profileName ? [`--profile-directory=${target.profileName}`] : [];
   if (process.platform === 'win32') {
-    const chromeCandidates = [
-      process.env.LOCALAPPDATA
-        ? path.join(process.env.LOCALAPPDATA, 'Google', 'Chrome', 'Application', 'chrome.exe')
-        : null,
-      process.env.PROGRAMFILES
-        ? path.join(process.env.PROGRAMFILES, 'Google', 'Chrome', 'Application', 'chrome.exe')
-        : null,
-      process.env['PROGRAMFILES(X86)']
-        ? path.join(process.env['PROGRAMFILES(X86)'], 'Google', 'Chrome', 'Application', 'chrome.exe')
-        : null,
-    ].filter((candidate): candidate is string => Boolean(candidate && fs.existsSync(candidate)));
     try {
-      const child = chromeCandidates.length > 0
-        ? spawn(chromeCandidates[0], chromeArgs, {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: true,
-        })
-        : spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', ...chromeArgs], {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: true,
-        });
-      child.unref();
+      startChromeDetached(profileArgs);
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      startChromeDetached([...profileArgs, '--new-tab', target.url]);
       return;
     } catch (err) {
       log('wilytrader-update', 'chrome start failed, falling back to shell.openExternal', {

@@ -642,6 +642,9 @@ Agent behavior:
 - **Chrome profile-targeted extension handoff (v1.1.8 local branch):**
  - Chrome Extensions handoff now passes `--profile-directory=<profile>` to Chrome. It prefers the profile where WilyTrader is already installed, then Chrome's `Local State` last-used profile, then `Default`.
  - This avoids Chrome's profile picker on multi-profile installs while still using Chrome's own current profile metadata rather than hardcoding a user/profile.
+- **Chrome Extensions delayed navigation retry (v1.1.9 local branch):**
+ - The Settings **Open Chrome Extensions** button now uses a two-stage Windows Chrome handoff: first activate the selected Chrome profile, then after a short delay open `chrome://extensions/` or the known WilyTrader extension URL in a new tab.
+ - This handles the case where Chrome accepts the profile handoff but drops the internal `chrome://` navigation from the initial launch command.
 
 ## Packaged app logs
 

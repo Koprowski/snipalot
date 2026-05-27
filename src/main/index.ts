@@ -2316,7 +2316,17 @@ interface WilyTraderInstallStatus {
   repoPath: string | null;
   extensionPath: string | null;
   isGitRepo: boolean;
+  configuredPath: string | null;
+  chromeExtensionPaths: string[];
   message: string;
+}
+
+interface WilyTraderMoveResult {
+  ok: boolean;
+  message: string;
+  version: string | null;
+  repoPath: string | null;
+  extensionPath: string | null;
 }
 
 interface SettingsUpdateCheckResult {
@@ -2644,7 +2654,9 @@ function wilyTraderPathsFromChromeProfiles(): string[] {
 }
 
 function wilyTraderCandidateRepoPaths(): string[] {
+  const configuredInstallPath = getConfig().wilyTrader?.installPath;
   const candidates = [
+    configuredInstallPath,
     ...wilyTraderPathsFromChromeProfiles(),
     process.env.WILYTRADER_HOME,
     path.join(os.homedir(), '.snipalot', 'wilytrader'),
@@ -2668,6 +2680,10 @@ function detectWilyTraderInstall(): { repoPath: string; extensionPath: string; v
     };
   }
   return null;
+}
+
+function saveWilyTraderInstallPath(repoPath: string): void {
+  saveConfig({ wilyTrader: { installPath: path.resolve(repoPath) } } as Partial<SnipalotConfig>);
 }
 
 function isDirectoryEmpty(dirPath: string): boolean {
@@ -2818,6 +2834,8 @@ ipcMain.handle('launcher:update-wilytrader', async (evt): Promise<WilyTraderUpda
 
 ipcMain.handle('settings:get-wilytrader-status', async (): Promise<WilyTraderInstallStatus> => {
   const install = detectWilyTraderInstall();
+  const configuredPath = getConfig().wilyTrader?.installPath?.trim() || null;
+  const chromeExtensionPaths = wilyTraderPathsFromChromeProfiles();
   if (!install) {
     return {
       installed: false,
@@ -2825,6 +2843,8 @@ ipcMain.handle('settings:get-wilytrader-status', async (): Promise<WilyTraderIns
       repoPath: WILYTRADER_MANAGED_DIR,
       extensionPath: path.join(WILYTRADER_MANAGED_DIR, 'extension'),
       isGitRepo: false,
+      configuredPath,
+      chromeExtensionPaths,
       message: 'No local WilyTrader manifest was found. Install from the launcher WilyTrader update notice first.',
     };
   }
@@ -2834,6 +2854,8 @@ ipcMain.handle('settings:get-wilytrader-status', async (): Promise<WilyTraderIns
     repoPath: install.repoPath,
     extensionPath: install.extensionPath,
     isGitRepo: install.isGitRepo,
+    configuredPath,
+    chromeExtensionPaths,
     message: `WilyTrader ${install.version} is installed at ${install.extensionPath}.`,
   };
 });
@@ -2853,6 +2875,92 @@ ipcMain.handle('settings:open-wilytrader-folder', async (): Promise<{ ok: boolea
     message: `Opened WilyTrader folder: ${install.extensionPath}`,
     path: install.extensionPath,
   };
+});
+
+ipcMain.handle('settings:open-chrome-extensions', async (): Promise<{ ok: boolean; message: string }> => {
+  await openChromeExtensionsPage();
+  return {
+    ok: true,
+    message: 'Opened chrome://extensions/. Use Developer mode, Load unpacked, or Reload for WilyTrader.',
+  };
+});
+
+ipcMain.handle('settings:migrate-wilytrader-folder', async (): Promise<WilyTraderMoveResult> => {
+  const install = detectWilyTraderInstall();
+  if (!install) {
+    return {
+      ok: false,
+      message: 'No local WilyTrader install was found yet.',
+      version: null,
+      repoPath: null,
+      extensionPath: null,
+    };
+  }
+
+  const parent = settingsWindow && !settingsWindow.isDestroyed() ? settingsWindow : undefined;
+  const selection = parent
+    ? await dialog.showOpenDialog(parent, {
+      title: 'Choose new WilyTrader folder',
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    : await dialog.showOpenDialog({
+      title: 'Choose new WilyTrader folder',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+  if (selection.canceled || selection.filePaths.length === 0) {
+    return {
+      ok: false,
+      message: 'WilyTrader move canceled. No files were changed.',
+      version: install.version,
+      repoPath: install.repoPath,
+      extensionPath: install.extensionPath,
+    };
+  }
+
+  const destination = path.resolve(selection.filePaths[0]);
+  try {
+    const existingManifest = readWilyTraderManifest(destination);
+    if (existingManifest) {
+      saveWilyTraderInstallPath(existingManifest.repoPath);
+      return {
+        ok: true,
+        message: `Using existing WilyTrader folder: ${existingManifest.extensionPath}`,
+        version: existingManifest.version,
+        repoPath: existingManifest.repoPath,
+        extensionPath: existingManifest.extensionPath,
+      };
+    }
+    moveWilyTraderDirectory(install.repoPath, destination);
+    const movedManifest = readWilyTraderManifest(destination);
+    if (!movedManifest) {
+      throw new Error('Move completed, but the destination WilyTrader manifest could not be verified.');
+    }
+    saveWilyTraderInstallPath(movedManifest.repoPath);
+    cachedWilyTraderUpdateCheckResult = null;
+    cachedWilyTraderUpdateCheckResultAtMs = 0;
+    clipboard.writeText(movedManifest.extensionPath);
+    await revealWilyTraderExtensionFolder(movedManifest.extensionPath);
+    return {
+      ok: true,
+      message: `Moved WilyTrader to ${movedManifest.repoPath}. Load unpacked from ${movedManifest.extensionPath}.`,
+      version: movedManifest.version,
+      repoPath: movedManifest.repoPath,
+      extensionPath: movedManifest.extensionPath,
+    };
+  } catch (err) {
+    log('wilytrader-update', 'move failed', {
+      from: install.repoPath,
+      to: destination,
+      err: (err as Error).message,
+    });
+    return {
+      ok: false,
+      message: `WilyTrader move failed: ${(err as Error).message}`,
+      version: install.version,
+      repoPath: install.repoPath,
+      extensionPath: install.extensionPath,
+    };
+  }
 });
 
 ipcMain.handle('settings:open-release-page', async (_evt, url?: string) => {
@@ -3044,6 +3152,48 @@ async function revealWilyTraderExtensionFolder(extensionPath: string): Promise<v
   }
 }
 
+function assertSafeWilyTraderMove(sourcePath: string, destinationPath: string): void {
+  const source = path.resolve(sourcePath);
+  const destination = path.resolve(destinationPath);
+  if (source === destination) {
+    throw new Error('That is already the current WilyTrader location.');
+  }
+  if (destination.startsWith(source + path.sep)) {
+    throw new Error('Choose a folder outside the current WilyTrader folder.');
+  }
+  if (source.startsWith(destination + path.sep)) {
+    throw new Error('Choose a folder that is not a parent of the current WilyTrader folder.');
+  }
+  if (!readWilyTraderManifest(source)) {
+    throw new Error('Current WilyTrader files are missing a valid manifest.json.');
+  }
+}
+
+function moveWilyTraderDirectory(sourcePath: string, destinationPath: string): void {
+  const source = path.resolve(sourcePath);
+  const destination = path.resolve(destinationPath);
+  assertSafeWilyTraderMove(source, destination);
+  if (fs.existsSync(destination)) {
+    if (!isDirectoryEmpty(destination)) {
+      throw new Error('Choose an empty folder, or choose an existing WilyTrader folder to use without moving files.');
+    }
+    fs.rmdirSync(destination);
+  }
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  try {
+    fs.renameSync(source, destination);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EXDEV') throw err;
+    fs.cpSync(source, destination, { recursive: true, errorOnExist: true });
+    const movedManifest = readWilyTraderManifest(destination);
+    if (!movedManifest) {
+      throw new Error('Copied WilyTrader files, but the destination manifest could not be verified.');
+    }
+    fs.rmSync(source, { recursive: true, force: false });
+  }
+}
+
 async function showWilyTraderInstallCompleteDialog(options: {
   version: string;
   repoPath: string;
@@ -3200,6 +3350,7 @@ async function updateWilyTraderFiles(sender: WebContents): Promise<WilyTraderUpd
     const manifest = readWilyTraderManifest(repoPath);
     const installedVersion = manifest?.version ?? latest.version;
     const finalExtensionPath = manifest?.extensionPath ?? extensionPath;
+    saveWilyTraderInstallPath(manifest?.repoPath ?? repoPath);
     cachedWilyTraderUpdateCheckResult = {
       ok: true,
       currentVersion: installedVersion,

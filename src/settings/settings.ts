@@ -55,6 +55,8 @@ const wilyTraderVersionEl = document.getElementById('wilytrader-version') as HTM
 const wilyTraderLocationBtn = document.getElementById('btn-wilytrader-location') as HTMLButtonElement;
 const wilyTraderStatusEl = document.getElementById('wilytrader-status') as HTMLElement;
 const btnRefreshWilyTraderStatus = document.getElementById('btn-refresh-wilytrader-status') as HTMLButtonElement;
+const btnMoveWilyTraderFolder = document.getElementById('btn-move-wilytrader-folder') as HTMLButtonElement;
+const btnOpenChromeExtensions = document.getElementById('btn-open-chrome-extensions') as HTMLButtonElement;
 
 // ─── hotkey label map ──────────────────────────────────────────────────
 
@@ -328,6 +330,12 @@ async function init(): Promise<void> {
   wilyTraderLocationBtn.addEventListener('click', () => {
     void openWilyTraderInstallFolder();
   });
+  btnMoveWilyTraderFolder.addEventListener('click', () => {
+    void moveWilyTraderInstallFolder();
+  });
+  btnOpenChromeExtensions.addEventListener('click', () => {
+    void openChromeExtensionsPage();
+  });
   void refreshDependencyStatus({ maybeShowFirstRunModal: config.firstRun });
 
   // ── Gemini CLI Google sign-in wiring ─────────────────────────────
@@ -339,6 +347,7 @@ async function refreshWilyTraderStatus(): Promise<void> {
   wilyTraderVersionEl.textContent = 'Checking...';
   wilyTraderLocationBtn.textContent = 'Checking...';
   wilyTraderLocationBtn.disabled = true;
+  btnMoveWilyTraderFolder.disabled = true;
   wilyTraderStatusEl.textContent = '';
   try {
     const result = await api.getWilyTraderStatus();
@@ -346,19 +355,35 @@ async function refreshWilyTraderStatus(): Promise<void> {
       wilyTraderVersionEl.textContent = 'Not installed';
       wilyTraderLocationBtn.textContent = 'No local WilyTrader folder found';
       wilyTraderLocationBtn.disabled = true;
+      btnMoveWilyTraderFolder.disabled = true;
       wilyTraderStatusEl.textContent = result.message;
       return;
     }
     wilyTraderVersionEl.textContent = result.version ?? 'Unknown';
     wilyTraderLocationBtn.textContent = result.extensionPath ?? result.repoPath ?? 'Unknown location';
     wilyTraderLocationBtn.disabled = !result.extensionPath;
-    wilyTraderStatusEl.textContent = result.isGitRepo
-      ? 'Detected from a local Git checkout.'
-      : 'Detected from local extension files.';
+    btnMoveWilyTraderFolder.disabled = false;
+    const chromePaths = result.chromeExtensionPaths.filter(Boolean);
+    const loadedElsewhere = Boolean(
+      result.extensionPath &&
+      chromePaths.some((chromePath) => chromePath.toLowerCase() !== result.extensionPath!.toLowerCase())
+    );
+    const lines = [
+      result.isGitRepo ? 'Detected from a local Git checkout.' : 'Detected from local extension files.',
+      result.configuredPath ? `Snipalot preferred folder: ${result.configuredPath}` : null,
+      chromePaths.length > 0
+        ? `Chrome loaded path: ${chromePaths.join('; ')}`
+        : 'Chrome does not appear to have WilyTrader loaded yet.',
+      loadedElsewhere
+        ? 'After moving, remove/reload WilyTrader in Chrome so it points at the new folder.'
+        : null,
+    ].filter((line): line is string => Boolean(line));
+    wilyTraderStatusEl.textContent = lines.join('\n');
   } catch (err) {
     wilyTraderVersionEl.textContent = 'Unavailable';
     wilyTraderLocationBtn.textContent = 'Could not check WilyTrader';
     wilyTraderLocationBtn.disabled = true;
+    btnMoveWilyTraderFolder.disabled = true;
     wilyTraderStatusEl.textContent = `WilyTrader status check failed: ${(err as Error).message}`;
   } finally {
     btnRefreshWilyTraderStatus.disabled = false;
@@ -378,6 +403,36 @@ async function openWilyTraderInstallFolder(): Promise<void> {
     setStatus(`Could not open WilyTrader folder: ${(err as Error).message}`, true);
   } finally {
     wilyTraderLocationBtn.disabled = false;
+  }
+}
+
+async function moveWilyTraderInstallFolder(): Promise<void> {
+  btnMoveWilyTraderFolder.disabled = true;
+  setStatus('Choose an empty destination folder for WilyTrader, or an existing WilyTrader folder to use.');
+  try {
+    const result = await api.moveWilyTraderFolder();
+    if (!result.ok) {
+      setStatus(result.message, true);
+      return;
+    }
+    setStatus(result.message);
+    await refreshWilyTraderStatus();
+  } catch (err) {
+    setStatus(`Could not move WilyTrader folder: ${(err as Error).message}`, true);
+  } finally {
+    btnMoveWilyTraderFolder.disabled = false;
+  }
+}
+
+async function openChromeExtensionsPage(): Promise<void> {
+  btnOpenChromeExtensions.disabled = true;
+  try {
+    const result = await api.openChromeExtensions();
+    setStatus(result.message, !result.ok);
+  } catch (err) {
+    setStatus(`Could not open Chrome Extensions: ${(err as Error).message}`, true);
+  } finally {
+    btnOpenChromeExtensions.disabled = false;
   }
 }
 

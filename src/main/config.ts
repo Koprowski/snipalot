@@ -129,6 +129,10 @@ export interface SnipalotConfig {
      */
     countdownSec: number;
   };
+  wilyTrader: {
+    /** Preferred local repo/extension folder for WilyTrader files. */
+    installPath: string;
+  };
   /** true until the user completes first-run onboarding. */
   firstRun: boolean;
 }
@@ -199,6 +203,9 @@ export const DEFAULT_CONFIG: SnipalotConfig = {
   capture: {
     mode: 'region',
     countdownSec: 3,
+  },
+  wilyTrader: {
+    installPath: '',
   },
   firstRun: true,
 };

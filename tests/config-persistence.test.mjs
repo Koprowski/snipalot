@@ -250,6 +250,35 @@ test('loadConfig preserves feedback media output choices', () => {
   runConfigChild(home, code);
 });
 
+test('loadConfig defaults WilyTrader install path empty', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-wily-default-'));
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.deepEqual(loaded.wilyTrader, { installPath: '' });
+  `;
+  runConfigChild(home, code);
+});
+
+test('loadConfig preserves WilyTrader install path', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'snipalot-config-wily-custom-'));
+  const configDir = path.join(home, '.snipalot');
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, 'config.json'),
+    JSON.stringify({ wilyTrader: { installPath: 'C:\\Tools\\WilyTrader' } }),
+    'utf-8'
+  );
+  const code = `
+    const assert = require('node:assert/strict');
+    const config = require(${JSON.stringify(path.resolve('dist/main/config.js'))});
+    const loaded = config.loadConfig();
+    assert.equal(loaded.wilyTrader.installPath, 'C:\\\\Tools\\\\WilyTrader');
+  `;
+  runConfigChild(home, code);
+});
+
 function runConfigChild(home, code) {
   const result = spawnSync(process.execPath, ['-e', code], {
     cwd: process.cwd(),

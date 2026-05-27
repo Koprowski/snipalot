@@ -81,10 +81,21 @@ contextBridge.exposeInMainWorld('snipalotSettings', {
     repoPath: string | null;
     extensionPath: string | null;
     isGitRepo: boolean;
+    configuredPath: string | null;
+    chromeExtensionPaths: string[];
     message: string;
   }> => ipcRenderer.invoke('settings:get-wilytrader-status'),
   openWilyTraderFolder: (): Promise<{ ok: boolean; message: string; path?: string | null }> =>
     ipcRenderer.invoke('settings:open-wilytrader-folder'),
+  moveWilyTraderFolder: (): Promise<{
+    ok: boolean;
+    message: string;
+    version: string | null;
+    repoPath: string | null;
+    extensionPath: string | null;
+  }> => ipcRenderer.invoke('settings:migrate-wilytrader-folder'),
+  openChromeExtensions: (): Promise<{ ok: boolean; message: string }> =>
+    ipcRenderer.invoke('settings:open-chrome-extensions'),
   downloadAndInstallUpdate: (): Promise<{
     ok: boolean;
     message: string;

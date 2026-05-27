@@ -23,9 +23,19 @@ interface Window {
       repoPath: string | null;
       extensionPath: string | null;
       isGitRepo: boolean;
+      configuredPath: string | null;
+      chromeExtensionPaths: string[];
       message: string;
     }>;
     openWilyTraderFolder: () => Promise<{ ok: boolean; message: string; path?: string | null }>;
+    moveWilyTraderFolder: () => Promise<{
+      ok: boolean;
+      message: string;
+      version: string | null;
+      repoPath: string | null;
+      extensionPath: string | null;
+    }>;
+    openChromeExtensions: () => Promise<{ ok: boolean; message: string }>;
     downloadAndInstallUpdate: () => Promise<{
       ok: boolean;
       message: string;

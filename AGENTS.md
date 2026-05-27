@@ -628,6 +628,10 @@ Agent behavior:
 - **WilyTrader settings status + hotkey defaults (v1.1.4 local branch):**
  - Settings now shows WilyTrader installed version plus the clickable Load unpacked folder near the bottom of the window; the folder opens in Explorer through main-process IPC.
  - Default shortcuts are now `Ctrl+Alt+S` for feedback recording, `Ctrl+Alt+T` for Trade, and `Ctrl+Alt+P` for screenshot/snapshot. Config load migrates users still on the old default `Ctrl+Shift+S` / `Ctrl+Shift+T`; custom bindings are preserved.
+- **WilyTrader migration controls (v1.1.5 local branch):**
+ - Config now has `wilyTrader.installPath`; WilyTrader detection prefers that saved folder before Chrome profile paths, environment variables, or common folders.
+ - Settings adds **Move Location** to move WilyTrader files to an empty folder or point Snipalot at an existing WilyTrader folder, then refreshes the visible Load unpacked path.
+ - Settings adds **Open Chrome Extensions** for the manual Chrome remove/load/reload step after moving the folder. Snipalot cannot rewrite Chrome's unpacked-extension path directly.
 
 ## Packaged app logs
 

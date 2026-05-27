@@ -648,6 +648,10 @@ Agent behavior:
 - **Chrome Extensions clipboard navigation (v1.1.10 local branch):**
  - Windows Chrome handoff now opens one blank tab in the selected profile, temporarily places the Chrome Extensions URL on the clipboard, sends `Ctrl+L`, `Ctrl+V`, and `Enter`, then restores the previous clipboard text.
  - This avoids Chrome's command-line filtering of `chrome://` URLs while avoiding visible character-by-character typing.
+- **Screenshot annotator export cleanup (local branch):**
+ - `snapshot.png` export now clears the active annotation/overlay selection and renders annotations in final mode, so selected resize handles and dashed selection borders are not baked into the saved screenshot.
+ - Annotation note/comment text is no longer stamped as a legend inside the image; notes stay in `prompt.md` / clipboard prompt where they do not block the visual reference.
+ - Validation: `npm test`.
 
 ## Packaged app logs
 

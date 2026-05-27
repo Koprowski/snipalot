@@ -447,6 +447,14 @@
     updateTextStyleBar();
   }
 
+  function drawExportAnnotations(ctx) {
+    annotations.forEach((ann, i) => {
+      ctx.save();
+      drawAnnotation(ctx, ann, i + 1, false, false);
+      ctx.restore();
+    });
+  }
+
   function drawAnnotation(ctx, ann, num, isSelected, isPreview) {
     const sw = ann.strokeWidth || 2;
     ctx.strokeStyle = ann.color;
@@ -2125,6 +2133,11 @@
   async function saveSession() {
     if (!image) { alert('Paste a screenshot first before saving.'); return; }
 
+    if (_activeInlineEditor) closeInlineTextEditor();
+    selectedId = null;
+    selectedOverlayId = null;
+    renderAnnotations();
+
     const saveBtns = [document.getElementById('save-btn'), document.getElementById('toolbar-save-btn')].filter(Boolean);
     const setSaveBtnText = (txt) => saveBtns.forEach(b => {
       const orig = b.dataset.origText || b.textContent;
@@ -2135,42 +2148,14 @@
       if (b.dataset.origText) b.textContent = b.dataset.origText;
     });
 
-    // ── 1. Build the annotated PNG (base + overlays + draw layer + legend) ──
+    // ── 1. Build the annotated PNG (base + overlays + final annotations) ──
     const composite = document.createElement('canvas');
     composite.width = baseCanvas.width;
     composite.height = baseCanvas.height;
     const cx = composite.getContext('2d');
     cx.drawImage(baseCanvas, 0, 0);
     overlays.forEach(ov => cx.drawImage(ov.imgObj, ov.x, ov.y, ov.w, ov.h));
-    cx.drawImage(drawCanvas, 0, 0);
-
-    // Stamp numbered legend at bottom-right corner
-    const legendLines = annotations.map((ann, i) => {
-      const label = ann.note ? ann.note.slice(0, 60) + (ann.note.length > 60 ? '…' : '') : '(no note)';
-      return { num: i + 1, color: ann.color, type: ann.type || 'improvement', label };
-    });
-    if (legendLines.length > 0) {
-      const lineH = 20;
-      const padding = 12;
-      const legendH = legendLines.length * lineH + padding * 2;
-      const legendW = Math.min(composite.width, 600);
-      const lx = composite.width - legendW - 12;
-      const ly = composite.height - legendH - 12;
-      cx.fillStyle = 'rgba(0,0,0,0.78)';
-      cx.beginPath();
-      cx.roundRect(lx, ly, legendW, legendH, 8);
-      cx.fill();
-      cx.font = 'bold 12px -apple-system, Arial, sans-serif';
-      legendLines.forEach((item, i) => {
-        const y = ly + padding + i * lineH + 12;
-        cx.fillStyle = item.color;
-        cx.fillText(`#${item.num}`, lx + padding, y);
-        cx.fillStyle = '#e8eaf6';
-        cx.font = '11px -apple-system, Arial, sans-serif';
-        cx.fillText(item.label, lx + padding + 30, y);
-        cx.font = 'bold 12px -apple-system, Arial, sans-serif';
-      });
-    }
+    drawExportAnnotations(cx);
 
     // ── 2. Build the prompt body ────────────────────────────────────────────
     // Prefer the user-edited prompt-box content (matches what they actually

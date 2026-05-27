@@ -3187,11 +3187,10 @@ function closeSettingsBeforeExternalHandoff(): void {
 
 function chromeExtensionsTarget(): { url: string; profileName: string | null; extensionId: string | null } {
   const extensionProfile = wilyTraderExtensionProfilesFromChromeProfiles()[0] ?? null;
-  const profileName = extensionProfile?.profileName ?? chromeLastUsedProfileName() ?? 'Default';
   const extensionId = extensionProfile?.id ?? null;
   return {
     url: extensionId ? `chrome://extensions/?id=${extensionId}` : 'chrome://extensions/',
-    profileName,
+    profileName: extensionProfile?.profileName ?? chromeLastUsedProfileName() ?? 'Default',
     extensionId,
   };
 }
@@ -3227,16 +3226,31 @@ function startChromeDetached(args: string[]): void {
   child.unref();
 }
 
-function navigateActiveChromeTabWithClipboard(url: string): Promise<boolean> {
+function createChromeHandoffUrl(marker: string): string {
+  const html = [
+    '<!doctype html>',
+    '<html>',
+    '<head>',
+    `<title>${marker}</title>`,
+    '<meta charset="utf-8">',
+    '</head>',
+    '<body></body>',
+    '</html>',
+  ].join('');
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+function navigateChromeHandoffWindowWithClipboard(marker: string, url: string): Promise<boolean> {
   const previousClipboardText = clipboard.readText();
   clipboard.writeText(url);
   const script = [
     '$ErrorActionPreference = \'Stop\'',
     'Add-Type -AssemblyName System.Windows.Forms',
+    `$marker = '${marker}'`,
     '$ws = New-Object -ComObject WScript.Shell',
-    '$deadline = (Get-Date).AddSeconds(5)',
+    '$deadline = (Get-Date).AddSeconds(6)',
     'do {',
-    '  if ($ws.AppActivate(\'Google Chrome\') -or $ws.AppActivate(\'Chrome\')) {',
+    '  if ($ws.AppActivate($marker) -or $ws.AppActivate(\"$marker - Google Chrome\")) {',
     '    Start-Sleep -Milliseconds 250',
     '    [System.Windows.Forms.SendKeys]::SendWait(\'^l\')',
     '    Start-Sleep -Milliseconds 80',
@@ -3251,12 +3265,19 @@ function navigateActiveChromeTabWithClipboard(url: string): Promise<boolean> {
   ].join('; ');
 
   return new Promise((resolve) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script,
+    ], {
       stdio: 'ignore',
       windowsHide: true,
     });
     child.on('error', (err) => {
-      log('wilytrader-update', 'chrome sendkeys navigation failed to start', {
+      log('wilytrader-update', 'chrome handoff navigation failed to start', {
+        marker,
         err: err.message,
       });
       clipboard.writeText(previousClipboardText);
@@ -3265,7 +3286,7 @@ function navigateActiveChromeTabWithClipboard(url: string): Promise<boolean> {
     child.on('exit', (code) => {
       clipboard.writeText(previousClipboardText);
       if (code !== 0) {
-        log('wilytrader-update', 'chrome sendkeys navigation failed', { code });
+        log('wilytrader-update', 'chrome handoff navigation failed', { marker, code });
       }
       resolve(code === 0);
     });
@@ -3281,11 +3302,24 @@ async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {
   const profileArgs = target.profileName ? [`--profile-directory=${target.profileName}`] : [];
   if (process.platform === 'win32') {
     try {
-      startChromeDetached([...profileArgs, 'about:blank']);
+      const marker = `SnipalotChromeHandoff${process.pid}${Date.now()}`;
+      const handoffUrl = createChromeHandoffUrl(marker);
+      const args = [...profileArgs, handoffUrl];
+      log('wilytrader-update', 'opening chrome extensions page', {
+        hasExtensionId: Boolean(target.extensionId),
+        profileName: target.profileName,
+        args,
+      });
+      startChromeDetached(args);
       await new Promise((resolve) => setTimeout(resolve, 900));
-      if (await navigateActiveChromeTabWithClipboard(target.url)) {
+      if (await navigateChromeHandoffWindowWithClipboard(marker, target.url)) {
         return;
       }
+      clipboard.writeText(target.url);
+      log('wilytrader-update', 'chrome extensions url copied after handoff navigation failed', {
+        url: target.url,
+      });
+      return;
     } catch (err) {
       log('wilytrader-update', 'chrome start failed, falling back to shell.openExternal', {
         err: (err as Error).message,
@@ -3424,7 +3458,6 @@ async function prepareWilyTraderPostInstall(options: {
 }): Promise<void> {
   clipboard.writeText(options.extensionPath);
   await revealWilyTraderExtensionFolder(options.extensionPath);
-  await openChromeExtensionsPage();
   await showWilyTraderInstallCompleteDialog(options);
 }
 

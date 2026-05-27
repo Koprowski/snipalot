@@ -26,6 +26,7 @@ win:
         - x64
   icon: resources/icons/app.ico
   artifactName: Snipalot-${version}-setup.${ext}
+  signAndEditExecutable: false
 portable:
   artifactName: Snipalot-${version}-portable.exe
 

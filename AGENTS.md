@@ -639,6 +639,9 @@ Agent behavior:
  - Settings closes itself before opening Chrome Extensions so the always-on-top Settings window does not cover Chrome.
  - Chrome handoff no longer passes `--new-window`; it passes the extensions URL to Chrome so an already-running Chrome instance can route it through the active/recent profile instead of forcing the profile picker.
  - If Chrome Preferences already contain a WilyTrader extension id, the handoff uses `chrome://extensions/?id=<id>`; otherwise it falls back to `chrome://extensions/`.
+- **Chrome profile-targeted extension handoff (v1.1.8 local branch):**
+ - Chrome Extensions handoff now passes `--profile-directory=<profile>` to Chrome. It prefers the profile where WilyTrader is already installed, then Chrome's `Local State` last-used profile, then `Default`.
+ - This avoids Chrome's profile picker on multi-profile installs while still using Chrome's own current profile metadata rather than hardcoding a user/profile.
 
 ## Packaged app logs
 

@@ -2621,14 +2621,11 @@ function readWilyTraderManifest(candidatePath: string): { repoPath: string; exte
 }
 
 function wilyTraderPathsFromChromeProfiles(): string[] {
-  const userDataRoot = path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'User Data');
+  const userDataRoot = chromeUserDataRoot();
   if (!fs.existsSync(userDataRoot)) return [];
-  const profileDirs = fs.readdirSync(userDataRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && (entry.name === 'Default' || /^Profile \d+$/i.test(entry.name)))
-    .map((entry) => path.join(userDataRoot, entry.name));
   const paths: string[] = [];
-  for (const profileDir of profileDirs) {
-    const preferencesPath = path.join(profileDir, 'Preferences');
+  for (const profile of chromeProfileDirs()) {
+    const preferencesPath = path.join(profile.path, 'Preferences');
     if (!fs.existsSync(preferencesPath)) continue;
     try {
       const json = JSON.parse(fs.readFileSync(preferencesPath, 'utf8')) as {
@@ -2653,15 +2650,50 @@ function wilyTraderPathsFromChromeProfiles(): string[] {
   return paths;
 }
 
-function wilyTraderExtensionIdsFromChromeProfiles(): string[] {
-  const userDataRoot = path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'User Data');
+function chromeUserDataRoot(): string {
+  return path.join(os.homedir(), 'AppData', 'Local', 'Google', 'Chrome', 'User Data');
+}
+
+function chromeProfileDirs(): Array<{ name: string; path: string }> {
+  const userDataRoot = chromeUserDataRoot();
   if (!fs.existsSync(userDataRoot)) return [];
-  const profileDirs = fs.readdirSync(userDataRoot, { withFileTypes: true })
+  return fs.readdirSync(userDataRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && (entry.name === 'Default' || /^Profile \d+$/i.test(entry.name)))
-    .map((entry) => path.join(userDataRoot, entry.name));
-  const ids: string[] = [];
-  for (const profileDir of profileDirs) {
-    const preferencesPath = path.join(profileDir, 'Preferences');
+    .map((entry) => ({
+      name: entry.name,
+      path: path.join(userDataRoot, entry.name),
+    }));
+}
+
+function chromeLastUsedProfileName(): string | null {
+  const localStatePath = path.join(chromeUserDataRoot(), 'Local State');
+  if (!fs.existsSync(localStatePath)) return null;
+  try {
+    const json = JSON.parse(fs.readFileSync(localStatePath, 'utf8')) as {
+      profile?: {
+        last_used?: unknown;
+        last_active_profiles?: unknown;
+      };
+    };
+    const lastUsed = typeof json.profile?.last_used === 'string' ? json.profile.last_used : '';
+    if (lastUsed) return lastUsed;
+    const activeProfiles = Array.isArray(json.profile?.last_active_profiles)
+      ? json.profile.last_active_profiles.filter((item): item is string => typeof item === 'string')
+      : [];
+    return activeProfiles[0] ?? null;
+  } catch (err) {
+    log('wilytrader-update', 'chrome local state read failed', {
+      localStatePath,
+      err: (err as Error).message,
+    });
+    return null;
+  }
+}
+
+function wilyTraderExtensionProfilesFromChromeProfiles(): Array<{ id: string; profileName: string }> {
+  const found: Array<{ id: string; profileName: string }> = [];
+  for (const profile of chromeProfileDirs()) {
+    const preferencesPath = path.join(profile.path, 'Preferences');
     if (!fs.existsSync(preferencesPath)) continue;
     try {
       const json = JSON.parse(fs.readFileSync(preferencesPath, 'utf8')) as {
@@ -2672,7 +2704,7 @@ function wilyTraderExtensionIdsFromChromeProfiles(): string[] {
         const extensionPath = typeof extension.path === 'string' ? extension.path : '';
         const manifestName = typeof extension.manifest?.name === 'string' ? extension.manifest.name : '';
         if (manifestName === 'WilyTrader' || (extensionPath && readWilyTraderManifest(extensionPath))) {
-          ids.push(extensionId);
+          found.push({ id: extensionId, profileName: profile.name });
         }
       }
     } catch (err) {
@@ -2682,7 +2714,17 @@ function wilyTraderExtensionIdsFromChromeProfiles(): string[] {
       });
     }
   }
-  return [...new Set(ids)];
+  const seen = new Set<string>();
+  return found.filter((item) => {
+    const key = `${item.profileName}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function wilyTraderExtensionIdsFromChromeProfiles(): string[] {
+  return [...new Set(wilyTraderExtensionProfilesFromChromeProfiles().map((item) => item.id))];
 }
 
 function wilyTraderCandidateRepoPaths(): string[] {
@@ -3143,9 +3185,15 @@ function closeSettingsBeforeExternalHandoff(): void {
   }
 }
 
-function chromeExtensionsUrl(): string {
-  const extensionId = wilyTraderExtensionIdsFromChromeProfiles()[0];
-  return extensionId ? `chrome://extensions/?id=${extensionId}` : 'chrome://extensions/';
+function chromeExtensionsTarget(): { url: string; profileName: string | null; extensionId: string | null } {
+  const extensionProfile = wilyTraderExtensionProfilesFromChromeProfiles()[0] ?? null;
+  const profileName = extensionProfile?.profileName ?? chromeLastUsedProfileName() ?? 'Default';
+  const extensionId = extensionProfile?.id ?? null;
+  return {
+    url: extensionId ? `chrome://extensions/?id=${extensionId}` : 'chrome://extensions/',
+    profileName,
+    extensionId,
+  };
 }
 
 async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {}): Promise<void> {
@@ -3153,7 +3201,10 @@ async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {
     closeSettingsBeforeExternalHandoff();
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  const targetUrl = chromeExtensionsUrl();
+  const target = chromeExtensionsTarget();
+  const chromeArgs = target.profileName
+    ? [`--profile-directory=${target.profileName}`, target.url]
+    : [target.url];
   if (process.platform === 'win32') {
     const chromeCandidates = [
       process.env.LOCALAPPDATA
@@ -3168,12 +3219,12 @@ async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {
     ].filter((candidate): candidate is string => Boolean(candidate && fs.existsSync(candidate)));
     try {
       const child = chromeCandidates.length > 0
-        ? spawn(chromeCandidates[0], [targetUrl], {
+        ? spawn(chromeCandidates[0], chromeArgs, {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
         })
-        : spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', targetUrl], {
+        : spawn('cmd.exe', ['/d', '/c', 'start', '""', 'chrome', ...chromeArgs], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true,
@@ -3186,7 +3237,7 @@ async function openChromeExtensionsPage(options: { closeSettings?: boolean } = {
       });
     }
   }
-  await shell.openExternal(targetUrl);
+  await shell.openExternal(target.url);
 }
 
 async function revealWilyTraderExtensionFolder(extensionPath: string): Promise<void> {

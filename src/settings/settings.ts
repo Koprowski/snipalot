@@ -370,6 +370,7 @@ async function refreshWilyTraderStatus(): Promise<void> {
     );
     const lines = [
       result.isGitRepo ? 'Detected from a local Git checkout.' : 'Detected from local extension files.',
+      result.repoPath ? `WilyTrader files folder: ${result.repoPath}` : null,
       result.configuredPath ? `Snipalot preferred folder: ${result.configuredPath}` : null,
       chromePaths.length > 0
         ? `Chrome loaded path: ${chromePaths.join('; ')}`
@@ -408,7 +409,7 @@ async function openWilyTraderInstallFolder(): Promise<void> {
 
 async function moveWilyTraderInstallFolder(): Promise<void> {
   btnMoveWilyTraderFolder.disabled = true;
-  setStatus('Choose an empty destination folder for WilyTrader, or an existing WilyTrader folder to use.');
+  setStatus('Choose an empty destination folder for the whole WilyTrader files folder, or an existing WilyTrader folder to use.');
   try {
     const result = await api.moveWilyTraderFolder();
     if (!result.ok) {

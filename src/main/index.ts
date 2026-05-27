@@ -2930,7 +2930,7 @@ ipcMain.handle('settings:migrate-wilytrader-folder', async (): Promise<WilyTrade
         extensionPath: existingManifest.extensionPath,
       };
     }
-    moveWilyTraderDirectory(install.repoPath, destination);
+    const moveResult = moveWilyTraderDirectory(install.repoPath, destination);
     const movedManifest = readWilyTraderManifest(destination);
     if (!movedManifest) {
       throw new Error('Move completed, but the destination WilyTrader manifest could not be verified.');
@@ -2940,9 +2940,10 @@ ipcMain.handle('settings:migrate-wilytrader-folder', async (): Promise<WilyTrade
     cachedWilyTraderUpdateCheckResultAtMs = 0;
     clipboard.writeText(movedManifest.extensionPath);
     await revealWilyTraderExtensionFolder(movedManifest.extensionPath);
+    const note = moveResult.note ? ` ${moveResult.note}` : '';
     return {
       ok: true,
-      message: `Moved WilyTrader to ${movedManifest.repoPath}. Load unpacked from ${movedManifest.extensionPath}.`,
+      message: `Moved WilyTrader files folder to ${movedManifest.repoPath}. Load unpacked from ${movedManifest.extensionPath}.${note}`,
       version: movedManifest.version,
       repoPath: movedManifest.repoPath,
       extensionPath: movedManifest.extensionPath,
@@ -3169,28 +3170,54 @@ function assertSafeWilyTraderMove(sourcePath: string, destinationPath: string): 
   }
 }
 
-function moveWilyTraderDirectory(sourcePath: string, destinationPath: string): void {
+function copyWilyTraderDirectory(source: string, destination: string): void {
+  fs.mkdirSync(destination, { recursive: true });
+  fs.cpSync(source, destination, { recursive: true, force: true });
+  const movedManifest = readWilyTraderManifest(destination);
+  if (!movedManifest) {
+    throw new Error('Copied WilyTrader files, but the destination manifest could not be verified.');
+  }
+}
+
+function moveWilyTraderDirectory(sourcePath: string, destinationPath: string): { sourceRemoved: boolean; note: string | null } {
   const source = path.resolve(sourcePath);
   const destination = path.resolve(destinationPath);
   assertSafeWilyTraderMove(source, destination);
+  const destinationExists = fs.existsSync(destination);
   if (fs.existsSync(destination)) {
     if (!isDirectoryEmpty(destination)) {
       throw new Error('Choose an empty folder, or choose an existing WilyTrader folder to use without moving files.');
     }
-    fs.rmdirSync(destination);
   }
   fs.mkdirSync(path.dirname(destination), { recursive: true });
+  if (destinationExists) {
+    copyWilyTraderDirectory(source, destination);
+    try {
+      fs.rmSync(source, { recursive: true, force: false });
+      return { sourceRemoved: true, note: null };
+    } catch (removeErr) {
+      return {
+        sourceRemoved: false,
+        note: `Copied to the new folder, but Windows would not remove the old folder automatically: ${(removeErr as Error).message}`,
+      };
+    }
+  }
   try {
     fs.renameSync(source, destination);
+    return { sourceRemoved: true, note: null };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'EXDEV') throw err;
-    fs.cpSync(source, destination, { recursive: true, errorOnExist: true });
-    const movedManifest = readWilyTraderManifest(destination);
-    if (!movedManifest) {
-      throw new Error('Copied WilyTrader files, but the destination manifest could not be verified.');
+    if (!['EXDEV', 'EPERM', 'EACCES'].includes(code ?? '')) throw err;
+    copyWilyTraderDirectory(source, destination);
+    try {
+      fs.rmSync(source, { recursive: true, force: false });
+      return { sourceRemoved: true, note: null };
+    } catch (removeErr) {
+      return {
+        sourceRemoved: false,
+        note: `Copied to the new folder, but Windows would not remove the old folder automatically: ${(removeErr as Error).message}`,
+      };
     }
-    fs.rmSync(source, { recursive: true, force: false });
   }
 }
 

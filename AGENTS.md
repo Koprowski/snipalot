@@ -632,6 +632,9 @@ Agent behavior:
  - Config now has `wilyTrader.installPath`; WilyTrader detection prefers that saved folder before Chrome profile paths, environment variables, or common folders.
  - Settings adds **Move Location** to move WilyTrader files to an empty folder or point Snipalot at an existing WilyTrader folder, then refreshes the visible Load unpacked path.
  - Settings adds **Open Chrome Extensions** for the manual Chrome remove/load/reload step after moving the folder. Snipalot cannot rewrite Chrome's unpacked-extension path directly.
+- **WilyTrader move EPERM fix (v1.1.6 local branch):**
+ - `Move Location` now clarifies that it moves the whole WilyTrader files folder; Chrome should load the `extension` subfolder.
+ - Windows `EPERM` / `EACCES` directory rename failures now fall back to copy-verify-delete. If Windows refuses to remove the old folder, Snipalot still saves the new verified folder and tells the user the old folder can be deleted manually later.
 
 ## Packaged app logs
 

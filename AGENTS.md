@@ -118,6 +118,18 @@ Agent behavior:
 - **Stack:** Electron 41, TypeScript (strict), main process in `src/main/index.ts`, renderers under `src/*`, post-processing in `src/main/pipeline.ts` and `src/main/trade-pipeline.ts`.
 - **Build:** `npm ci` then `npm run build`. Run app: `npm run dev`.
 - **Windows installer (local):** On a Windows machine, `npm run package` produces the default **light installer** at **`release/Snipalot-<version>-setup.exe`** (see `electron-builder.yml`). `package:portable` builds the portable exe. Use `npm run package:full` only when intentionally building a large bundled-Whisper installer from `electron-builder.full.yml`.
+
+## Recent handoff notes
+
+- **WilyTrader master-log OHLC sync (2026-06-04):** `tools/sync-master-trading-log.mjs`
+  now treats WilyTrader's 12 OHLC export fields as canonical master columns
+  after `llm_grade_notes`: `ohlc_mc_open`, `ohlc_mc_high`, `ohlc_mc_low`,
+  `ohlc_mc_close`, `ohlc_pct_high`, `ohlc_pct_low`, `ohlc_pct_close`,
+  `ohlc_sol_open`, `ohlc_sol_high`, `ohlc_sol_low`, `ohlc_sol_close`, and
+  `ohlc_screenshot`. The sync aliases old `ohlc_screenshot_path` imports and
+  displayed `source_trade_id` headers, preserves `HYPERLINK(...)` screenshot
+  formulas, and writes OHLC market caps/SOL/percentages as typed cells so the
+  expanded `tblTrades` schema no longer treats BD:BO as extra manual columns.
 - **Windows installer (CI / publishing):** Pushing a git tag matching **`v*`** (e.g. `v1.0.10`) runs **`.github/workflows/release-windows.yml`**, which runs **`npm ci`** then **`npm run package:nopublish`** on `windows-latest`. The default release artifact is now the light installer; Settings installs/checks Whisper and Gemini after first launch. **`softprops/action-gh-release`** uploads **`release/Snipalot-*-setup.exe`**. Bump **`package.json` `version`** before tagging so the artifact name matches the release.
 - **Linux:** `npm run package` on Linux produces AppImage/Snap only, not the Windows setup exe.
 - **End-user install:** **[GitHub Releases](https://github.com/Koprowski/snipalot/releases)** — download the latest **`Snipalot-*-setup.exe`**. Full Trade + Gemini guide: **`docs/installation-guide-issue-2.md`** (mirror for **[Issue #2](https://github.com/Koprowski/snipalot/issues/2)** — paste that file into the issue when the download URL changes; API tokens may not edit issues).

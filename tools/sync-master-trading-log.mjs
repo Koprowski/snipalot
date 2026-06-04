@@ -79,6 +79,21 @@ const NICS_COLUMNS = [
   "llm_grade_notes",
 ];
 
+const OHLC_COLUMNS = [
+  "ohlc_mc_open",
+  "ohlc_mc_high",
+  "ohlc_mc_low",
+  "ohlc_mc_close",
+  "ohlc_pct_high",
+  "ohlc_pct_low",
+  "ohlc_pct_close",
+  "ohlc_sol_open",
+  "ohlc_sol_high",
+  "ohlc_sol_low",
+  "ohlc_sol_close",
+  "ohlc_screenshot",
+];
+
 const LLM_NICS_COLUMNS = [
   "meta_name",
   "N_score",
@@ -105,14 +120,18 @@ const MASTER_COLUMNS = [
   "WeekdayNum",
   "TimeBucket",
   ...NICS_COLUMNS,
+  ...OHLC_COLUMNS,
 ];
 
 const TRADE_LOG_COLUMNS = MASTER_COLUMNS;
 const TRADE_LOG_HEADER_ALIASES = new Map([
   ["entry_time_actual", "entry_time_inferred"],
+  ["source_trade_id", "mockape_trade_id"],
+  ["ohlc_screenshot_path", "ohlc_screenshot"],
 ]);
 const TRADE_LOG_HEADER_LABELS = new Map([
   ["entry_time_inferred", "entry_time_actual"],
+  ["mockape_trade_id", "source_trade_id"],
 ]);
 
 function resolveCapturesRoot() {
@@ -187,6 +206,10 @@ const WHOLE_NUMBER_COLUMNS = new Set([
   "target_exit_high_mc",
   "stop_loss_mc",
   "exit_mc_actual",
+  "ohlc_mc_open",
+  "ohlc_mc_high",
+  "ohlc_mc_low",
+  "ohlc_mc_close",
 ]);
 
 const DECIMAL_COLUMNS = new Set([
@@ -195,10 +218,17 @@ const DECIMAL_COLUMNS = new Set([
   "pnl_sol",
   "non_nics_pnl_pct",
   "cluster_pnl_pct",
+  "ohlc_sol_open",
+  "ohlc_sol_high",
+  "ohlc_sol_low",
+  "ohlc_sol_close",
 ]);
 
 const PERCENT_COLUMNS = new Set([
   "pnl_percentage",
+  "ohlc_pct_high",
+  "ohlc_pct_low",
+  "ohlc_pct_close",
 ]);
 
 const BOOLEAN_COLUMNS = new Set([
@@ -309,10 +339,15 @@ async function readXlsxRows(filePath, sheetName = null) {
       const textPieces = [...cellMatch[2].matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
         .map((m) => xmlDecode(m[1]));
       const numericValue = cellMatch[2].match(/<v>([\s\S]*?)<\/v>/)?.[1] ?? "";
-      if (type === "s" && numericValue !== "") {
+      const formulaValue = cellMatch[2].match(/<f\b[^>]*>([\s\S]*?)<\/f>/)?.[1] ?? "";
+      if (/^\s*HYPERLINK\s*\(/i.test(xmlDecode(formulaValue))) {
+        cells[columnIndex(ref)] = xmlDecode(formulaValue);
+      } else if (type === "s" && numericValue !== "") {
         cells[columnIndex(ref)] = sharedStrings[Number(numericValue)] ?? "";
       } else if (type === "b" && numericValue !== "") {
         cells[columnIndex(ref)] = numericValue === "1" ? "TRUE" : "FALSE";
+      } else if (numericValue === "" && formulaValue) {
+        cells[columnIndex(ref)] = xmlDecode(formulaValue);
       } else {
         cells[columnIndex(ref)] = textPieces.length > 0 ? textPieces.join("") : xmlDecode(numericValue);
       }
@@ -360,6 +395,7 @@ function normalizeWorkflowRow(row, sessionName, sourceType, archivePath) {
   };
   for (const column of WORKFLOW_COLUMNS) out[column] = row[column] ?? "";
   for (const column of NICS_COLUMNS) out[column] = row[column] ?? "";
+  for (const column of OHLC_COLUMNS) out[column] = row[column] ?? "";
   if (!out.trade_date) out.trade_date = folderDate(sessionName);
   if (!out.entry_mc_actual && row.entry_mc_actual) out.entry_mc_actual = row.entry_mc_actual;
   if (!out.target_exit_low_mc && row.target_low_mc) out.target_exit_low_mc = row.target_low_mc;
@@ -578,7 +614,7 @@ async function main() {
 
   const archivedCandidates = ENABLE_ARCHIVE_BACKFILL && fss.existsSync(ARCHIVE)
     ? (await fs.readdir(ARCHIVE, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory() && entry.name.endsWith(" trade"))
+      .filter((entry) => entry.isDirectory() && isTradeSessionFolderName(entry.name))
       .map((entry) => path.join(ARCHIVE, entry.name))
       .filter(isIncludedSession)
       .sort()
@@ -695,9 +731,13 @@ await main();
 
 async function listCurrentTradeDirs() {
   return (await fs.readdir(ROOT, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && entry.name.endsWith(" trade"))
+    .filter((entry) => entry.isDirectory() && isTradeSessionFolderName(entry.name))
     .map((entry) => path.join(ROOT, entry.name))
     .sort();
+}
+
+function isTradeSessionFolderName(name) {
+  return String(name || "").toLowerCase().endsWith(" trade");
 }
 
 async function collectReadyTradeDirs(dirs) {
@@ -2749,7 +2789,9 @@ function typedTradeLogCell(cellRef, column, value) {
   if (INTEGER_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), 3);
   if (WHOLE_NUMBER_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), 4);
   if (DECIMAL_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), 5);
+  if (PERCENT_COLUMNS.has(column)) return percentageValueCell(cellRef, parsePercentageValue(value), 6);
   if (BOOLEAN_COLUMNS.has(column) || column === "needs_review") return booleanCell(cellRef, parseBoolean(value), 2);
+  if (column === "ohlc_screenshot") return ohlcScreenshotCell(cellRef, value, 2);
   return cell(cellRef, value, 2);
 }
 
@@ -2779,15 +2821,26 @@ function typedCell(cellRef, column, value, styles = defaultStyleMap()) {
   if (WHOLE_NUMBER_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), styles.data?.[column] ?? styles.wholeNumber ?? 4);
   if (DECIMAL_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), styles.data?.[column] ?? styles.decimal ?? 5);
   if (BOOLEAN_COLUMNS.has(column)) return booleanCell(cellRef, parseBoolean(value), styles.data?.[column] ?? styles.text ?? 2);
-  if (PERCENT_COLUMNS.has(column)) return pnlPercentageCell(cellRef, styles.data?.[column] ?? styles.percent ?? 6);
+  if (PERCENT_COLUMNS.has(column)) {
+    const style = styles.data?.[column] ?? styles.percent ?? 6;
+    return column === "pnl_percentage"
+      ? pnlPercentageCell(cellRef, style)
+      : percentageValueCell(cellRef, parsePercentageValue(value), style);
+  }
   if (column === "Hour") return formulaColumnCell(cellRef, hourFormula(cellRef), styles.data?.[column] ?? styles.text ?? 2, false);
   if (column === "Weekday") return formulaColumnCell(cellRef, weekdayFormula(cellRef), styles.data?.[column] ?? styles.text ?? 2, true);
   if (column === "WeekdayNum") return formulaColumnCell(cellRef, weekdayNumFormula(cellRef), styles.data?.[column] ?? styles.text ?? 2, false);
   if (column === "TimeBucket") return formulaColumnCell(cellRef, timeBucketFormula(cellRef), styles.data?.[column] ?? styles.text ?? 2, true);
+  if (column === "ohlc_screenshot") return ohlcScreenshotCell(cellRef, value, styles.data?.[column] ?? styles.text ?? 2);
   return cell(cellRef, value, styles.data?.[column] ?? styles.text ?? 2);
 }
 
 function numericCell(cellRef, value, style) {
+  if (value === null) return `<c r="${cellRef}" s="${style}"/>`;
+  return `<c r="${cellRef}" s="${style}"><v>${value}</v></c>`;
+}
+
+function percentageValueCell(cellRef, value, style) {
   if (value === null) return `<c r="${cellRef}" s="${style}"/>`;
   return `<c r="${cellRef}" s="${style}"><v>${value}</v></c>`;
 }
@@ -2806,6 +2859,34 @@ function pnlPercentageCell(cellRef, style) {
   const row = Number(cellRef.match(/\d+/)?.[0] ?? 0);
   if (!row) return `<c r="${cellRef}" s="${style}"/>`;
   return formulaColumnCell(cellRef, `IFERROR(V${row}/T${row},"")`, style, false);
+}
+
+function ohlcScreenshotCell(cellRef, value, style) {
+  const text = String(value ?? "").trim();
+  if (!text) return cell(cellRef, "", style);
+  const formula = normalizeHyperlinkFormula(text);
+  if (formula) return formulaColumnCell(cellRef, formula, style, false);
+  return cell(cellRef, text, style);
+}
+
+function normalizeHyperlinkFormula(value) {
+  const text = String(value ?? "").trim();
+  const formulaMatch = text.match(/^=?\s*HYPERLINK\s*\(([\s\S]+)\)\s*$/i);
+  if (formulaMatch) return `HYPERLINK(${formulaMatch[1]})`;
+  if (!/\.(?:png|jpg|jpeg|gif|webp)$/i.test(text)) return null;
+  const target = pathToFileUrl(text);
+  const label = path.basename(text);
+  return `HYPERLINK("${excelFormulaString(target)}","${excelFormulaString(label)}")`;
+}
+
+function pathToFileUrl(value) {
+  const text = String(value ?? "").trim();
+  if (/^file:\/\//i.test(text)) return text;
+  return `file:///${text.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+}
+
+function excelFormulaString(value) {
+  return String(value ?? "").replace(/"/g, '""');
 }
 
 function formulaColumnCell(cellRef, formula, style, stringResult) {
@@ -2849,6 +2930,12 @@ function parseNumber(value) {
   if (!normalized) return null;
   const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
+}
+
+function parsePercentageValue(value) {
+  const number = parseNumber(value);
+  if (number === null) return null;
+  return number / 100;
 }
 
 function parseBoolean(value) {

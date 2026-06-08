@@ -1271,8 +1271,9 @@ function updateLauncherVisibility(): void {
     focused: launcherWindow.isFocused(),
     alwaysOnTop: launcherWindow.isAlwaysOnTop(),
   };
-  // Hide the launcher during active recording - the HUD owns that state.
-  // During 'processing' it stays visible so the user can watch progress.
+  // Hide the launcher during active recording and screenshot selection so it
+  // does not obscure the user's capture target. During 'processing' it stays
+  // visible so the user can watch progress.
   if (appState === 'recording') {
     if (launcherWindow.isVisible()) launcherWindow.hide();
     launcherWindow.setAlwaysOnTop(false);
@@ -5437,7 +5438,7 @@ function enterSelectingScreenshot(): void {
   }
   const cfg = getConfig().capture;
   selectingScreenshotEnteredAtMs = Date.now();
-  suppressLauncherDuringScreenshotCapture = cfg.mode === 'fullscreen';
+  suppressLauncherDuringScreenshotCapture = true;
   setAppState('selecting-screenshot', 'screenshot button from idle');
   log('state', 'enterSelectingScreenshot capture config', { ...cfg, effectiveCountdownSec: 0 });
   const requestId = ++activeScreenshotCaptureId;

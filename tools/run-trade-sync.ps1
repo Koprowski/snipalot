@@ -68,6 +68,67 @@ function Close-OpenMasterWorkbook([string]$WorkbookPath) {
   }
 }
 
+function Get-ZeroByteHexScratchFiles([string]$WorkbookPath, [datetime]$StartedAt) {
+  if (-not $WorkbookPath) { return @() }
+  $masterDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($WorkbookPath))
+  if (-not (Test-Path -LiteralPath $masterDir)) { return @() }
+
+  return @(
+    Get-ChildItem -LiteralPath $masterDir -Force -File |
+      Where-Object {
+        $_.Length -eq 0 -and
+        $_.Name -match '^[0-9A-Fa-f]{8}$' -and
+        $_.CreationTime -ge $StartedAt.AddMinutes(-1)
+      }
+  )
+}
+
+function Remove-ZeroByteHexScratchFiles([string]$WorkbookPath, [datetime]$StartedAt) {
+  foreach ($file in Get-ZeroByteHexScratchFiles $WorkbookPath $StartedAt) {
+    try {
+      Remove-Item -LiteralPath $file.FullName -Force
+      Write-Host "Removed orphan Excel scratch file: $($file.FullName)"
+    } catch {
+      Write-Warning "Could not remove orphan Excel scratch file $($file.FullName): $($_.Exception.Message)"
+    }
+  }
+}
+
+function Quote-ProcessArgument([string]$Argument) {
+  if ($Argument -notmatch '[\s"]') {
+    return $Argument
+  }
+  return '"' + ($Argument -replace '"', '\"') + '"'
+}
+
+function Invoke-WorkbookFinalizer([object[]]$FinalizeArgs) {
+  $maxAttempts = 3
+  $timeoutMs = 180000
+  $argumentList = @($FinalizeArgs | ForEach-Object { Quote-ProcessArgument ([string]$_) })
+
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    $process = Start-Process -FilePath "powershell.exe" -ArgumentList $argumentList -NoNewWindow -PassThru
+    if (-not $process.WaitForExit($timeoutMs)) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      $exitCode = 124
+    } else {
+      $process.Refresh()
+      $exitCode = if ($null -ne $process.ExitCode) { [int]$process.ExitCode } else { 0 }
+    }
+
+    if ($exitCode -eq 0) {
+      return
+    }
+
+    if ($attempt -lt $maxAttempts) {
+      Write-Warning "Excel workbook finalization failed with exit code $exitCode. Retrying finalization in 3 seconds..."
+      Start-Sleep -Seconds 3
+    }
+  }
+
+  throw "Excel workbook finalization failed after $maxAttempts attempts."
+}
+
 if (-not (Test-Path -LiteralPath $node)) {
   $node = "node"
 }
@@ -80,6 +141,8 @@ if ($ArchiveOnly) {
 }
 Write-Host ""
 
+$runStartedAt = Get-Date
+$displayMasterBeforeSync = ""
 Push-Location (Split-Path -Parent $scriptDir)
 try {
   if (-not $ArchiveOnly) {
@@ -130,12 +193,12 @@ try {
     if ($MasterPath) {
       $finalizeArgs += @("-MasterPath", $MasterPath)
     }
-    & powershell.exe @finalizeArgs
-    if ($LASTEXITCODE -ne 0) {
-      throw "Excel workbook finalization failed with exit code $LASTEXITCODE."
-    }
+    Invoke-WorkbookFinalizer $finalizeArgs
   }
 } finally {
+  if (-not $ArchiveOnly -and $displayMasterBeforeSync) {
+    Remove-ZeroByteHexScratchFiles $displayMasterBeforeSync $runStartedAt
+  }
   Pop-Location
 }
 

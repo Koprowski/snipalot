@@ -29,10 +29,10 @@ const SUPPLEMENTAL_IMPORTS = [
 const WORKFLOW_COLUMNS = [
   "trade_id",
   "token_name",
-  "trade_date",
+  "entry_date",
+  "exit_date",
   "video_start_time",
   "entry_commentary_time",
-  "entry_time_inferred",
   "exit_commentary_time",
   "exit_time_actual",
   "time_in_trade_seconds",
@@ -84,13 +84,13 @@ const OHLC_COLUMNS = [
   "ohlc_mc_high",
   "ohlc_mc_low",
   "ohlc_mc_close",
-  "ohlc_pct_high",
-  "ohlc_pct_low",
-  "ohlc_pct_close",
   "ohlc_sol_open",
   "ohlc_sol_high",
   "ohlc_sol_low",
   "ohlc_sol_close",
+  "ohlc_pct_high",
+  "ohlc_pct_low",
+  "ohlc_pct_close",
   "ohlc_screenshot",
 ];
 
@@ -125,12 +125,13 @@ const MASTER_COLUMNS = [
 
 const TRADE_LOG_COLUMNS = MASTER_COLUMNS;
 const TRADE_LOG_HEADER_ALIASES = new Map([
-  ["entry_time_actual", "entry_time_inferred"],
+  ["trade_date", "entry_date"],
+  ["entry_time_actual", ""],
+  ["entry_time_inferred", ""],
   ["source_trade_id", "mockape_trade_id"],
   ["ohlc_screenshot_path", "ohlc_screenshot"],
 ]);
 const TRADE_LOG_HEADER_LABELS = new Map([
-  ["entry_time_inferred", "entry_time_actual"],
   ["mockape_trade_id", "source_trade_id"],
 ]);
 
@@ -216,8 +217,6 @@ const DECIMAL_COLUMNS = new Set([
   "sol_invested",
   "sol_received",
   "pnl_sol",
-  "non_nics_pnl_pct",
-  "cluster_pnl_pct",
   "ohlc_sol_open",
   "ohlc_sol_high",
   "ohlc_sol_low",
@@ -226,6 +225,8 @@ const DECIMAL_COLUMNS = new Set([
 
 const PERCENT_COLUMNS = new Set([
   "pnl_percentage",
+  "non_nics_pnl_pct",
+  "cluster_pnl_pct",
   "ohlc_pct_high",
   "ohlc_pct_low",
   "ohlc_pct_close",
@@ -239,7 +240,8 @@ const BOOLEAN_COLUMNS = new Set([
 ]);
 
 const DATE_COLUMNS = new Set([
-  "trade_date",
+  "entry_date",
+  "exit_date",
 ]);
 
 function folderDate(name) {
@@ -327,6 +329,7 @@ function columnIndex(cellRef) {
 async function readXlsxRows(filePath, sheetName = null) {
   const zip = await JSZip.loadAsync(await fs.readFile(filePath));
   const sharedStrings = await readSharedStrings(zip);
+  const styleFormats = await readStyleFormats(zip);
   const sheetPath = sheetName ? ((await worksheetPathForName(zip, sheetName)) ?? "xl/worksheets/sheet1.xml") : "xl/worksheets/sheet1.xml";
   const sheet = await zip.file(sheetPath)?.async("string");
   if (!sheet) return [];
@@ -340,12 +343,16 @@ async function readXlsxRows(filePath, sheetName = null) {
         .map((m) => xmlDecode(m[1]));
       const numericValue = cellMatch[2].match(/<v>([\s\S]*?)<\/v>/)?.[1] ?? "";
       const formulaValue = cellMatch[2].match(/<f\b[^>]*>([\s\S]*?)<\/f>/)?.[1] ?? "";
+      const styleIndex = Number(cellMatch[1].match(/\bs="(\d+)"/)?.[1] ?? NaN);
       if (/^\s*HYPERLINK\s*\(/i.test(xmlDecode(formulaValue))) {
         cells[columnIndex(ref)] = xmlDecode(formulaValue);
       } else if (type === "s" && numericValue !== "") {
         cells[columnIndex(ref)] = sharedStrings[Number(numericValue)] ?? "";
       } else if (type === "b" && numericValue !== "") {
         cells[columnIndex(ref)] = numericValue === "1" ? "TRUE" : "FALSE";
+      } else if (numericValue !== "" && isTruePercentStyle(styleFormats[styleIndex])) {
+        const number = Number(xmlDecode(numericValue));
+        cells[columnIndex(ref)] = Number.isFinite(number) ? String(number * 100) : xmlDecode(numericValue);
       } else if (numericValue === "" && formulaValue) {
         cells[columnIndex(ref)] = xmlDecode(formulaValue);
       } else {
@@ -365,6 +372,37 @@ async function readSharedStrings(zip) {
       .map((part) => xmlDecode(part[1]))
       .join("")
   );
+}
+
+async function readStyleFormats(zip) {
+  const styles = await zip.file("xl/styles.xml")?.async("string");
+  return extractStyleFormats(styles);
+}
+
+function extractStyleFormats(styles) {
+  if (!styles) return [];
+  const customFormats = new Map(
+    [...styles.matchAll(/<numFmt\b[^>]*numFmtId="([^"]+)"[^>]*formatCode="([^"]+)"/g)]
+      .map((match) => [match[1], xmlDecode(match[2])])
+  );
+  const builtInFormats = new Map([
+    ["9", "0%"],
+    ["10", "0.00%"],
+  ]);
+  const cellXfs = styles.match(/<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1] ?? "";
+  return [...cellXfs.matchAll(/<xf\b([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/g)].map((match) => {
+    const numFmtId = match[1].match(/\bnumFmtId="([^"]+)"/)?.[1] ?? "";
+    return customFormats.get(numFmtId) ?? builtInFormats.get(numFmtId) ?? "";
+  });
+}
+
+function isTruePercentStyle(formatCode) {
+  const format = String(formatCode ?? "");
+  if (!format.includes("%")) return false;
+  const withoutQuotedText = format
+    .replace(/"[^"]*"/g, "")
+    .replace(/\\./g, "");
+  return withoutQuotedText.includes("%");
 }
 
 async function worksheetPathForName(zip, sheetName) {
@@ -396,7 +434,8 @@ function normalizeWorkflowRow(row, sessionName, sourceType, archivePath) {
   for (const column of WORKFLOW_COLUMNS) out[column] = row[column] ?? "";
   for (const column of NICS_COLUMNS) out[column] = row[column] ?? "";
   for (const column of OHLC_COLUMNS) out[column] = row[column] ?? "";
-  if (!out.trade_date) out.trade_date = folderDate(sessionName);
+  out.ohlc_screenshot = normalizeScreenshotForSessionFolder(out.ohlc_screenshot, archivePath);
+  if (!out.entry_date) out.entry_date = folderDate(sessionName);
   if (!out.entry_mc_actual && row.entry_mc_actual) out.entry_mc_actual = row.entry_mc_actual;
   if (!out.target_exit_low_mc && row.target_low_mc) out.target_exit_low_mc = row.target_low_mc;
   if (!out.target_exit_high_mc && row.target_high_mc) out.target_exit_high_mc = row.target_high_mc;
@@ -407,10 +446,26 @@ function normalizeWorkflowRow(row, sessionName, sourceType, archivePath) {
   return out;
 }
 
+function normalizeScreenshotForSessionFolder(value, sessionDir) {
+  const text = String(value ?? "").trim();
+  if (!text || !sessionDir) return text;
+  const formulaMatch = text.match(/^=?\s*HYPERLINK\s*\(\s*"((?:[^"]|"")*)"\s*,\s*"((?:[^"]|"")*)"\s*\)\s*$/i);
+  const target = formulaMatch ? formulaMatch[1].replace(/""/g, '"') : text;
+  const label = formulaMatch ? formulaMatch[2].replace(/""/g, '"') : path.basename(target);
+  const normalizedTarget = pathToExcelHyperlinkTarget(target);
+  if (fss.existsSync(normalizedTarget)) return `HYPERLINK("${excelFormulaString(normalizedTarget)}","${excelFormulaString(label)}")`;
+
+  const candidate = path.join(sessionDir, "Inputs", "trade-screenshots", path.basename(normalizedTarget));
+  if (fss.existsSync(candidate)) {
+    return `HYPERLINK("${excelFormulaString(candidate)}","${excelFormulaString(path.basename(candidate))}")`;
+  }
+  return text;
+}
+
 function fillTimeBucketFields(row) {
   if (!isBlank(row.Hour) && !isBlank(row.Weekday) && !isBlank(row.WeekdayNum) && !isBlank(row.TimeBucket)) return;
-  const serial = parseDateSerial(row.trade_date);
-  const time = parseTimeParts(firstNonBlank(row.entry_time_inferred, row.entry_commentary_time, row.exit_time_actual, row.video_start_time));
+  const serial = parseDateSerial(row.entry_date);
+  const time = parseTimeParts(firstNonBlank(row.entry_commentary_time, row.exit_time_actual, row.video_start_time));
   if (serial === null || !time) return;
   const date = dateFromExcelSerial(serial);
   const jsDay = date.getUTCDay();
@@ -450,12 +505,23 @@ function rowKey(row) {
 
 function sortRowsForAppend(rows) {
   return [...rows].sort((a, b) => {
-    const aKey = sortableDateTimeKey(a.trade_date, a.video_start_time || a.entry_time_inferred || a.exit_time_actual);
-    const bKey = sortableDateTimeKey(b.trade_date, b.video_start_time || b.entry_time_inferred || b.exit_time_actual);
+    const aKey = sortableDateTimeKey(a.exit_date || a.entry_date, a.exit_time_actual || a.exit_commentary_time || a.entry_commentary_time || a.video_start_time);
+    const bKey = sortableDateTimeKey(b.exit_date || b.entry_date, b.exit_time_actual || b.exit_commentary_time || b.entry_commentary_time || b.video_start_time);
     return aKey.localeCompare(bKey) ||
       String(a.source_session ?? "").localeCompare(String(b.source_session ?? "")) ||
       String(a.trade_id ?? "").localeCompare(String(b.trade_id ?? ""), undefined, { numeric: true });
   });
+}
+
+function rowsAreSortedForAppend(rows) {
+  for (let index = 1; index < rows.length; index++) {
+    const previous = rows[index - 1];
+    const current = rows[index];
+    const previousKey = sortableDateTimeKey(previous.exit_date || previous.entry_date, previous.exit_time_actual || previous.exit_commentary_time || previous.entry_commentary_time || previous.video_start_time);
+    const currentKey = sortableDateTimeKey(current.exit_date || current.entry_date, current.exit_time_actual || current.exit_commentary_time || current.entry_commentary_time || current.video_start_time);
+    if (previousKey.localeCompare(currentKey) > 0) return false;
+  }
+  return true;
 }
 
 function sortableDateTimeKey(dateValue, timeValue) {
@@ -464,6 +530,13 @@ function sortableDateTimeKey(dateValue, timeValue) {
 
 function sortableDateKey(value) {
   const text = String(value ?? "").trim();
+  const serial = parseDateSerial(text);
+  if (serial !== null) {
+    const date = dateFromExcelSerial(serial);
+    return `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }
+  const isoMatch = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) return `${isoMatch[1].padStart(4, "0")}-${isoMatch[2].padStart(2, "0")}-${isoMatch[3].padStart(2, "0")}`;
   const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (!match) return "9999-99-99";
   const year = match[3].length === 2 ? `20${match[3]}` : match[3];
@@ -673,9 +746,9 @@ async function main() {
   const rowsToAppend = sortRowsForAppend(allRows.slice(existingRowCount));
   const rowsBackfilled = [...results, ...backfillResults, ...supplementalResults]
     .reduce((sum, result) => sum + (result.rowsBackfilled ?? 0), 0);
-  const forceRewrite = rowsBackfilled > 0 || rowsRemovedBeforeImport > 0;
+  const forceRewrite = TEST_MODE || rowsBackfilled > 0 || rowsRemovedBeforeImport > 0 || rowsToAppend.length > 0 || !rowsAreSortedForAppend(allRows);
   const rowsForSave = forceRewrite
-    ? [...allRows.slice(0, existingRowCount), ...rowsToAppend]
+    ? sortRowsForAppend(allRows)
     : allRows;
   const workbookUpdated = await saveMaster(rowsForSave, rowsToAppend, forceRewrite);
   if (workbookUpdated && !NO_ARCHIVE) {
@@ -1109,8 +1182,8 @@ function renderSyncNicsPrompt(sessionDir, rawRows, evidence) {
       "trade_id",
       "token_name",
       "mockape_trade_id",
-      "trade_date",
-      "entry_time_inferred",
+      "entry_date",
+      "exit_date",
       "exit_time_actual",
       "entry_mc_actual",
       "target_exit_low_mc",
@@ -1511,7 +1584,7 @@ function isBlank(value) {
 }
 
 function clusterDateCode(row, sessionName) {
-  const serial = parseDateSerial(firstNonBlank(row.trade_date, folderDate(sessionName)));
+  const serial = parseDateSerial(firstNonBlank(row.entry_date, folderDate(sessionName)));
   const date = serial === null ? dateFromSessionName(sessionName) : dateFromExcelSerial(serial);
   const year = String(date.getUTCFullYear()).slice(-2);
   const month = String(date.getUTCMonth() + 1).padStart(2, "0");
@@ -1619,11 +1692,11 @@ function sessionKeyFor(row) {
 }
 
 function rowEntryDateTimeMs(row) {
-  return rowDateTimeFromTimeValue(row, firstNonBlank(row.entry_time_inferred, row.entry_commentary_time, row.video_start_time));
+  return rowDateTimeFromTimeValue(row, firstNonBlank(row.entry_commentary_time, row.video_start_time), "entry_date");
 }
 
 function rowExitDateTimeMs(row) {
-  return rowDateTimeFromTimeValue(row, firstNonBlank(row.exit_time_actual, row.exit_commentary_time));
+  return rowDateTimeFromTimeValue(row, firstNonBlank(row.exit_time_actual, row.exit_commentary_time), "exit_date");
 }
 
 function fillCountFieldsForRows(rowsToFill, existingRows) {
@@ -1714,11 +1787,11 @@ function sessionClusterKeyFor(row) {
 }
 
 function rowDateTimeMs(row) {
-  return rowDateTimeFromTimeValue(row, firstNonBlank(row.entry_time_inferred, row.exit_time_actual, row.video_start_time));
+  return rowDateTimeFromTimeValue(row, firstNonBlank(row.entry_commentary_time, row.exit_time_actual, row.video_start_time), "entry_date");
 }
 
-function rowDateTimeFromTimeValue(row, value) {
-  const serial = parseDateSerial(row.trade_date);
+function rowDateTimeFromTimeValue(row, value, dateColumn = "entry_date") {
+  const serial = parseDateSerial(row[dateColumn]);
   if (serial === null) return null;
   const time = parseTimeParts(value);
   if (!time) return null;
@@ -1792,6 +1865,7 @@ async function updateExistingWorkbook(filePath, rows) {
 
   const workbookStylesXml = await zip.file("xl/styles.xml")?.async("string") ?? "";
   const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
+  masterXml = await migrateLegacyMasterWorksheetSchema(zip, masterPath, masterXml, styles);
   const widths = MASTER_COLUMNS.map((column) => {
     const max = [column, ...rows.map((row) => row[column] ?? "")].reduce((m, value) => {
       return Math.max(m, ...String(value).split(/\r?\n/).map((line) => line.length));
@@ -1824,6 +1898,7 @@ async function appendRowsToExistingWorkbook(filePath, rowsToAppend) {
 
   const workbookStylesXml = await zip.file("xl/styles.xml")?.async("string") ?? "";
   const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
+  masterXml = await migrateLegacyMasterWorksheetSchema(zip, masterPath, masterXml, styles);
   const currentLastRow = worksheetLastRow(masterXml);
   const targetLastRow = currentLastRow + rowsToAppend.length;
   const tableInfo = await masterTableInfoForSheet(zip, masterPath);
@@ -1889,6 +1964,7 @@ async function rewriteExistingMasterWorkbook(filePath, rows) {
 
   const workbookStylesXml = await zip.file("xl/styles.xml")?.async("string") ?? "";
   const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
+  masterXml = await migrateLegacyMasterWorksheetSchema(zip, masterPath, masterXml, styles);
   const lastRow = rows.length + 1;
   const tableInfo = await masterTableInfoForSheet(zip, masterPath);
   const lastColumn = maxColumnName(
@@ -1924,6 +2000,7 @@ async function repairExistingWorkbook(filePath) {
   if (masterXml) {
     const workbookStylesXml = await zip.file("xl/styles.xml")?.async("string") ?? "";
     const styles = extractWorksheetStyles(masterXml, workbookStylesXml);
+    masterXml = await migrateLegacyMasterWorksheetSchema(zip, masterPath, masterXml, styles);
     const tableInfo = await masterTableInfoForSheet(zip, masterPath);
     const lastRow = worksheetLastRow(masterXml);
     let repairedXml = fillMasterCalculatedTableColumns(masterXml, tableInfo.columns, 1, lastRow);
@@ -1947,13 +2024,117 @@ async function repairExistingWorkbook(filePath) {
 
 async function normalizeMasterTradeDates(zip, masterXml, dateStyle) {
   const sharedStrings = await readSharedStrings(zip);
-  return masterXml.replace(/<c\b([^>]*\br="G(\d+)"[^>]*)(?:\/>|>([\s\S]*?)<\/c>)/g, (full, attrs, rowText, content = "") => {
+  let out = masterXml;
+  for (const column of ["G", "H"]) {
+    out = out.replace(new RegExp(`<c\\b([^>]*\\br="${column}(\\d+)"[^>]*)(?:\\/>|>([\\s\\S]*?)<\\/c>)`, "g"), (full, attrs, rowText, content = "") => {
+      const row = Number(rowText);
+      if (row < 2) return full;
+      const serial = parseDateSerial(cellScalarValue(attrs, content, sharedStrings));
+      if (serial === null) return full;
+      return `<c r="${column}${row}" s="${dateStyle ?? 14}"><v>${serial}</v></c>`;
+    });
+  }
+  return out;
+}
+
+async function migrateLegacyMasterWorksheetSchema(zip, masterPath, masterXml, styles) {
+  const tableInfo = await masterTableInfoForSheet(zip, masterPath, { allowLegacy: true });
+  if (!tableInfo.migratedLegacy && !isLegacyMasterColumns(tableInfo.columns)) return masterXml;
+
+  const sharedStrings = await readSharedStrings(zip);
+  const dateStyle = styles.date ?? 14;
+  const headerStyle = styleForHeader("entry_date", styles);
+  const textStyle = styles.text ?? 2;
+  let out = masterXml.replace(/<row\b([^>]*)\br="(\d+)"([^>]*)>([\s\S]*?)<\/row>/g, (full, before, rowText, after, body) => {
     const row = Number(rowText);
-    if (row < 2) return full;
-    const serial = parseDateSerial(cellScalarValue(attrs, content, sharedStrings));
-    if (serial === null) return full;
-    return `<c r="G${row}" s="${dateStyle ?? 14}"><v>${serial}</v></c>`;
+    const cells = cellsByColumnIndex(body);
+    if (row === 1) {
+      return `<row${before} r="${rowText}"${after}>${legacyMasterSchemaCells(cells, row, {
+        entryDateCell: cell("G1", "entry_date", headerStyle),
+        exitDateCell: cell("H1", "exit_date", headerStyle),
+      })}</row>`;
+    }
+
+    const oldDate = cells.get(6);
+    const oldDateValue = oldDate ? cellScalarValue(oldDate.attrs, oldDate.content, sharedStrings) : "";
+    const notes = cells.get(27);
+    const notesValue = notes ? cellScalarValue(notes.attrs, notes.content, sharedStrings) : "";
+    const entrySerial = parseDateSerial(overnightEntryDateFromNotes(notesValue)) ?? parseDateSerial(oldDateValue);
+    const exitSerial = parseDateSerial(oldDateValue);
+    return `<row${before} r="${rowText}"${after}>${legacyMasterSchemaCells(cells, row, {
+      entryDateCell: dateCell(`G${row}`, entrySerial, dateStyle),
+      exitDateCell: dateCell(`H${row}`, exitSerial, dateStyle),
+      emptyCellStyle: textStyle,
+    })}</row>`;
   });
+
+  out = updateWorksheetDimension(out, maxColumnName(worksheetLastColumn(out), columnName(tableInfo.columnCount - 1)), worksheetLastRow(out));
+  out = removeWorksheetAutoFilter(out);
+  zip.file(masterPath, out);
+  await replaceWorkbookXmlText(zip, "tblTrades[trade_date]", "tblTrades[entry_date]");
+  await updateMasterTable(zip, masterPath, maxColumnName(worksheetLastColumn(out), columnName(tableInfo.columnCount - 1)), worksheetLastRow(out));
+  return out;
+}
+
+async function replaceWorkbookXmlText(zip, searchValue, replacementValue) {
+  for (const filePath of Object.keys(zip.files).filter((entry) => entry.endsWith(".xml"))) {
+    const file = zip.file(filePath);
+    if (!file) continue;
+    const text = await file.async("string");
+    if (!text.includes(searchValue)) continue;
+    zip.file(filePath, text.split(searchValue).join(replacementValue));
+  }
+}
+
+function isLegacyMasterColumns(columns) {
+  return columns[6]?.name === "trade_date" &&
+    columns[7]?.name === "video_start_time" &&
+    columns[8]?.name === "entry_commentary_time" &&
+    ["entry_time_inferred", "entry_time_actual"].includes(columns[9]?.name ?? "") &&
+    columns[10]?.name === "exit_commentary_time";
+}
+
+function legacyMasterSchemaCells(cells, row, options) {
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const existing = cells.get(i);
+    out.push(existing ? withCellRef(existing.full, ref(i, row)) : cell(ref(i, row), "", options.emptyCellStyle ?? 2));
+  }
+  out.push(options.entryDateCell);
+  out.push(options.exitDateCell);
+  const oldVideoStart = cells.get(7);
+  const oldEntryCommentary = cells.get(8);
+  out.push(oldVideoStart ? withCellRef(oldVideoStart.full, ref(8, row)) : cell(ref(8, row), "", options.emptyCellStyle ?? 2));
+  out.push(oldEntryCommentary ? withCellRef(oldEntryCommentary.full, ref(9, row)) : cell(ref(9, row), "", options.emptyCellStyle ?? 2));
+  for (const [index, existing] of [...cells.entries()].sort((a, b) => a[0] - b[0])) {
+    if (index <= 9) continue;
+    out.push(existing.full);
+  }
+  return out.join("");
+}
+
+function cellsByColumnIndex(rowBody) {
+  const cells = new Map();
+  for (const match of rowBody.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+    const attrs = match[1];
+    const cellRef = attrs.match(/\br="([^"]+)"/)?.[1] ?? "";
+    if (!cellRef) continue;
+    cells.set(columnIndex(cellRef), {
+      full: match[0],
+      attrs,
+      content: match[2] ?? "",
+    });
+  }
+  return cells;
+}
+
+function withCellRef(cellXml, cellRef) {
+  if (/\br="[^"]+"/.test(cellXml)) return cellXml.replace(/\br="[^"]+"/, `r="${cellRef}"`);
+  return cellXml.replace(/<c\b/, `<c r="${cellRef}"`);
+}
+
+function overnightEntryDateFromNotes(notes) {
+  return String(notes ?? "").match(/\bovernight_entry_date=([^;,\n]+)/)?.[1]?.trim() ?? "";
 }
 
 function cellScalarValue(attrs, content, sharedStrings) {
@@ -1994,6 +2175,7 @@ async function writeZipWorkbook(filePath, zip) {
 }
 
 function extractWorksheetStyles(sheetXml, workbookStylesXml = "") {
+  const styleFormats = extractStyleFormats(workbookStylesXml);
   const styles = {
     header: 1,
     text: 2,
@@ -2022,6 +2204,9 @@ function extractWorksheetStyles(sheetXml, workbookStylesXml = "") {
       const col = columnIndex(cellRef);
       const style = cellMatch[1].match(/\bs="(\d+)"/)?.[1];
       if (col >= 0 && MASTER_COLUMNS[col] && style && !styles.data[MASTER_COLUMNS[col]]) {
+        if (PERCENT_COLUMNS.has(MASTER_COLUMNS[col]) && !isTruePercentStyle(styleFormats[Number(style)])) {
+          continue;
+        }
         styles.data[MASTER_COLUMNS[col]] = Number(style);
       }
     }
@@ -2168,7 +2353,7 @@ async function updateMasterTable(zip, masterPath, lastColumn, lastRow) {
   zip.file(tableInfo.path, tableXml);
 }
 
-async function masterTableInfoForSheet(zip, masterPath) {
+async function masterTableInfoForSheet(zip, masterPath, options = {}) {
   const relsPath = worksheetRelsPath(masterPath);
   const relsFile = zip.file(relsPath);
   if (!relsFile) {
@@ -2196,17 +2381,23 @@ async function masterTableInfoForSheet(zip, masterPath) {
     throw new Error(`Master table part ${tablePath} is missing. Refusing to write.`);
   }
 
-  const tableXml = await tableFile.async("string");
+  let tableXml = await tableFile.async("string");
   const displayName = tableXml.match(/\bdisplayName="([^"]+)"/)?.[1] ?? "";
   if (displayName !== "tblTrades") {
     throw new Error(`Expected master table displayName="tblTrades"; found "${displayName}". Refusing to write.`);
   }
 
-  const columns = parseTableColumns(tableXml);
+  let columns = parseTableColumns(tableXml);
+  const migratedLegacy = isLegacyMasterColumns(columns);
+  if (migratedLegacy) {
+    tableXml = migrateLegacyMasterTableSchema(tableXml);
+    zip.file(tablePath, tableXml);
+    columns = parseTableColumns(tableXml);
+  }
   const declaredCount = Number(tableXml.match(/<tableColumns\b[^>]*\bcount="(\d+)"/)?.[1] ?? 0);
   const columnCount = Math.max(declaredCount, columns.length);
-  validateMasterTableColumns(columns, columnCount);
-  return { path: tablePath, xml: tableXml, columns, columnCount };
+  if (!options.allowLegacy) validateMasterTableColumns(columns, columnCount);
+  return { path: tablePath, xml: tableXml, columns, columnCount, migratedLegacy };
 }
 
 function parseTableColumns(tableXml) {
@@ -2226,7 +2417,7 @@ function parseTableColumns(tableXml) {
 function validateMasterTableColumns(columns, columnCount) {
   if (columnCount < MASTER_COLUMNS.length) {
     for (let i = 0; i < columnCount; i++) {
-      if (columns[i]?.name !== MASTER_COLUMNS[i]) {
+      if (!isExpectedMasterTableColumn(columns[i]?.name, MASTER_COLUMNS[i])) {
         throw new Error(`tblTrades column ${i + 1} is "${columns[i]?.name ?? ""}", expected "${MASTER_COLUMNS[i]}". Refusing to extend schema.`);
       }
     }
@@ -2234,7 +2425,7 @@ function validateMasterTableColumns(columns, columnCount) {
   }
 
   for (let i = 0; i < MASTER_COLUMNS.length; i++) {
-    if (columns[i]?.name !== MASTER_COLUMNS[i]) {
+    if (!isExpectedMasterTableColumn(columns[i]?.name, MASTER_COLUMNS[i])) {
       throw new Error(`tblTrades column ${i + 1} is "${columns[i]?.name ?? ""}", expected "${MASTER_COLUMNS[i]}". Refusing to write.`);
     }
   }
@@ -2246,6 +2437,44 @@ function validateMasterTableColumns(columns, columnCount) {
   if (nonCalculatedExtra.length > 0) {
     throw new Error(`tblTrades has extra non-calculated column(s): ${nonCalculatedExtra.join(", ")}. Refusing to write.`);
   }
+}
+
+function isExpectedMasterTableColumn(actualName, canonicalName) {
+  return actualName === canonicalName || actualName === TRADE_LOG_HEADER_LABELS.get(canonicalName);
+}
+
+function migrateLegacyMasterTableSchema(tableXml) {
+  const columns = parseTableColumns(tableXml);
+  const migrated = [];
+  for (let i = 0; i < columns.length; i++) {
+    if (i === 6) {
+      migrated.push(replaceTableColumnName(columns[i], "entry_date", 7));
+      migrated.push(`<tableColumn id="8" name="exit_date"/>`);
+      continue;
+    }
+    if (i === 7) {
+      migrated.push(replaceTableColumnName(columns[i], "video_start_time", 9));
+      continue;
+    }
+    if (i === 8) {
+      migrated.push(replaceTableColumnName(columns[i], "entry_commentary_time", 10));
+      continue;
+    }
+    if (i === 9) continue;
+    migrated.push(replaceTableColumnName(columns[i], columns[i].name, i + 1));
+  }
+  return tableXml
+    .replace(/<tableColumns\b([^>]*)\bcount="\d+"/, `<tableColumns$1count="${migrated.length}"`)
+    .replace(/<tableColumns\b[^>]*>[\s\S]*?<\/tableColumns>/, (full) =>
+      full.replace(/<tableColumn\b[\s\S]*?<\/tableColumn>|<tableColumn\b[^>]*\/>/g, "").replace("</tableColumns>", `${migrated.join("")}</tableColumns>`)
+    );
+}
+
+function replaceTableColumnName(column, name, id) {
+  const formula = column.formula ? `<calculatedColumnFormula>${xml(column.formula)}</calculatedColumnFormula>` : "";
+  return formula
+    ? `<tableColumn id="${id}" name="${xml(name)}">${formula}</tableColumn>`
+    : `<tableColumn id="${id}" name="${xml(name)}"/>`;
 }
 
 async function extendAnalysisForMasterRows(zip, targetLastRow) {
@@ -2723,6 +2952,7 @@ async function writeXlsx(filePath, rows) {
 }
 
 async function writeTradeLogRowsXlsx(filePath, rows) {
+  rows = sortRowsForAppend(rows);
   const widths = TRADE_LOG_COLUMNS.map((column) => {
     const max = [tradeLogHeaderLabel(column), ...rows.map((row) => row[column] ?? "")].reduce((m, value) => {
       return Math.max(m, ...String(value).split(/\r?\n/).map((line) => line.length));
@@ -2786,9 +3016,16 @@ function tradeLogHeaderLabel(column) {
 
 function typedTradeLogCell(cellRef, column, value) {
   if (DATE_COLUMNS.has(column)) return dateCell(cellRef, parseDateSerial(value), 7);
+  if (column === "running_count") return formulaColumnCell(cellRef, runningCountFormula(cellRef), 3, false);
   if (INTEGER_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), 3);
   if (WHOLE_NUMBER_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), 4);
   if (DECIMAL_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), 5);
+  if (column === "pnl_percentage") return pnlPercentageCell(cellRef, 6);
+  if (column === "non_nics_pnl_pct") return formulaColumnCell(cellRef, nonNicsPnlPctFormula(cellRef), 6, false);
+  if (column === "cluster_pnl_pct") return formulaColumnCell(cellRef, clusterPnlPctFormula(cellRef), 6, false);
+  if (column === "ohlc_pct_high" || column === "ohlc_pct_low" || column === "ohlc_pct_close") {
+    return formulaColumnCell(cellRef, ohlcPctFormula(cellRef, column), 6, false);
+  }
   if (PERCENT_COLUMNS.has(column)) return percentageValueCell(cellRef, parsePercentageValue(value), 6);
   if (BOOLEAN_COLUMNS.has(column) || column === "needs_review") return booleanCell(cellRef, parseBoolean(value), 2);
   if (column === "ohlc_screenshot") return ohlcScreenshotCell(cellRef, value, 2);
@@ -2817,15 +3054,20 @@ function styleForHeader(column, styles) {
 
 function typedCell(cellRef, column, value, styles = defaultStyleMap()) {
   if (DATE_COLUMNS.has(column)) return dateCell(cellRef, parseDateSerial(value), styles.date ?? 14);
+  if (column === "running_count") return formulaColumnCell(cellRef, runningCountFormula(cellRef), styles.data?.[column] ?? styles.integer ?? 3, false);
   if (INTEGER_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), styles.data?.[column] ?? styles.integer ?? 3);
   if (WHOLE_NUMBER_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), styles.data?.[column] ?? styles.wholeNumber ?? 4);
   if (DECIMAL_COLUMNS.has(column)) return numericCell(cellRef, parseNumber(value), styles.data?.[column] ?? styles.decimal ?? 5);
   if (BOOLEAN_COLUMNS.has(column)) return booleanCell(cellRef, parseBoolean(value), styles.data?.[column] ?? styles.text ?? 2);
   if (PERCENT_COLUMNS.has(column)) {
     const style = styles.data?.[column] ?? styles.percent ?? 6;
-    return column === "pnl_percentage"
-      ? pnlPercentageCell(cellRef, style)
-      : percentageValueCell(cellRef, parsePercentageValue(value), style);
+    if (column === "pnl_percentage") return pnlPercentageCell(cellRef, style);
+    if (column === "non_nics_pnl_pct") return formulaColumnCell(cellRef, nonNicsPnlPctFormula(cellRef), style, false);
+    if (column === "cluster_pnl_pct") return formulaColumnCell(cellRef, clusterPnlPctFormula(cellRef), style, false);
+    if (column === "ohlc_pct_high" || column === "ohlc_pct_low" || column === "ohlc_pct_close") {
+      return formulaColumnCell(cellRef, ohlcPctFormula(cellRef, column), style, false);
+    }
+    return percentageValueCell(cellRef, parsePercentageValue(value), style);
   }
   if (column === "Hour") return formulaColumnCell(cellRef, hourFormula(cellRef), styles.data?.[column] ?? styles.text ?? 2, false);
   if (column === "Weekday") return formulaColumnCell(cellRef, weekdayFormula(cellRef), styles.data?.[column] ?? styles.text ?? 2, true);
@@ -2861,6 +3103,27 @@ function pnlPercentageCell(cellRef, style) {
   return formulaColumnCell(cellRef, `IFERROR(V${row}/T${row},"")`, style, false);
 }
 
+function runningCountFormula(cellRef) {
+  const row = rowNumberFromRef(cellRef);
+  return `IF(AY${row}=TRUE,0,N(AZ${row - 1})+AX${row})`;
+}
+
+function nonNicsPnlPctFormula(cellRef) {
+  const row = rowNumberFromRef(cellRef);
+  return `IF(AW${row}="Non-NICS",W${row},"")`;
+}
+
+function clusterPnlPctFormula(cellRef) {
+  const row = rowNumberFromRef(cellRef);
+  return `IFERROR(SUMIF(AI:AI,AI${row},V:V)/SUMIF(AI:AI,AI${row},T:T),0)`;
+}
+
+function ohlcPctFormula(cellRef, column) {
+  const row = rowNumberFromRef(cellRef);
+  const marketCapColumn = column === "ohlc_pct_high" ? "BE" : column === "ohlc_pct_low" ? "BF" : "BG";
+  return `IFERROR(${marketCapColumn}${row}/BD${row}-1,"")`;
+}
+
 function ohlcScreenshotCell(cellRef, value, style) {
   const text = String(value ?? "").trim();
   if (!text) return cell(cellRef, "", style);
@@ -2872,17 +3135,36 @@ function ohlcScreenshotCell(cellRef, value, style) {
 function normalizeHyperlinkFormula(value) {
   const text = String(value ?? "").trim();
   const formulaMatch = text.match(/^=?\s*HYPERLINK\s*\(([\s\S]+)\)\s*$/i);
-  if (formulaMatch) return `HYPERLINK(${formulaMatch[1]})`;
+  if (formulaMatch) return `HYPERLINK(${normalizeHyperlinkArguments(formulaMatch[1])})`;
   if (!/\.(?:png|jpg|jpeg|gif|webp)$/i.test(text)) return null;
-  const target = pathToFileUrl(text);
+  const target = pathToExcelHyperlinkTarget(text);
   const label = path.basename(text);
   return `HYPERLINK("${excelFormulaString(target)}","${excelFormulaString(label)}")`;
 }
 
-function pathToFileUrl(value) {
+function normalizeHyperlinkArguments(value) {
+  return String(value ?? "").replace(/^"((?:[^"]|"")*)"/, (match, target) => {
+    return `"${excelFormulaString(pathToExcelHyperlinkTarget(target.replace(/""/g, '"')))}"`;
+  });
+}
+
+function pathToExcelHyperlinkTarget(value) {
   const text = String(value ?? "").trim();
-  if (/^file:\/\//i.test(text)) return text;
-  return `file:///${text.replace(/\\/g, "/").replace(/^\/+/, "")}`;
+  if (/^file:\/\//i.test(text)) {
+    const withoutScheme = text.replace(/^file:\/\/\/?/i, "");
+    const decoded = decodeUriComponentSafe(withoutScheme).replace(/^\/+([A-Za-z]:)/, "$1");
+    return decoded.replace(/\//g, "\\");
+  }
+  if (/^[A-Za-z]:\//.test(text)) return text.replace(/\//g, "\\");
+  return text;
+}
+
+function decodeUriComponentSafe(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function excelFormulaString(value) {
@@ -3011,7 +3293,7 @@ function workbookRelsXml() {
 }
 
 function stylesXml() {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="0.0%"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="0.0%"/><numFmt numFmtId="165" formatCode="0.000"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"><alignment wrapText="1" vertical="top"/></xf><xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf><xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="top"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
 }
 
 function appPropsXml() {

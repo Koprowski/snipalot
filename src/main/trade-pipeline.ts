@@ -1732,10 +1732,10 @@ const XLSX_SOURCE_COLUMNS = [
 const XLSX_WORKFLOW_COLUMNS = [
   'trade_id',
   'token_name',
-  'trade_date',
+  'entry_date',
+  'exit_date',
   'video_start_time',
   'entry_commentary_time',
-  'entry_time_inferred',
   'exit_commentary_time',
   'exit_time_actual',
   'time_in_trade_seconds',
@@ -1799,9 +1799,7 @@ const XLSX_COLUMNS = [
 type XlsxColumn = typeof XLSX_COLUMNS[number];
 type XlsxRow = Record<XlsxColumn, string>;
 
-const XLSX_HEADER_LABELS: Partial<Record<XlsxColumn, string>> = {
-  entry_time_inferred: 'entry_time_actual',
-};
+const XLSX_HEADER_LABELS: Partial<Record<XlsxColumn, string>> = {};
 
 async function writeTradeLogXlsx(
   sessionDir: string,
@@ -1841,7 +1839,7 @@ function buildTradeXlsxRow(
   const sizeOk = trade.size_ok ?? isHalfSol(trade.sol_invested);
   const zoneOk = trade.zone_ok ?? isNicsMarketCapZone(trade.entry_mc_actual);
   const countsToward50 = trade.counts_toward_50 ?? null;
-  const bucketSource = timeline.entryInferred ?? timeline.entryCommentary ?? timeline.exitActual ?? timeline.videoStart;
+  const bucketSource = timeline.entryActual ?? timeline.entryCommentary ?? timeline.exitActual ?? timeline.videoStart;
   return {
     source_session: path.basename(sessionDir),
     source_log_type: 'generated-trade-xlsx',
@@ -1849,10 +1847,10 @@ function buildTradeXlsxRow(
     processed_at: new Date().toISOString(),
     trade_id: String(trade.trade_id),
     token_name: trade.token_name,
-    trade_date: formatTradeDate(timeline.tradeDate),
+    entry_date: formatTradeDate(timeline.entryDate),
+    exit_date: formatTradeDate(timeline.exitDate),
     video_start_time: formatTradeTime(timeline.videoStart),
     entry_commentary_time: formatTradeTime(timeline.entryCommentary),
-    entry_time_inferred: formatTradeTime(timeline.entryInferred),
     exit_commentary_time: formatTradeTime(timeline.exitCommentary),
     exit_time_actual: formatTradeTime(timeline.exitActual),
     time_in_trade_seconds: timeline.timeInTradeSeconds === null ? '' : String(timeline.timeInTradeSeconds),
@@ -1862,9 +1860,9 @@ function buildTradeXlsxRow(
     target_exit_high_mc: formatWholeNumberWithCommas(trade.target_high_mc),
     stop_loss_mc: formatWholeNumberWithCommas(trade.stop_loss_mc),
     exit_mc_actual: formatWholeNumberWithCommas(trade.exit_mc_actual),
-    sol_invested: formatFixedDecimal(trade.sol_invested, 2),
-    sol_received: formatFixedDecimal(trade.sol_received, 2),
-    pnl_sol: formatFixedDecimal(trade.pnl_sol, 2),
+    sol_invested: formatFixedDecimal(trade.sol_invested, 3),
+    sol_received: formatFixedDecimal(trade.sol_received, 3),
+    pnl_sol: formatFixedDecimal(trade.pnl_sol, 3),
     pnl_percentage: formatFixedDecimal(trade.pnl_percentage, 1),
     rationale: wrapSpreadsheetText(trade.rationale),
     pre_transcript_excerpt: wrapSpreadsheetText(trade.pre_transcript_excerpt),
@@ -1954,11 +1952,12 @@ function buildTradeTimeline(
   recordingStartedAtMs: number,
   durationMs: number
 ): {
-  tradeDate: Date;
+  entryDate: Date | null;
+  exitDate: Date | null;
   videoStart: Date;
   videoEnd: Date;
   entryCommentary: Date | null;
-  entryInferred: Date | null;
+  entryActual: Date | null;
   exitCommentary: Date | null;
   exitActual: Date | null;
   timeInTradeSeconds: number | null;
@@ -1973,18 +1972,13 @@ function buildTradeTimeline(
     entryActual && exitActual
       ? Math.max(0, Math.round((exitActual.getTime() - entryActual.getTime()) / 1000))
       : getTimeInTradeSeconds(trade);
-  const entryInferred =
-    entryActual ??
-    (exitActual && timeInTradeSeconds !== null
-      ? new Date(exitActual.getTime() - timeInTradeSeconds * 1000)
-      : null);
-
   return {
-    tradeDate: entryActual ?? exitActual ?? videoStart,
+    entryDate: entryActual ?? null,
+    exitDate: exitActual ?? null,
     videoStart,
     videoEnd,
     entryCommentary,
-    entryInferred,
+    entryActual,
     exitCommentary,
     exitActual,
     timeInTradeSeconds,
@@ -2230,10 +2224,10 @@ function writeTradeLogMd(
     lines.push('');
     lines.push(`## #${t.trade_id} - ${t.token_name}${flag}`);
     lines.push('');
-    lines.push(`- **Trade date:** ${formatTradeDate(timeline.tradeDate)}`);
+    lines.push(`- **Entry date:** ${formatTradeDate(timeline.entryDate) || 'unknown'}`);
+    lines.push(`- **Exit date:** ${formatTradeDate(timeline.exitDate) || 'unknown'}`);
     lines.push(`- **Video start:** ${formatTradeTime(timeline.videoStart)}`);
     lines.push(`- **Entry commentary time:** ${formatTradeTime(timeline.entryCommentary) || 'unknown'}`);
-    lines.push(`- **Entry time actual:** ${formatTradeTime(timeline.entryInferred) || 'unknown'}`);
     lines.push(`- **Exit commentary time:** ${formatTradeTime(timeline.exitCommentary) || 'unknown'}`);
     lines.push(`- **Exit time actual:** ${formatTradeTime(timeline.exitActual) || 'unknown'}`);
     lines.push(`- **Time in trade seconds:** ${timeline.timeInTradeSeconds ?? 'unknown'}`);
